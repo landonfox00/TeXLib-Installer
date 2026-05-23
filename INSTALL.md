@@ -1,0 +1,158 @@
+# Installing TeXLib on Windows
+
+A guided walkthrough for installing the TeXLib teaching library on your Windows machine. Should take ~45 minutes start to finish (most of that is TeX Live downloading).
+
+> If something goes wrong, scroll to [Troubleshooting](#troubleshooting) or open an issue at https://github.com/landonfox00/TeXLib-Installer/issues.
+
+## Before you start
+
+You need:
+
+- **Windows 10 (version 1809 or newer) or Windows 11.** Run `winver` to check.
+- **~6 GB of free disk space.** TeX Live full is big.
+- **A working internet connection.** The installer downloads ~3 GB during the run.
+- **PowerShell 5.1 or newer.** Comes pre-installed on every supported Windows version.
+- **No admin rights required.** Everything installs into your user profile.
+
+Optional but recommended:
+
+- **OneDrive** — if you have OneDrive set up on this machine, the installer will put the TeXLib library inside your OneDrive folder so it syncs across machines automatically.
+
+## Step 1 — Download the installer
+
+1. Go to https://github.com/landonfox00/TeXLib-Installer/releases.
+2. Click the latest release (top of the list).
+3. Download **`TeXLib-Installer-v<version>.zip`** from the "Assets" section.
+4. *(Optional but recommended)* Verify the download. Open PowerShell, navigate to your Downloads folder, and run:
+   ```powershell
+   Get-FileHash TeXLib-Installer-v<version>.zip -Algorithm SHA256
+   ```
+   The output should match the line in the release's `SHA256SUMS` file. If it doesn't, do **not** run the installer — re-download or open an issue.
+
+## Step 2 — Unzip and run
+
+1. Right-click the ZIP file → **Extract All...** → pick a destination (Desktop is fine).
+2. Open the extracted folder. You should see:
+   ```
+   install.bat
+   install.ps1
+   uninstall.bat
+   uninstall.ps1
+   templates/
+   texlib/
+   README.md
+   INSTALL.md
+   ...
+   ```
+3. **Double-click `install.bat`.**
+
+### The SmartScreen warning
+
+Windows will probably show "Windows protected your PC" because the script is not code-signed. This is expected for personal-team distributions.
+
+> **Click "More info" → "Run anyway".**
+
+If you can't see the "Run anyway" button, your IT department has locked it down. Talk to them, or open the script in a text editor first to confirm it's the official copy from the verified release.
+
+## Step 3 — Watch the install run
+
+A console window opens and the installer walks through these phases:
+
+1. **Pre-flight checks** — Windows version, free disk space, internet, etc. If anything fails, the installer aborts before touching your system.
+2. **Sublime Text** — downloads + extracts (~10 seconds).
+3. **SumatraPDF** — downloads + extracts (~10 seconds).
+4. **TeX Live** — downloads installer + runs full install. **This takes 30-60 minutes.** It looks frozen sometimes; that's normal. Go grab a coffee.
+5. **TeXLib library** — copies into your `Documents\TeXLib` (or OneDrive equivalent).
+6. **PATH update** — adds TeX Live's `bin` directory so commands work from any terminal.
+7. **Sublime sync setup** — junctions Sublime's user packages folder to the TeXLib sync folder so settings travel between your machines.
+8. **Program configurations** — writes LaTeXTools, Preferences, and SumatraPDF settings with the right paths filled in.
+9. **File associations** — sets `.tex`, `.cls`, `.sty`, `.bib` to open in Sublime; `.pdf` to open in SumatraPDF.
+10. **Shortcuts** — puts Sublime and Sumatra icons on your Desktop + Start Menu.
+11. **Verification** — compiles a tiny LaTeX file to confirm the install actually works.
+
+If everything goes well, you'll see:
+
+```
+================================================
+   TeXLib v0.1.0 installation complete!
+================================================
+```
+
+## Step 4 — First launch
+
+A few things to know:
+
+- **Open a NEW terminal** before running `pdflatex` or `lualatex` from the command line. The PATH update doesn't apply to terminals that were already open.
+- **Sublime Text** may show a "Package Control" loading message the very first time you open it. Close Sublime and re-open it once — the message goes away.
+- **File defaults** — if double-clicking a `.tex` doesn't open it in Sublime (or `.pdf` doesn't open in SumatraPDF), Windows sometimes ignores the registry settings on first install. Fix:
+  - Right-click the file → **Open with → Choose another app**.
+  - Pick Sublime / SumatraPDF.
+  - Check **Always use this app**.
+
+## Step 5 — Build your first document
+
+1. Open Sublime Text.
+2. Open `Documents\TeXLib\examples\Math181-Fall2026\lecture-01-limits.tex` (or any `.tex` from one of the module templates).
+3. Press **Ctrl+B** to build with the default mode.
+
+You should see a PDF open in SumatraPDF a few seconds later.
+
+For variant builds (answer key, student copy, etc.), press **Ctrl+Shift+B** and pick from the menu, or open the command palette (**Ctrl+Shift+P**) and type "TeXLib".
+
+## Updating
+
+Re-running the installer with a newer release ZIP **does not** wipe your settings. It detects existing components and asks Skip vs Reinstall for each.
+
+To get the latest TeXLib library only (no need to touch Sublime/Sumatra/TeX Live), you can re-run the installer — it will offer to Skip the heavy components and just refresh the bundle.
+
+## Uninstalling
+
+Double-click `uninstall.bat` from the same folder you ran the installer from. It will:
+
+- Remove `%LOCALAPPDATA%\TeXLib` (Sublime, Sumatra, TeX Live, logs, scripts)
+- Clean PATH and registry entries
+- Remove Desktop and Start Menu shortcuts
+
+It **does not** delete your `Documents\TeXLib` folder. If you want a fully clean removal, delete that too.
+
+## Troubleshooting
+
+### Pre-flight check failed
+
+Read the message — it tells you what's missing. Common ones:
+
+- **"Need >= 6 GB free"** — clear space on your `%LOCALAPPDATA%` drive (usually `C:`).
+- **"Cannot reach mirror.ctan.org"** — check your internet, VPN, or institutional firewall.
+- **"Another LaTeX install detected"** — usually fine; this is just a warning. The installer will still proceed.
+
+### Hash mismatch on download
+
+The installer aborts on hash mismatch as a security precaution. Most often this means the upstream file has been re-released with a new hash (Sublime did this when bumping point releases). Open an issue with the line `expected: ...` and `actual: ...` from the log and we'll publish a refreshed installer.
+
+### Install hung during TeX Live
+
+TeX Live's install is genuinely slow — 30 to 60 minutes is normal. There's typically no progress indicator for long stretches. If it's been >90 minutes with zero console activity, kill the console window and re-run the installer with TeX Live's "Reinstall" option.
+
+### Sublime can't find the builder
+
+If `Ctrl+B` says "Cannot find builder texlib", verify:
+
+1. `texlib_builder.py` is in `<Sublime Data>\Packages\User\` (the install copies it here).
+2. `LaTeXTools.sublime-settings` in the same folder has `"builder": "texlib"`.
+3. Restart Sublime — the builder is loaded at startup.
+
+### Compile works on command line but not in Sublime
+
+Usually a `TEXINPUTS` problem. The most common cause is **commas in paths**. kpathsea (TeX Live's file resolver) cannot resolve a `TEXINPUTS` entry that contains a comma, and OneDrive at universities often has a comma in the folder name ("OneDrive - University of Nevada, Reno"). The installer normally handles this, but if it doesn't, the workaround is to create a directory junction at a comma-free path and point `TEXINPUTS` at the junction. Open an issue if you hit this.
+
+### Getting help
+
+When opening an issue, please attach the install log:
+
+```
+%LOCALAPPDATA%\TeXLib\Logs\install-<timestamp>.log
+```
+
+Replace `<timestamp>` with the most recent one. The log captures everything the installer did, including which files were downloaded and what error (if any) stopped it.
+
+Issue tracker: https://github.com/landonfox00/TeXLib-Installer/issues

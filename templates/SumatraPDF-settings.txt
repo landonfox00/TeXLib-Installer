@@ -1,0 +1,74 @@
+Theme = Dark
+FixedPageUI [
+	TextColor = #000000
+	BackgroundColor = #ffffff
+	SelectionColor = #f5fc0c
+	WindowMargin = 2 4 2 4
+	PageSpacing = 4 4
+	InvertColors = false
+	HideScrollbars = false
+]
+ComicBookUI [
+	WindowMargin = 0 0 0 0
+	PageSpacing = 4 4
+	CbxMangaMode = false
+]
+ChmUI [
+	UseFixedPageUI = false
+]
+ZoomLevels = 8.33 12.5 18 25 33.33 50 66.67 75 100 125 150 200 300 400 600 800 1000 1200 1600 2000 2400 3200 4800 6400
+ZoomIncrement = 0
+PrinterDefaults [
+	PrintScale = shrink
+]
+ForwardSearch [
+	HighlightOffset = 0
+	HighlightWidth = 15
+	HighlightColor = #6581ff
+	HighlightPermanent = false
+]
+Annotations [
+	HighlightColor = #ffff00
+	UnderlineColor = #00ff00
+	SquigglyColor = #ff00ff
+	StrikeOutColor = #ff0000
+	FreeTextColor =
+	FreeTextSize = 12
+	FreeTextBorderWidth = 1
+	TextIconColor =
+	TextIconType =
+	DefaultAuthor =
+]
+RememberOpenedFiles = false
+RememberStatePerDocument = true
+RestoreSession = true
+UiLanguage = en
+InverseSearchCmdLine = "{{SUBLIME_EXE}}" "%f:%l:%c"
+EnableTeXEnhancements = true
+DefaultDisplayMode = automatic
+DefaultZoom = fit width
+Shortcuts [
+]
+EscToExit = false
+ReuseInstance = false
+ReloadModifiedDocuments = true
+FullPathInTitle = false
+ShowMenubar = true
+ShowToolbar = true
+ShowFavorites = false
+ShowToc = true
+NoHomeTab = true
+TocDy = 0
+SidebarDx = 153
+ToolbarSize = 18
+TabWidth = 300
+TreeFontSize = 0
+TreeFontWeightOffset = 0
+TreeFontName = automatic
+SmoothScroll = false
+ShowStartPage = true
+CheckForUpdates = true
+WindowState = 1
+UseTabs = true
+UseSysColors = false
+CustomScreenDPI = 0

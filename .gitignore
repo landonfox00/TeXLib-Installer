@@ -1,0 +1,24 @@
+# Release artifacts (built by tools/make-release.ps1)
+dist/
+*.zip
+SHA256SUMS
+
+# Bundled TeXLib snapshot, populated only at release time
+texlib/
+
+# Pre-staged downloads (.zip etc. dropped next to install.ps1 to avoid re-fetching)
+sublime_text_build_*.zip
+SumatraPDF-*-64.zip
+install-tl.zip
+Package Control.sublime-package
+latextools.zip
+
+# Logs
+*.log
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+desktop.ini
+*~
+.#*

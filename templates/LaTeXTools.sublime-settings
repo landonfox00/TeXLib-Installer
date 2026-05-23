@@ -1,0 +1,47 @@
+{
+	// LaTeXTools.sublime-settings -- written by TeXLib-Installer.
+	// Placeholders ({{SUMATRA_EXE}}, {{SUBLIME_EXE}}, {{TEX_PATH}}, {{TEX_LIB}})
+	// are substituted on install. If you edit this file by hand later, those
+	// placeholders won't reappear -- just keep using real paths.
+
+	"windows": {
+		"sumatra": "{{SUMATRA_EXE}}",
+		"sublime_executable": "{{SUBLIME_EXE}}",
+		"texpath": "{{TEX_PATH}}",
+		"distro": "texlive"
+	},
+
+	// Use the TeXLib custom builder (texlib_builder.py). It handles engine
+	// selection, build modes (Solutions / Key / Rubric / Draft / Student /
+	// Instructor), autoexam versions, the rerun loop, biber, and the .spl
+	// PDF split.
+	"builder": "texlib",
+
+	"builder_settings": {
+		"windows": {
+			// kpathsea cannot resolve TEXINPUTS entries containing a comma.
+			// If your TeXLib path includes a comma (e.g. "OneDrive - University
+			// of Nevada, Reno"), create a directory junction at a comma-free
+			// path and point this at the junction instead. Trailing // means
+			// "and all subdirectories."
+			"env": {
+				"TEXINPUTS": ".;{{TEX_LIB}}//;"
+			}
+		}
+	},
+
+	"viewer": "sumatra",
+	"open_pdf_on_build": true,
+	"forward_sync": false,
+	"keep_focus": true,
+
+	"preview_math_mode": "none",
+
+	"build_panel_word_wrap": true,
+	"show_panel_on_build": "errors",
+
+	"aux_directory": "<<temp>>",
+	"output_directory": "",
+
+	"additional_bibliography_file": ""
+}

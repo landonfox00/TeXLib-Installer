@@ -1,0 +1,38 @@
+MIT License
+
+Copyright (c) 2026 Landon Fox
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+---
+
+This MIT license covers TeXLib-Installer (the installer scripts and templates
+in this repository). The components the installer downloads and configures
+have their own licenses:
+
+  - Sublime Text   - commercial; install for evaluation per
+                     https://www.sublimetext.com/eula
+  - SumatraPDF     - GPLv3, https://www.sumatrapdfreader.org/
+  - TeX Live       - mostly LPPL and similar, see https://tug.org/texlive/LICENSE.TL
+  - LaTeXTools     - MIT, https://github.com/SublimeText/LaTeXTools
+  - TeXLib library - MIT, https://github.com/landonfox00/TeXLib
+
+By using this installer you accept the licenses of every component it pulls
+in. The installer does not bundle proprietary binaries -- it downloads them
+directly from each vendor's official source at install time.
