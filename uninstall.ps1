@@ -40,7 +40,7 @@ Write-Host ""
 
 function Stop-Uninstaller {
     param([int]$ExitCode = 0)
-    try { Stop-Transcript | Out-Null } catch {}
+    try { Stop-Transcript | Out-Null } catch { $null = $_ }
     if (-not $Silent -and $ExitCode -ne 0) {
         Write-Host ""
         Read-Host "Press Enter to close"

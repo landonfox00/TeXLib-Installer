@@ -21,15 +21,16 @@ jobs:
       - name: Run PSScriptAnalyzer
         shell: pwsh
         run: |
-          $results = Invoke-ScriptAnalyzer -Path . -Recurse -Severity Warning, Error
+          $results = Invoke-ScriptAnalyzer -Path . -Recurse -Settings PSScriptAnalyzerSettings.psd1
           if ($results) {
             $results | Format-Table -AutoSize
-            $errors = $results | Where-Object { $_.Severity -eq 'Error' }
-            if ($errors) {
-              Write-Host "PSScriptAnalyzer found $($errors.Count) error(s) and $(($results | Where-Object { $_.Severity -eq 'Warning' }).Count) warning(s)" -ForegroundColor Red
+            $errors   = @($results | Where-Object { $_.Severity -eq 'Error' })
+            $warnings = @($results | Where-Object { $_.Severity -eq 'Warning' })
+            if ($errors.Count -gt 0) {
+              Write-Host ("PSScriptAnalyzer found {0} error(s) and {1} warning(s)" -f $errors.Count, $warnings.Count) -ForegroundColor Red
               exit 1
             } else {
-              Write-Host "PSScriptAnalyzer found $($results.Count) warning(s), no errors" -ForegroundColor Yellow
+              Write-Host ("PSScriptAnalyzer found {0} warning(s), no errors" -f $warnings.Count) -ForegroundColor Yellow
             }
           } else {
             Write-Host "PSScriptAnalyzer: clean" -ForegroundColor Green

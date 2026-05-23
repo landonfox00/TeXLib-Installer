@@ -159,7 +159,9 @@ function Show-Banner {
 
 function Stop-Installer {
     param([int]$ExitCode = 0)
-    try { Stop-Transcript | Out-Null } catch {}
+    # Stop-Transcript throws if no transcript is running; that's expected for
+    # early-exit paths (e.g. -Version), so swallow it deliberately.
+    try { Stop-Transcript | Out-Null } catch { $null = $_ }
     if (-not $Silent -and $ExitCode -ne 0) {
         Write-Host ""
         Write-Host "Installer exited with code $ExitCode." -ForegroundColor Red
@@ -432,13 +434,16 @@ try {
 }
 
 # 7d. Internet connectivity (skip in -OnlyTeXLib if no downloads needed).
+# HEAD request against the CTAN mirror — confirms TLS reachability without
+# pulling any payload. Test-NetConnection would also work but trips
+# PSScriptAnalyzer's "hardcoded ComputerName" rule (false positive for a
+# public mirror).
 if (-not $OnlyTeXLib) {
     try {
-        $Probe = Test-NetConnection -ComputerName mirror.ctan.org -Port 443 -InformationLevel Quiet -WarningAction SilentlyContinue
-        if ($Probe) { Add-PreflightOK "Internet connectivity to mirror.ctan.org" }
-        else        { Add-PreflightFailure "Cannot reach mirror.ctan.org on port 443; check your internet connection" }
+        $null = Invoke-WebRequest -Uri "https://mirror.ctan.org/" -Method Head -UseBasicParsing -TimeoutSec 5 -ErrorAction Stop
+        Add-PreflightOK "Internet connectivity to mirror.ctan.org (HTTPS)"
     } catch {
-        Add-PreflightWarning "Could not run Test-NetConnection; assuming internet is up"
+        Add-PreflightFailure "Cannot reach https://mirror.ctan.org/ ($($_.Exception.Message)); check your internet connection / firewall / VPN"
     }
 } else {
     Add-PreflightOK "Skipping internet check (-OnlyTeXLib doesn't download anything)"
