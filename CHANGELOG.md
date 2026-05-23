@@ -6,7 +6,7 @@ All notable changes to TeXLib-Installer are recorded here. Format follows [Keep 
 
 _Nothing yet._
 
-## [0.1.0] — 2026-05-22
+## [0.1.0] — 2026-05-23
 
 Initial release. Reorganized and hardened port of the OneTeX installer (now archived at https://github.com/landonfox00/OneTeX), aimed at distribution to coworkers rather than personal use.
 
