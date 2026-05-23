@@ -101,9 +101,30 @@ For variant builds (answer key, student copy, etc.), press **Ctrl+Shift+B** and 
 
 ## Updating
 
-Re-running the installer with a newer release ZIP **does not** wipe your settings. It detects existing components and asks Skip vs Reinstall for each.
+Re-running the installer with a newer release ZIP **does not** wipe your settings — they live in `Documents\TeXLib\Sublime` and are preserved across re-installs via a junction.
 
-To get the latest TeXLib library only (no need to touch Sublime/Sumatra/TeX Live), you can re-run the installer — it will offer to Skip the heavy components and just refresh the bundle.
+The installer prints an "Update available: v0.X is the latest release (you are on v0.Y)" notice at the top of every run if a newer release is published, so you'll know when it's time to download a fresh ZIP.
+
+To get the latest TeXLib library **only** (no need to touch Sublime/Sumatra/TeX Live), use:
+
+```
+install.bat -OnlyTeXLib
+```
+
+This skips the heavy components entirely and just refreshes the bundled library — takes seconds instead of an hour. Combine with `-Silent` for lab-machine deployment.
+
+## Other flags worth knowing
+
+| Flag | What it does |
+|---|---|
+| `install.bat -Doctor` | Diagnose an existing install (see Troubleshooting). |
+| `install.bat -Version` | Print installer version + bundled TeXLib version. |
+| `install.bat -DryRun` | Run pre-flight checks and print what would happen, without installing anything. Safe to run on a fresh machine to confirm prerequisites. |
+| `install.bat -OnlyTeXLib` | Refresh just the TeXLib library. |
+| `install.bat -InstallPath C:\Tools\TeXLib` | Install to a non-default location (e.g. if `%LOCALAPPDATA%` is on a small SSD). |
+| `install.bat -Silent` | No prompts; safe defaults; intended for unattended deployment. |
+
+Flags can be combined: `install.bat -OnlyTeXLib -Silent` is the typical lab-machine refresh.
 
 ## Uninstalling
 
@@ -116,6 +137,24 @@ Double-click `uninstall.bat` from the same folder you ran the installer from. It
 It **does not** delete your `Documents\TeXLib` folder. If you want a fully clean removal, delete that too.
 
 ## Troubleshooting
+
+### First thing to try: `install.bat -Doctor`
+
+Open the folder you extracted the installer to and run:
+
+```
+install.bat -Doctor
+```
+
+This runs a diagnostic against your existing install and prints a pass/warn/fail report for each component: install location, Sublime Text, SumatraPDF, TeX Live, the TeXLib library, the Sublime junction, the custom builder, LaTeXTools settings, file associations. The output is structured for copy-paste into a bug report.
+
+Most "Sublime can't find the builder" / "PDF isn't opening" / "pdflatex not on PATH" issues are diagnosed (and often repaired by re-running the installer) in under 30 seconds.
+
+You can also check the installed version at any time:
+
+```
+install.bat -Version
+```
 
 ### Pre-flight check failed
 
@@ -147,12 +186,9 @@ Usually a `TEXINPUTS` problem. The most common cause is **commas in paths**. kpa
 
 ### Getting help
 
-When opening an issue, please attach the install log:
+When opening an issue, the GitHub issue form asks for the **Doctor output** and the **install log**. The faster you can get those into the report, the faster I can help.
 
-```
-%LOCALAPPDATA%\TeXLib\Logs\install-<timestamp>.log
-```
-
-Replace `<timestamp>` with the most recent one. The log captures everything the installer did, including which files were downloaded and what error (if any) stopped it.
+- **Doctor output:** `install.bat -Doctor` and paste the whole console output.
+- **Install log:** `%LOCALAPPDATA%\TeXLib\Logs\install-<timestamp>.log` (most recent). The log captures everything the installer did, including which files were downloaded and what error stopped it.
 
 Issue tracker: https://github.com/landonfox00/TeXLib-Installer/issues

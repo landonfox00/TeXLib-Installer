@@ -1,0 +1,91 @@
+name: Bug report
+description: Report a problem installing or running TeXLib-Installer
+title: "[bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting! A few up-front prompts so I can help you faster.
+
+        **Before opening the issue:**
+        Run `install.bat -Doctor` from where you extracted the release, and paste the
+        full output in the "Doctor output" field below. It captures most of what I need.
+
+  - type: input
+    id: installer-version
+    attributes:
+      label: TeXLib-Installer version
+      description: "From the top of the install log, or run `install.bat -Version`. E.g. `0.2.0`."
+      placeholder: "0.2.0"
+    validations:
+      required: true
+
+  - type: input
+    id: windows-version
+    attributes:
+      label: Windows version
+      description: "Run `winver` in the Start menu. E.g. `Windows 11 Pro 23H2 (build 22631.3527)`."
+      placeholder: "Windows 11 Pro 23H2 (build 22631.3527)"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: phase
+    attributes:
+      label: Which step failed?
+      description: "If unsure, pick the closest. The install log will tell you for sure."
+      options:
+        - "Pre-flight checks (Windows version / disk / network)"
+        - "Downloading a component (Sublime / Sumatra / TeX Live)"
+        - "Hash verification (mismatch)"
+        - "TeX Live install (the 30-60 minute step)"
+        - "Deploying TeXLib library"
+        - "Sublime configuration"
+        - "File associations / shortcuts"
+        - "End-of-install verification (pdflatex test)"
+        - "After install: Sublime doesn't build / wrong builder / Sumatra doesn't preview"
+        - "Uninstall didn't fully clean up"
+        - "Something else"
+    validations:
+      required: true
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: "Plain-English description. What did you click, what did you see?"
+      placeholder: "Ran install.bat, clicked 'Run anyway' on SmartScreen, got to the TeX Live install step and..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: doctor-output
+    attributes:
+      label: Doctor output
+      description: "Run `install.bat -Doctor` and paste the entire output here."
+      render: text
+    validations:
+      required: false
+
+  - type: textarea
+    id: log-excerpt
+    attributes:
+      label: Install log excerpt
+      description: |
+        Open the most recent log at `%LOCALAPPDATA%\TeXLib\Logs\install-*.log`
+        (or `%TEMP%\TeXLib-Install\install-*.log` if the install never got far enough).
+        Paste the last ~50 lines, especially anything red.
+      render: text
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: tried
+    attributes:
+      label: I tried
+      options:
+        - label: "Re-running the installer (chose 'Reinstall' on the failing component)"
+        - label: "Running `install.bat -Doctor` and reading the output"
+        - label: "Opening a NEW PowerShell after install (the PATH update doesn't show up in already-open terminals)"
+        - label: "Checking the [Troubleshooting section in INSTALL.md](https://github.com/landonfox00/TeXLib-Installer/blob/main/INSTALL.md#troubleshooting)"
