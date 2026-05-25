@@ -4,6 +4,12 @@ All notable changes to TeXLib-Installer are recorded here. Format follows [Keep 
 
 ## [Unreleased]
 
+_Nothing yet._
+
+## [0.2.1] — 2026-05-23
+
+Patch release: Phase A external-install detection + CI lint cleanup.
+
 ### Added
 
 - **External-install detection in pre-flight** (Phase A of the "polite tenant" design). Pre-flight now actively looks for an existing Sublime Text, SumatraPDF, TeX Live, and MiKTeX install in standard locations (App Paths registry, Sublime/TL/MiKTeX-specific registry keys, common Program Files / LocalAppData paths, PATH) and reports each finding. Behavior is unchanged in this version — the installer still always installs portable copies of every component — but the foundation is in place for Phase B, which will let users reuse detected TeX Live and SumatraPDF installs via `-UseSystemTeX` / `-UseSystemSumatra` flags. Sublime will always be installed isolated because making the texlib builder work in a user's existing Sublime requires modifying their config (against the polite-tenant philosophy).
@@ -12,6 +18,10 @@ All notable changes to TeXLib-Installer are recorded here. Format follows [Keep 
 ### Changed
 
 - **`[WARN]` on "another LaTeX install detected" → `[OK]` with explanatory note.** The old phrasing implied the existing install was a problem; with detection in place, it's now correctly framed as a future opportunity ("future `-UseSystemTeX` flag will let you reuse it without re-downloading").
+
+### Fixed
+
+- CI lint failures from v0.2.0: added `PSScriptAnalyzerSettings.psd1` excluding `PSAvoidUsingWriteHost` (intentional for installer-style colored output), replaced `Test-NetConnection` with `Invoke-WebRequest` HEAD probe (avoids the analyzer's hardcoded-ComputerName false positive), made empty catch blocks explicit.
 
 ## [0.2.0] — 2026-05-23
 
@@ -73,6 +83,7 @@ Initial release. Reorganized and hardened port of the OneTeX installer (now arch
 - Final `Pause` at end of install (anti-pattern; replaced with conditional Read-Host on failure only).
 - Legacy `SublimeUser` folder references (TeXLib now uses `Sublime/` as the canonical sync location).
 
-[Unreleased]: https://github.com/landonfox00/TeXLib-Installer/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/landonfox00/TeXLib-Installer/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/landonfox00/TeXLib-Installer/releases/tag/v0.2.1
 [0.2.0]: https://github.com/landonfox00/TeXLib-Installer/releases/tag/v0.2.0
 [0.1.0]: https://github.com/landonfox00/TeXLib-Installer/releases/tag/v0.1.0
