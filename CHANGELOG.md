@@ -4,7 +4,14 @@ All notable changes to TeXLib-Installer are recorded here. Format follows [Keep 
 
 ## [Unreleased]
 
-_Nothing yet._
+### Added
+
+- **External-install detection in pre-flight** (Phase A of the "polite tenant" design). Pre-flight now actively looks for an existing Sublime Text, SumatraPDF, TeX Live, and MiKTeX install in standard locations (App Paths registry, Sublime/TL/MiKTeX-specific registry keys, common Program Files / LocalAppData paths, PATH) and reports each finding. Behavior is unchanged in this version — the installer still always installs portable copies of every component — but the foundation is in place for Phase B, which will let users reuse detected TeX Live and SumatraPDF installs via `-UseSystemTeX` / `-UseSystemSumatra` flags. Sublime will always be installed isolated because making the texlib builder work in a user's existing Sublime requires modifying their config (against the polite-tenant philosophy).
+- **`Add-PreflightNote` helper** for indented, dim-text continuation lines under a pre-flight `[OK]` / `[WARN]` line. Improves readability of multi-line pre-flight messages.
+
+### Changed
+
+- **`[WARN]` on "another LaTeX install detected" → `[OK]` with explanatory note.** The old phrasing implied the existing install was a problem; with detection in place, it's now correctly framed as a future opportunity ("future `-UseSystemTeX` flag will let you reuse it without re-downloading").
 
 ## [0.2.0] — 2026-05-23
 
