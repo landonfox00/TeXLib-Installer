@@ -74,7 +74,7 @@ If everything goes well, you'll see:
 
 ```
 ================================================
-   TeXLib v0.1.0 installation complete!
+   TeXLib v<version> installation complete!
 ================================================
 ```
 
