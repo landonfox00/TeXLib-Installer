@@ -6,6 +6,15 @@ All notable changes to TeXLib-Installer are recorded here. Format follows [Keep 
 
 _Nothing yet._
 
+## [0.3.1] — 2026-05-28
+
+Bundle release: ships a curated LaTeX-only spell-check dictionary.
+
+### Added
+
+- **`texlib/Sublime/LaTeX.sublime-settings`** in the TeXLib bundle — a syntax-scoped settings file with ~430 mathematician names + standard math terminology + LaTeX command fragments under `added_words`, and the usual LaTeX layout dimensions under `ignored_words`. Sourced from Landon's accumulated personal list, deduped, alphabetized, augmented with ~110 standard mathematician names and ~280 standard algebra/analysis/topology/geometry terms. Stacks on top of the user's global `Preferences.sublime-settings`, so personal proper nouns (collaborators, lab references, course-internal jargon) still apply when editing `.tex` files. Stuck-suffix artifacts (`ness`, `th`, `ech`, `lder`) intentionally excluded — they mask real typos; the accented forms (`Čech`, `Hölder`) are included instead.
+- **Deploy hook in `install.ps1` section 16b** — `LaTeX.sublime-settings` is now copied to `Packages/User/` alongside `texlib_builder.py`, `TeXLib.sublime-build`, and `Default.sublime-commands`.
+
 ## [0.3.0] — 2026-05-28
 
 Robustness release: the previous .bat -> PowerShell -File invocation closed the console window on early failure, eating both the error message and the log path. After a coworker tried v0.2.1 on a locked-down work PC and hit exactly this trap (red text, window gone, no log), the .bat layer was reworked to always capture output and always pause on non-zero exit.
@@ -98,7 +107,8 @@ Initial release. Reorganized and hardened port of the OneTeX installer (now arch
 - Final `Pause` at end of install (anti-pattern; replaced with conditional Read-Host on failure only).
 - Legacy `SublimeUser` folder references (TeXLib now uses `Sublime/` as the canonical sync location).
 
-[Unreleased]: https://github.com/landonfox00/TeXLib-Installer/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/landonfox00/TeXLib-Installer/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/landonfox00/TeXLib-Installer/releases/tag/v0.3.1
 [0.3.0]: https://github.com/landonfox00/TeXLib-Installer/releases/tag/v0.3.0
 [0.2.1]: https://github.com/landonfox00/TeXLib-Installer/releases/tag/v0.2.1
 [0.2.0]: https://github.com/landonfox00/TeXLib-Installer/releases/tag/v0.2.0

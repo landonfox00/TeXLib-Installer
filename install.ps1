@@ -66,7 +66,7 @@ param(
 # =============================================================================
 # 0. INSTALLER METADATA
 # =============================================================================
-$InstallerVersion = "0.3.0"
+$InstallerVersion = "0.3.1"
 $InstallerRepo    = "https://github.com/landonfox00/TeXLib-Installer"
 $ReleasesApi      = "https://api.github.com/repos/landonfox00/TeXLib-Installer/releases/latest"
 
@@ -1018,10 +1018,14 @@ try {
         Move-Item -Path "$TempDir\lt_extract\LaTeXTools-master" -Destination $LaTeXToolsDir
     }
 
-    # 16b. Deploy the TeXLib custom builder. Source of truth is the bundle.
+    # 16b. Deploy the TeXLib custom builder + bundled spell-check dictionary.
+    # Source of truth is the bundle. LaTeX.sublime-settings is a syntax-
+    # scoped settings file shipping curated math added_words / ignored_words;
+    # it stacks on top of the user's global Preferences.sublime-settings so
+    # personal proper nouns (collaborators, lab jargon) still apply.
     $BundledSublimeDir = Join-Path $TexLibBundle "Sublime"
     if (Test-Path $BundledSublimeDir) {
-        foreach ($f in @("texlib_builder.py", "TeXLib.sublime-build", "Default.sublime-commands")) {
+        foreach ($f in @("texlib_builder.py", "TeXLib.sublime-build", "Default.sublime-commands", "LaTeX.sublime-settings")) {
             $src = Join-Path $BundledSublimeDir $f
             if (Test-Path $src) { Copy-Item $src $UserDir -Force }
         }
