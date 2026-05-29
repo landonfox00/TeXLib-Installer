@@ -21,7 +21,7 @@ param(
     [switch]$Silent
 )
 
-$UninstallerVersion = "0.1.0"
+$UninstallerVersion = "0.2.0"
 $InstallerRepo      = "https://github.com/landonfox00/TeXLib-Installer"
 
 $BaseDir = "$env:LOCALAPPDATA\TeXLib"
@@ -41,7 +41,9 @@ Write-Host ""
 function Stop-Uninstaller {
     param([int]$ExitCode = 0)
     try { Stop-Transcript | Out-Null } catch { $null = $_ }
-    if (-not $Silent -and $ExitCode -ne 0) {
+    # tools\uninstall_wrapper.ps1 owns the prompt when present; see the
+    # matching note in install.ps1's Stop-Installer.
+    if (-not $Silent -and $ExitCode -ne 0 -and -not $env:TEXLIB_INSTALLER_WRAPPED) {
         Write-Host ""
         Read-Host "Press Enter to close"
     }

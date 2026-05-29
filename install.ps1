@@ -66,7 +66,7 @@ param(
 # =============================================================================
 # 0. INSTALLER METADATA
 # =============================================================================
-$InstallerVersion = "0.2.1"
+$InstallerVersion = "0.3.0"
 $InstallerRepo    = "https://github.com/landonfox00/TeXLib-Installer"
 $ReleasesApi      = "https://api.github.com/repos/landonfox00/TeXLib-Installer/releases/latest"
 
@@ -162,7 +162,11 @@ function Stop-Installer {
     # Stop-Transcript throws if no transcript is running; that's expected for
     # early-exit paths (e.g. -Version), so swallow it deliberately.
     try { Stop-Transcript | Out-Null } catch { $null = $_ }
-    if (-not $Silent -and $ExitCode -ne 0) {
+    # When launched via install.bat -> tools\install_wrapper.ps1, the wrapper
+    # owns the pause-on-failure prompt and the exit-code surfacing. Skip our
+    # own prompt to avoid two "Press Enter to close" prompts back to back.
+    # Direct PS launches (no bat) still see the prompt here.
+    if (-not $Silent -and $ExitCode -ne 0 -and -not $env:TEXLIB_INSTALLER_WRAPPED) {
         Write-Host ""
         Write-Host "Installer exited with code $ExitCode." -ForegroundColor Red
         Write-Host "If you need help, attach the log file above to a new issue at" -ForegroundColor Yellow

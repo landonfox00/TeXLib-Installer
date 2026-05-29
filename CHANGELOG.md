@@ -6,6 +6,21 @@ All notable changes to TeXLib-Installer are recorded here. Format follows [Keep 
 
 _Nothing yet._
 
+## [0.3.0] — 2026-05-28
+
+Robustness release: the previous .bat -> PowerShell -File invocation closed the console window on early failure, eating both the error message and the log path. After a coworker tried v0.2.1 on a locked-down work PC and hit exactly this trap (red text, window gone, no log), the .bat layer was reworked to always capture output and always pause on non-zero exit.
+
+### Added
+
+- **`tools/install_wrapper.ps1` + `tools/uninstall_wrapper.ps1`** — bootstrap layer that runs in front of `install.ps1` / `uninstall.ps1`. Captures the inner script's merged output (`*>&1 | Tee-Object`) to a timestamped boot log in `%TEMP%\TeXLib-Installer-boot-<stamp>.log` (or `TeXLib-Uninstaller-boot-<stamp>.log`) BEFORE the inner script starts, so a crash during param-binding, environment-variable detection, or directory creation still produces an attachable log. Catches uncaught exceptions and surfaces them as exit code 99 with stack trace.
+- **Unconditional pause on non-zero exit** in both wrappers, with a banner that points the user at the boot log path and the issue tracker. Replaces the old "window closes silently" failure mode.
+- **`$env:TEXLIB_INSTALLER_WRAPPED` sentinel** so the inner `Stop-Installer` / `Stop-Uninstaller` functions know the wrapper is handling the prompt and skip their own, avoiding a double "Press Enter to close." Direct PowerShell invocations (no .bat) still see the inner prompt.
+
+### Changed
+
+- **`install.bat` / `uninstall.bat`** reduced to two-line wrappers that call into the new `tools\*_wrapper.ps1` scripts. All robustness logic now lives in reviewable PowerShell rather than .bat redirection trickery.
+- **`$UninstallerVersion`** bumped 0.1.0 -> 0.2.0 to reflect the prompt-skip change.
+
 ## [0.2.1] — 2026-05-23
 
 Patch release: Phase A external-install detection + CI lint cleanup.
@@ -83,7 +98,8 @@ Initial release. Reorganized and hardened port of the OneTeX installer (now arch
 - Final `Pause` at end of install (anti-pattern; replaced with conditional Read-Host on failure only).
 - Legacy `SublimeUser` folder references (TeXLib now uses `Sublime/` as the canonical sync location).
 
-[Unreleased]: https://github.com/landonfox00/TeXLib-Installer/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/landonfox00/TeXLib-Installer/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/landonfox00/TeXLib-Installer/releases/tag/v0.3.0
 [0.2.1]: https://github.com/landonfox00/TeXLib-Installer/releases/tag/v0.2.1
 [0.2.0]: https://github.com/landonfox00/TeXLib-Installer/releases/tag/v0.2.0
 [0.1.0]: https://github.com/landonfox00/TeXLib-Installer/releases/tag/v0.1.0
