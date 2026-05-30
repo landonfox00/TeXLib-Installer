@@ -40,6 +40,13 @@
     Override the install root. Defaults to %LOCALAPPDATA%\TeXLib. Use this if
     %LOCALAPPDATA% lives on a small SSD or is locked down by Group Policy.
 
+.PARAMETER HideJunction
+    Apply the +h (hidden) file attribute to the %USERPROFILE%\TeXLib junction
+    that gets created when your OneDrive path contains a space or comma (e.g.
+    "OneDrive - University of Nevada, Reno"). Off by default — a visible
+    junction is easier to discover and diagnose. Has no effect when no
+    junction is needed.
+
 .NOTES
     Refresh procedure (when component versions go stale):
       1. Edit the $Downloads hashtable below with the new file name + URL.
@@ -60,13 +67,14 @@ param(
     [switch]$Version,
     [switch]$DryRun,
     [switch]$OnlyTeXLib,
-    [string]$InstallPath = ""
+    [string]$InstallPath = "",
+    [switch]$HideJunction
 )
 
 # =============================================================================
 # 0. INSTALLER METADATA
 # =============================================================================
-$InstallerVersion = "0.3.1"
+$InstallerVersion = "0.4.0"
 $InstallerRepo    = "https://github.com/landonfox00/TeXLib-Installer"
 $ReleasesApi      = "https://api.github.com/repos/landonfox00/TeXLib-Installer/releases/latest"
 
@@ -102,6 +110,65 @@ if ($OneDrivePath -and (Test-Path "$OneDrivePath\Documents")) {
 } else {
     $TeXLibDir = "$env:USERPROFILE\Documents\TeXLib"
     $UsingOneDrive = $false
+}
+
+# --- User-root junction (TEXINPUTS-safe path) --------------------------------
+# kpathsea (TeX Live's file resolver) splits TEXINPUTS on commas and chokes
+# on spaces, so a OneDrive folder named "OneDrive - University of Nevada,
+# Reno" silently breaks every TeX build. When the resolved path has either,
+# we pipe it through a junction at %USERPROFILE%\TeXLib and reassign
+# $TeXLibDir to the clean path so every downstream consumer (settings
+# template, deploy target, version stamp, doctor) sees a sane location.
+# Idempotent across re-runs; not touched in Doctor/Version/DryRun modes.
+$UserRootJunction       = "$env:USERPROFILE\TeXLib"
+$UserRootJunctionTarget = $TeXLibDir
+$NeedsUserRootJunction  = $UsingOneDrive -and ($TeXLibDir -match '[ ,]')
+$UserRootJunctionState  = "not-needed"   # not-needed | present | blocked | will-create
+
+if ($NeedsUserRootJunction) {
+    if (Test-Path $UserRootJunction) {
+        $UserRootItem = Get-Item $UserRootJunction -Force
+        if ($UserRootItem.Attributes -match 'ReparsePoint') {
+            $UserRootJunctionState = "present"
+            $TeXLibDir = $UserRootJunction
+        } else {
+            $UserRootJunctionState = "blocked"
+        }
+    } else {
+        $UserRootJunctionState = "will-create"
+    }
+
+    # Only the install path mutates disk. Doctor / Version / DryRun observe
+    # and report, never create.
+    if (-not ($Version -or $Doctor -or $DryRun)) {
+        if ($UserRootJunctionState -eq "blocked") {
+            Write-Host ""
+            Write-Host "FATAL: $UserRootJunction exists but is not a junction." -ForegroundColor Red
+            Write-Host "       The installer needs to create a junction here so TeX can resolve" -ForegroundColor Red
+            Write-Host "       the comma/space-bearing OneDrive path. Move or rename the existing" -ForegroundColor Red
+            Write-Host "       folder (it looks like a real directory you created yourself) and" -ForegroundColor Red
+            Write-Host "       re-run the installer." -ForegroundColor Red
+            Write-Host ""
+            Stop-Installer 12
+        }
+        if ($UserRootJunctionState -eq "will-create") {
+            try {
+                if (-not (Test-Path $UserRootJunctionTarget)) {
+                    New-Item -ItemType Directory -Force -Path $UserRootJunctionTarget | Out-Null
+                }
+                New-Item -ItemType Junction -Path $UserRootJunction -Target $UserRootJunctionTarget -ErrorAction Stop | Out-Null
+                Write-Host "Created user-root junction $UserRootJunction -> $UserRootJunctionTarget" -ForegroundColor Green
+                $UserRootJunctionState = "present"
+                $TeXLibDir = $UserRootJunction
+            } catch {
+                Write-Host "FATAL: Could not create junction at $UserRootJunction : $_" -ForegroundColor Red
+                Stop-Installer 13
+            }
+        }
+        if ($HideJunction -and ($UserRootJunctionState -eq "present")) {
+            try { & attrib.exe +h $UserRootJunction } catch { $null = $_ }
+        }
+    }
 }
 
 $SublimeUserSync = "$TeXLibDir\Sublime"
@@ -304,6 +371,17 @@ function Invoke-Doctor {
     } else {
         _Fail "TeXLib library directory $TeXLibDir does not exist"
     }
+
+    # User-root junction (created when OneDrive path contains a space or comma).
+    if ($NeedsUserRootJunction) {
+        if ($UserRootJunctionState -eq "present") {
+            _Pass "User-root junction $UserRootJunction -> $UserRootJunctionTarget (TEXINPUTS-safe)"
+        } elseif ($UserRootJunctionState -eq "blocked") {
+            _Fail "$UserRootJunction exists but is NOT a junction; TeX commands will fail because the OneDrive path contains a space/comma. Move or rename the folder and re-run the installer."
+        } else {
+            _Fail "OneDrive path contains a space/comma but $UserRootJunction junction is missing. Re-run the installer to create it."
+        }
+    }
     Write-Host ""
 
     # 5d. Sublime configuration.
@@ -336,12 +414,6 @@ function Invoke-Doctor {
         _Fail "LaTeXTools.sublime-settings missing from $UserPackagesLocal"
     }
 
-    # TEXINPUTS comma trap.
-    if ($env:TEXINPUTS) {
-        if ($env:TEXINPUTS -match $TeXLibDir.Substring(0, [Math]::Min(20, $TeXLibDir.Length)) -and $env:TEXINPUTS -match ',') {
-            _Warn "TEXINPUTS env var contains a comma; kpathsea cannot resolve comma-bearing paths. Use a directory junction at a comma-free path."
-        }
-    }
     Write-Host ""
 
     # 5e. File associations.
@@ -620,8 +692,18 @@ if ($extSumatra) {
 }
 
 # 7h. OneDrive enrollment.
-if ($UsingOneDrive) { Add-PreflightOK "OneDrive detected at $OneDrivePath; TeXLib will sync via $TeXLibDir" }
-else                { Add-PreflightWarning "OneDrive not detected; TeXLib will live at $TeXLibDir (no multi-machine sync)" }
+if ($UsingOneDrive) {
+    Add-PreflightOK "OneDrive detected at $OneDrivePath; TeXLib will sync via $UserRootJunctionTarget"
+    if ($NeedsUserRootJunction) {
+        switch ($UserRootJunctionState) {
+            "present"     { Add-PreflightNote "(using existing junction $UserRootJunction so TeX can resolve the space/comma-bearing OneDrive path)" }
+            "will-create" { Add-PreflightNote "(will create junction $UserRootJunction so TeX can resolve the space/comma-bearing OneDrive path)" }
+            "blocked"     { Add-PreflightFailure "$UserRootJunction exists as a real folder, not a junction. Move or rename it and re-run." }
+        }
+    }
+} else {
+    Add-PreflightWarning "OneDrive not detected; TeXLib will live at $TeXLibDir (no multi-machine sync)"
+}
 
 # 7i. TeXLib bundle is present (always required, even in -OnlyTeXLib).
 if (Test-Path $TexLibBundle) { Add-PreflightOK "TeXLib bundle found at $TexLibBundle" }
@@ -649,6 +731,15 @@ if (-not $OnlyTeXLib) {
 # =============================================================================
 if ($DryRun) {
     Write-Host "DRY RUN — would do:" -ForegroundColor Yellow
+    if ($NeedsUserRootJunction) {
+        if ($UserRootJunctionState -eq "present") {
+            Write-Host "  * Reuse existing user-root junction $UserRootJunction -> $UserRootJunctionTarget" -ForegroundColor Gray
+        } elseif ($UserRootJunctionState -eq "blocked") {
+            Write-Host "  * ABORT: $UserRootJunction exists but is not a junction (would block install)" -ForegroundColor Yellow
+        } else {
+            Write-Host "  * Create user-root junction $UserRootJunction -> $UserRootJunctionTarget (TEXINPUTS-safe path)" -ForegroundColor Gray
+        }
+    }
     if ($OnlyTeXLib) {
         Write-Host "  * Deploy TeXLib bundle from $TexLibBundle to $TeXLibDir" -ForegroundColor Gray
         Write-Host "  * Refresh texlib_builder.py + TeXLib.sublime-build in Packages\User" -ForegroundColor Gray
