@@ -4,7 +4,19 @@ All notable changes to TeXLib-Installer are recorded here. Format follows [Keep 
 
 ## [Unreleased]
 
-_Nothing yet._
+The TEXINPUTS comma trap, finally fixed in code. kpathsea (TeX Live's file resolver) splits `TEXINPUTS` entries on commas and chokes on spaces, so the UNR OneDrive folder ("OneDrive - University of Nevada, Reno") has silently broken every install on a UNR machine since v0.1.0. Landon hand-created a junction at `%USERPROFILE%\TeXLib` to work around it; coworkers didn't know to. v0.2.0's Doctor mode only printed a TEXINPUTS warning — useful diagnosis, no actual repair.
+
+### Added
+
+- **Automatic user-root junction at `%USERPROFILE%\TeXLib`** whenever the resolved OneDrive `Documents\TeXLib` path contains a space or comma. Reassigns `$TeXLibDir` to the junction path before any downstream consumer reads it, so the LaTeXTools template, deploy target, version stamp, `TEXINPUTS` exports, and the doctor all see a clean comma/space-free path. Created with `New-Item -ItemType Junction` (same pattern as the existing `Data\Packages\User` junction). Idempotent across re-runs: an existing junction at that path is trusted and reused; a non-junction folder there is treated as user content and the installer aborts rather than overwrite.
+- **`-HideJunction` switch** in `install.ps1` that applies the `+h` (hidden) file attribute to the new junction after creation. Off by default — a visible junction is easier to discover and diagnose.
+- **Doctor mode reports the junction state** under "LaTeX environment": `[OK]` when the junction is present and points at the OneDrive target, `[FAIL]` when it should exist but doesn't, or when something non-junction is squatting on the path. Replaces v0.2.0's TEXINPUTS comma-trap warning (which only diagnosed; the junction check actually tells you what to do).
+- **DryRun plan and OneDrive pre-flight note** mention the junction when it would be created or is already in use, so coworkers seeing the new folder in their home directory can match it to a plan item rather than wondering what put it there.
+
+### Changed
+
+- **`$InstallerVersion`** bumped 0.3.1 → 0.4.0. Second user-visible behavior change since 0.2.1.
+- **`$UninstallerVersion`** bumped 0.2.0 → 0.3.0. The uninstaller now removes `%USERPROFILE%\TeXLib` if and only if it is a reparse point — verified via `(Get-Item $path -Force).Attributes -match 'ReparsePoint'` to make sure a coworker's real `TeXLib` folder in their home directory is never recurse-deleted. Removal uses `[System.IO.Directory]::Delete($path, $false)` to drop the junction entry without following the link into the OneDrive target.
 
 ## [0.3.1] — 2026-05-28
 

@@ -113,6 +113,25 @@ install.bat -OnlyTeXLib
 
 This skips the heavy components entirely and just refreshes the bundled library — takes seconds instead of an hour. Combine with `-Silent` for lab-machine deployment.
 
+## About the user-root junction
+
+If your OneDrive folder name contains a space or a comma — UNR's looks like `OneDrive - University of Nevada, Reno`, which has both — you'll see a new folder in your home directory after install:
+
+```
+%USERPROFILE%\TeXLib
+```
+
+This is a **directory junction** (a Windows reparse point), not a real folder. It points at your actual `OneDrive\Documents\TeXLib`. The installer creates it because `kpathsea`, TeX Live's file resolver, splits `TEXINPUTS` on commas and chokes on spaces — so it cannot find packages stored at `OneDrive - University of Nevada, Reno\Documents\TeXLib`. The junction gives TeX a comma/space-free path to chase, and everything downstream (LaTeXTools, the build template, the `Doctor` output, the `VERSION` stamp) is wired through it.
+
+A few details worth knowing:
+
+- **Editing files through the junction is the same as editing them in OneDrive.** They're the same bytes on disk; OneDrive will still sync them.
+- **The junction is created only when needed.** No OneDrive, or an OneDrive path with no problematic characters in it → no junction.
+- **Re-running the installer is idempotent.** If the junction is already there, the installer reuses it.
+- **The uninstaller removes the junction**, but only after verifying it's a reparse point. If you happen to have a real `TeXLib` folder in your home directory from before this installer, it's left alone.
+- **To hide it from File Explorer**, pass `-HideJunction` when installing. The default is visible (easier to discover and diagnose).
+- **To remove it manually**, open PowerShell and run `(Get-Item $env:USERPROFILE\TeXLib).Delete()` — this removes the junction entry without touching the OneDrive target. Do **not** use `Remove-Item -Recurse` from File Explorer or older PowerShell on a junction; some Windows versions follow the link.
+
 ## Other flags worth knowing
 
 | Flag | What it does |
@@ -123,6 +142,7 @@ This skips the heavy components entirely and just refreshes the bundled library 
 | `install.bat -OnlyTeXLib` | Refresh just the TeXLib library. |
 | `install.bat -InstallPath C:\Tools\TeXLib` | Install to a non-default location (e.g. if `%LOCALAPPDATA%` is on a small SSD). |
 | `install.bat -Silent` | No prompts; safe defaults; intended for unattended deployment. |
+| `install.bat -HideJunction` | Hide the `%USERPROFILE%\TeXLib` junction (see [About the user-root junction](#about-the-user-root-junction)). Off by default. |
 
 Flags can be combined: `install.bat -OnlyTeXLib -Silent` is the typical lab-machine refresh.
 
@@ -133,6 +153,7 @@ Double-click `uninstall.bat` from the same folder you ran the installer from. It
 - Remove `%LOCALAPPDATA%\TeXLib` (Sublime, Sumatra, TeX Live, logs, scripts)
 - Clean PATH and registry entries
 - Remove Desktop and Start Menu shortcuts
+- Remove the `%USERPROFILE%\TeXLib` junction, if one was created (only if it's actually a junction — a real folder with the same name is preserved)
 
 It **does not** delete your `Documents\TeXLib` folder. If you want a fully clean removal, delete that too.
 
@@ -182,7 +203,7 @@ If `Ctrl+B` says "Cannot find builder texlib", verify:
 
 ### Compile works on command line but not in Sublime
 
-Usually a `TEXINPUTS` problem. The most common cause is **commas in paths**. kpathsea (TeX Live's file resolver) cannot resolve a `TEXINPUTS` entry that contains a comma, and OneDrive at universities often has a comma in the folder name ("OneDrive - University of Nevada, Reno"). The installer normally handles this, but if it doesn't, the workaround is to create a directory junction at a comma-free path and point `TEXINPUTS` at the junction. Open an issue if you hit this.
+Usually a `TEXINPUTS` problem. The most common cause is **commas (or spaces) in paths**. kpathsea (TeX Live's file resolver) splits `TEXINPUTS` on commas and chokes on spaces. OneDrive at universities often has both ("OneDrive - University of Nevada, Reno"). As of v0.4.0 the installer detects this and creates a junction at `%USERPROFILE%\TeXLib` automatically — see [About the user-root junction](#about-the-user-root-junction). If `install.bat -Doctor` reports the junction as `[FAIL]` (or doesn't mention it at all on an affected machine), re-run the installer to create it. Open an issue if the junction is in place and you're still hitting this.
 
 ### Getting help
 

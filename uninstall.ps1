@@ -21,7 +21,7 @@ param(
     [switch]$Silent
 )
 
-$UninstallerVersion = "0.2.0"
+$UninstallerVersion = "0.3.0"
 $InstallerRepo      = "https://github.com/landonfox00/TeXLib-Installer"
 
 $BaseDir = "$env:LOCALAPPDATA\TeXLib"
@@ -63,6 +63,7 @@ if (-not $Silent) {
     Write-Host "  - Desktop and Start Menu shortcuts" -ForegroundColor Gray
     Write-Host "  - PATH entries pointing at TeX Live" -ForegroundColor Gray
     Write-Host "  - File-association registry keys" -ForegroundColor Gray
+    Write-Host "  - $env:USERPROFILE\TeXLib  (only if it is a junction — see notes)" -ForegroundColor Gray
     Write-Host ""
     Write-Host "PRESERVES:" -ForegroundColor Green
     Write-Host "  - $env:USERPROFILE\Documents\TeXLib  (or OneDrive equivalent)" -ForegroundColor Gray
@@ -85,7 +86,32 @@ if (Test-Path $BaseDir) {
     }
 }
 
-# 2. Remove shortcuts.
+# 2. Remove user-root TeXLib junction (the TEXINPUTS-safe path created by
+# install.ps1 when the OneDrive folder contains a space or comma).
+# Critical safety check: only remove if it's actually a reparse point. If the
+# user has a real folder at %USERPROFILE%\TeXLib (e.g. they built one before
+# this installer existed), we must not touch it — that would destroy their
+# library.
+$UserRootJunction = "$env:USERPROFILE\TeXLib"
+if (Test-Path $UserRootJunction) {
+    $Item = Get-Item $UserRootJunction -Force
+    if ($Item.Attributes -match 'ReparsePoint') {
+        Write-Host "Removing user-root junction $UserRootJunction..." -ForegroundColor Yellow
+        try {
+            # [System.IO.Directory]::Delete with recursive=$false unambiguously
+            # deletes the junction entry without following the link into the
+            # OneDrive target.
+            [System.IO.Directory]::Delete($UserRootJunction, $false)
+            Write-Host "  Removed junction (target preserved)" -ForegroundColor Green
+        } catch {
+            Write-Host "  [WARN] Could not remove $UserRootJunction : $_" -ForegroundColor Yellow
+        }
+    } else {
+        Write-Host "$UserRootJunction is a real folder, not a junction; leaving it alone." -ForegroundColor Gray
+    }
+}
+
+# 3. Remove shortcuts.
 Write-Host "Removing shortcuts..." -ForegroundColor Yellow
 $DesktopPath   = [Environment]::GetFolderPath("Desktop")
 $StartMenuPath = [Environment]::GetFolderPath("StartMenu") + "\Programs"
@@ -100,7 +126,7 @@ foreach ($n in $ShortcutNames) {
     }
 }
 
-# 3. Clean PATH.
+# 4. Clean PATH.
 Write-Host "Cleaning user PATH..." -ForegroundColor Yellow
 $TexBinPath   = "$BaseDir\TexLive\2025\bin\windows"
 $LegacyOneTeX = "$env:LOCALAPPDATA\OneTeX\TexLive\2025\bin\windows"
@@ -120,7 +146,7 @@ if ($CurrentPath) {
     }
 }
 
-# 4. Remove registry associations.
+# 5. Remove registry associations.
 Write-Host "Removing file-association registry keys..." -ForegroundColor Yellow
 $RegPath = "HKCU:\Software\Classes"
 foreach ($ID in @("TeXLib.SublimeFile", "TeXLib.SumatraPDF", "OneTeX.SublimeFile", "OneTeX.SumatraPDF")) {
