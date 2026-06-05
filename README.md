@@ -99,6 +99,7 @@ If you drop the component ZIP files (e.g. `sublime_text_build_4180_x64.zip`) nex
   Install-Module PSScriptAnalyzer -Scope CurrentUser
   Invoke-ScriptAnalyzer -Path . -Recurse -Severity Warning, Error
   ```
+- Before tagging a release, run the manual test pass in [TESTING.md](TESTING.md) (static checks → install → builds → uninstall → release ZIP).
 
 ## Why is this a separate repo from TeXLib?
 
