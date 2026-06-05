@@ -81,6 +81,9 @@ foreach ($f in $InstallerFiles) {
     if (Test-Path $src) { Copy-Item $src $StageRoot -Force }
 }
 Copy-Item (Join-Path $RepoRoot "templates") $StageRoot -Recurse -Force
+# runtime/ holds the standalone Explorer builder + Ctrl+B hotkey source that
+# install.ps1 deploys/compiles on the target machine.
+Copy-Item (Join-Path $RepoRoot "runtime") $StageRoot -Recurse -Force
 
 # Bundle the TeXLib snapshot. We exclude .git/.github (history + CI not needed
 # in the release ZIP) and OneDrive sync metadata.
