@@ -87,6 +87,43 @@ $InstallerVersion = "0.5.0"
 $InstallerRepo    = "https://github.com/landonfox00/TeXLib-Installer"
 $ReleasesApi      = "https://api.github.com/repos/landonfox00/TeXLib-Installer/releases/latest"
 
+# Fail fast: a non-terminating error in a download/extract/copy step must abort
+# the install rather than silently barrel on into a half-built state.
+$ErrorActionPreference = "Stop"
+
+# --- Early exit + banner -----------------------------------------------------
+# Defined up here (before the user-root junction logic in section 1) because
+# that block can call Stop-Installer on its failure paths, which execute at
+# script load — before the rest of the function definitions further down.
+function Show-Banner {
+    Write-Host ""
+    Write-Host "==============================================" -ForegroundColor Cyan
+    Write-Host "   TeXLib-Installer v$InstallerVersion"        -ForegroundColor Cyan
+    Write-Host "==============================================" -ForegroundColor Cyan
+    Write-Host ""
+}
+
+function Stop-Installer {
+    param([int]$ExitCode = 0)
+    # Stop-Transcript throws if no transcript is running; that's expected for
+    # early-exit paths (e.g. -Version, or a junction failure before logging
+    # starts), so swallow it deliberately.
+    try { Stop-Transcript | Out-Null } catch { $null = $_ }
+    # When launched via install.bat -> tools\install_wrapper.ps1, the wrapper
+    # owns the pause-on-failure prompt and the exit-code surfacing. Skip our
+    # own prompt to avoid two "Press Enter to close" prompts back to back.
+    # Direct PS launches (no bat) still see the prompt here.
+    if (-not $Silent -and $ExitCode -ne 0 -and -not $env:TEXLIB_INSTALLER_WRAPPED) {
+        Write-Host ""
+        Write-Host "Installer exited with code $ExitCode." -ForegroundColor Red
+        Write-Host "If you need help, attach the log file above to a new issue at" -ForegroundColor Yellow
+        Write-Host "  $InstallerRepo/issues" -ForegroundColor Yellow
+        Write-Host ""
+        Read-Host "Press Enter to close"
+    }
+    exit $ExitCode
+}
+
 
 # =============================================================================
 # 1. SETUP VARIABLES
@@ -225,33 +262,8 @@ New-Item -ItemType Directory -Force -Path $EffectiveLogDir | Out-Null
 $LogFile = "$EffectiveLogDir\install-$(Get-Date -Format 'yyyyMMdd-HHmmss').log"
 Start-Transcript -Path $LogFile -IncludeInvocationHeader | Out-Null
 
-function Show-Banner {
-    Write-Host ""
-    Write-Host "==============================================" -ForegroundColor Cyan
-    Write-Host "   TeXLib-Installer v$InstallerVersion"        -ForegroundColor Cyan
-    Write-Host "==============================================" -ForegroundColor Cyan
-    Write-Host ""
-}
-
-function Stop-Installer {
-    param([int]$ExitCode = 0)
-    # Stop-Transcript throws if no transcript is running; that's expected for
-    # early-exit paths (e.g. -Version), so swallow it deliberately.
-    try { Stop-Transcript | Out-Null } catch { $null = $_ }
-    # When launched via install.bat -> tools\install_wrapper.ps1, the wrapper
-    # owns the pause-on-failure prompt and the exit-code surfacing. Skip our
-    # own prompt to avoid two "Press Enter to close" prompts back to back.
-    # Direct PS launches (no bat) still see the prompt here.
-    if (-not $Silent -and $ExitCode -ne 0 -and -not $env:TEXLIB_INSTALLER_WRAPPED) {
-        Write-Host ""
-        Write-Host "Installer exited with code $ExitCode." -ForegroundColor Red
-        Write-Host "If you need help, attach the log file above to a new issue at" -ForegroundColor Yellow
-        Write-Host "  $InstallerRepo/issues" -ForegroundColor Yellow
-        Write-Host ""
-        Read-Host "Press Enter to close"
-    }
-    exit $ExitCode
-}
+# (Show-Banner and Stop-Installer are defined near the top of the script, above
+# the section-1 user-root junction block that calls Stop-Installer at load time.)
 
 
 # =============================================================================
