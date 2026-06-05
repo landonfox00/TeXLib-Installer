@@ -91,6 +91,14 @@ $ReleasesApi      = "https://api.github.com/repos/landonfox00/TeXLib-Installer/r
 # the install rather than silently barrel on into a half-built state.
 $ErrorActionPreference = "Stop"
 
+# PowerShell 5.1 may negotiate TLS 1.0/1.1 by default, which several CDNs
+# (including GitHub) now reject -- producing an opaque download failure. Force
+# TLS 1.2 (kept additive so a host that already enables 1.3 is unaffected).
+try {
+    [Net.ServicePointManager]::SecurityProtocol =
+        [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+} catch { $null = $_ }
+
 # --- Early exit + banner -----------------------------------------------------
 # Defined up here (before the user-root junction logic in section 1) because
 # that block can call Stop-Installer on its failure paths, which execute at
@@ -109,6 +117,13 @@ function Stop-Installer {
     # early-exit paths (e.g. -Version, or a junction failure before logging
     # starts), so swallow it deliberately.
     try { Stop-Transcript | Out-Null } catch { $null = $_ }
+    # Always clear the (possibly multi-GB) download scratch on the way out, so a
+    # failed run doesn't leave %TEMP%\TeXLib_Install behind. The success path
+    # cleans it in section 21; this covers every non-success Stop-Installer exit.
+    # ($TempDir is $null on the very early junction failure paths -> guarded.)
+    if ($TempDir -and (Test-Path $TempDir)) {
+        Remove-Item $TempDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
     # When launched via install.bat -> tools\install_wrapper.ps1, the wrapper
     # owns the pause-on-failure prompt and the exit-code surfacing. Skip our
     # own prompt to avoid two "Press Enter to close" prompts back to back.
@@ -136,9 +151,14 @@ $ScriptsDir = "$BaseDir\Scripts"
 $LogDir     = "$BaseDir\Logs"
 
 # Program paths.
+# TeX Live's tlnet installer always installs the current year; we pin the tree
+# name here in ONE place so a yearly bump is a single edit rather than a
+# scattered find-and-replace. (install-tl honors the explicit TEXDIR in the
+# profile, so the folder name is just a label.)
+$TexLiveYear = "2025"
 $SublimeDir = "$BaseDir\Sublime Text"
 $SumatraDir = "$BaseDir\Sumatra"
-$TexLiveDir = "$BaseDir\TexLive\2025"
+$TexLiveDir = "$BaseDir\TexLive\$TexLiveYear"
 $TexBinPath = "$TexLiveDir\bin\windows"
 
 # TeXLib bundle: this installer expects a sibling `texlib\` directory
@@ -241,16 +261,34 @@ $Downloads = @{
         "Type"    = "Dynamic"
     }
     "pkgctrl" = @{
+        # Rolling file (no per-release URL); left unhashed intentionally.
         "Url"  = "https://packagecontrol.io/Package%20Control.sublime-package"
         "File" = "Package Control.sublime-package"
         "Type" = "Skip"
     }
     "latextools" = @{
-        "Url"  = "https://github.com/SublimeText/LaTeXTools/archive/refs/heads/master.zip"
+        # Pinned to a tagged release (NOT the moving master branch) and hashed,
+        # so the installer can't run an unverified, ever-changing copy of the
+        # third-party Python that Sublime executes. To bump: pick a newer tag at
+        # github.com/SublimeText/LaTeXTools/releases, then recompute SHA256 with
+        #   Get-FileHash <downloaded zip> -Algorithm SHA256
+        # A hash mismatch fails the install closed (won't run unverified bytes);
+        # if GitHub regenerates the tag archive, refresh the hash here.
+        "Url"  = "https://github.com/SublimeText/LaTeXTools/archive/refs/tags/st4-4.5.12.zip"
         "File" = "latextools.zip"
-        "Type" = "Skip"
+        "Type" = "Static"
+        "Hash" = "3952E9F4825D706DB1A579B52E70663AFA4674C2501A30A8168631424D7AD1B6"
     }
 }
+
+# Folder name inside the pinned LaTeXTools archive (GitHub names it
+# "<repo>-<tag>"). Update alongside the latextools tag above.
+$LaTeXToolsZipDir = "LaTeXTools-st4-4.5.12"
+
+# The SumatraPDF portable exe is named by version (SumatraPDF-3.5.2-64.exe).
+# Derive it ONCE from the pinned zip filename so a version bump only touches the
+# $Downloads entry above instead of five scattered string literals.
+$SumatraExeName = $Downloads["sumatra"].File -replace '\.zip$', '.exe'
 
 
 # =============================================================================
@@ -297,7 +335,7 @@ function Show-VersionInfo {
     $VersionFile = "$BaseDir\VERSION"
     if (Test-Path $VersionFile) {
         Write-Host ""
-        Write-Host "Installed install (from $VersionFile):" -ForegroundColor Gray
+        Write-Host "Installed version (from $VersionFile):" -ForegroundColor Gray
         Get-Content $VersionFile | ForEach-Object { Write-Host "  $_" -ForegroundColor Gray }
     } else {
         Write-Host ""
@@ -786,6 +824,26 @@ if ($DryRun) {
 # =============================================================================
 # 10. HELPER FUNCTIONS (install-mode only)
 # =============================================================================
+function Invoke-DownloadWithRetry {
+    # Download $Uri to $OutFile, retrying transient failures with backoff.
+    # University Wi-Fi blips on a multi-hundred-MB TeX Live download otherwise
+    # hard-fail the whole install with no recourse but a from-scratch re-run.
+    param([string]$Uri, [string]$OutFile, [int]$Retries = 3)
+    for ($attempt = 1; $attempt -le $Retries; $attempt++) {
+        try {
+            Invoke-WebRequest -Uri $Uri -OutFile $OutFile -UseBasicParsing -TimeoutSec 120
+            return
+        } catch {
+            if ($attempt -ge $Retries) {
+                throw "Download failed after $Retries attempt(s): $Uri`n$_"
+            }
+            $wait = 5 * $attempt
+            Write-Host "  [retry] download attempt $attempt failed; retrying in $wait s..." -ForegroundColor Yellow
+            Start-Sleep -Seconds $wait
+        }
+    }
+}
+
 function Get-SourceFile {
     param ($Key, $DestPath)
     $Info = $Downloads[$Key]
@@ -797,7 +855,7 @@ function Get-SourceFile {
     } elseif ($Info.Type -eq "Dynamic") {
         Write-Host "Fetching latest hash for $($Info.File)..." -ForegroundColor Cyan
         try {
-            $HashContent = (Invoke-WebRequest -Uri $Info.HashUrl -UseBasicParsing).Content
+            $HashContent = (Invoke-WebRequest -Uri $Info.HashUrl -UseBasicParsing -TimeoutSec 30).Content
             $ExpectedHash = ($HashContent -split "\s+")[0].Trim()
         } catch {
             Write-Host "  [FAIL] Could not fetch hash for $($Info.File): $_" -ForegroundColor Red
@@ -825,7 +883,7 @@ function Get-SourceFile {
     }
 
     Write-Host "Downloading $($Info.File)..." -ForegroundColor Yellow
-    Invoke-WebRequest -Uri $Info.Url -OutFile $DestPath -UseBasicParsing
+    Invoke-DownloadWithRetry -Uri $Info.Url -OutFile $DestPath
 
     if ($Info.Type -ne "Skip" -and $ExpectedHash) {
         $NewHash = (Get-FileHash $DestPath -Algorithm $Algo).Hash
@@ -1000,10 +1058,10 @@ if (-not $OnlyTeXLib) {
             Expand-Archive -Path $ZipPath -DestinationPath "$TempDir\texlive_installer"
             $InstallerRoot = Get-ChildItem "$TempDir\texlive_installer\install-tl-*" | Select-Object -ExpandProperty FullName
 
-            $TexDirFwd          = $BaseDir.Replace("\", "/") + "/TexLive/2025"
+            $TexDirFwd          = $BaseDir.Replace("\", "/") + "/TexLive/$TexLiveYear"
             $TexMfLocalFwd      = $BaseDir.Replace("\", "/") + "/TexLive/texmf-local"
-            $TexMfSysConfigFwd  = $BaseDir.Replace("\", "/") + "/TexLive/2025/texmf-config"
-            $TexMfSysVarFwd     = $BaseDir.Replace("\", "/") + "/TexLive/2025/texmf-var"
+            $TexMfSysConfigFwd  = $BaseDir.Replace("\", "/") + "/TexLive/$TexLiveYear/texmf-config"
+            $TexMfSysVarFwd     = $BaseDir.Replace("\", "/") + "/TexLive/$TexLiveYear/texmf-var"
 
             $ProfileContent = @"
 selected_scheme scheme-full
@@ -1022,6 +1080,15 @@ option_src 0
                 -ArgumentList "-no-gui -profile texlive.profile" `
                 -WorkingDirectory $InstallerRoot -PassThru
             Wait-WithHeartbeat -Process $TLProc -IntervalSec 30 -Label "TeX Live"
+            # Don't trust "it finished" -- verify install-tl actually succeeded.
+            # Without this, a dropped connection mid-install reports success and
+            # the broken tree is only caught (as a non-fatal WARN) much later.
+            if ($TLProc.ExitCode -ne 0) {
+                throw "install-tl exited with code $($TLProc.ExitCode); TeX Live did not install cleanly."
+            }
+            if (-not (Test-Path "$TexBinPath\pdflatex.exe")) {
+                throw "install-tl finished but pdflatex.exe is missing at $TexBinPath."
+            }
         } catch {
             Write-Host "TeX Live install failed: $_" -ForegroundColor Red
             Stop-Installer 5
@@ -1099,6 +1166,21 @@ if (-not $OnlyTeXLib) {
         } else {
             Write-Host "  Creating new sync folder at $SublimeUserSync" -ForegroundColor Cyan
             if (-not (Test-Path $UserPackagesLocal)) { New-Item -ItemType Directory -Force -Path $UserPackagesLocal | Out-Null }
+            # Back up the existing Packages\User BEFORE the destructive move, so a
+            # crash between the move and the junction can't lose the user's
+            # settings. (Backup-SublimeSettings only covers $SublimeUserSync,
+            # which doesn't exist yet on a first install -- this is the gap.)
+            $ExistingUserItems = @(Get-ChildItem -Path $UserPackagesLocal -Force -ErrorAction SilentlyContinue)
+            if ($ExistingUserItems.Count -gt 0) {
+                if (-not (Test-Path $LogDir)) { New-Item -ItemType Directory -Force -Path $LogDir | Out-Null }
+                $PkgBackup = "$LogDir\packages-user-backup-$(Get-Date -Format 'yyyyMMdd-HHmmss').zip"
+                try {
+                    Compress-Archive -Path "$UserPackagesLocal\*" -DestinationPath $PkgBackup -CompressionLevel Fastest -ErrorAction Stop
+                    Write-Host "  Backed up existing Packages\User to $PkgBackup" -ForegroundColor Gray
+                } catch {
+                    Write-Host "  [warn] Packages\User backup failed: $_ (continuing)" -ForegroundColor Yellow
+                }
+            }
             New-Item -ItemType Directory -Force -Path $SublimeUserSync | Out-Null
             Get-ChildItem -Path $UserPackagesLocal -Force | Move-Item -Destination $SublimeUserSync -Force
             Remove-Item $UserPackagesLocal -Recurse -Force
@@ -1127,7 +1209,7 @@ try {
         $ZipPath = "$TempDir\latextools.zip"
         Get-SourceFile -Key "latextools" -DestPath $ZipPath
         Expand-Archive -Path $ZipPath -DestinationPath "$TempDir\lt_extract"
-        Move-Item -Path "$TempDir\lt_extract\LaTeXTools-master" -Destination $LaTeXToolsDir
+        Move-Item -Path "$TempDir\lt_extract\$LaTeXToolsZipDir" -Destination $LaTeXToolsDir
     }
 
     # 16b. Deploy the TeXLib custom builder + bundled spell-check dictionary.
@@ -1148,7 +1230,7 @@ try {
         # 16c. LaTeXTools settings.
         $LaTeXToolsTpl = "$ScriptDir\templates\LaTeXTools.sublime-settings"
         if (Test-Path $LaTeXToolsTpl) {
-            $JsonSumatra = "$SumatraDir\SumatraPDF-3.5.2-64.exe".Replace("\", "\\")
+            $JsonSumatra = "$SumatraDir\$($SumatraExeName)".Replace("\", "\\")
             $JsonSublime = "$SublimeDir\sublime_text.exe".Replace("\", "\\")
             $JsonTexPath = "$TexBinPath;$TexLiveDir\tlpkg\tlperl\bin;`$PATH".Replace("\", "\\")
             $JsonTexLib  = $TeXLibDir.Replace("\", "\\")
@@ -1210,8 +1292,8 @@ if (-not $OnlyTeXLib) {
         foreach ($Ext in @(".txt", ".tex", ".cls", ".sty", ".bib", ".sublime-project", ".sublime-workspace")) {
             Register-TeXLibAssociation -Ext $Ext -ProgID "TeXLib.SublimeFile" -Desc "Sublime Text File" -Exe $SublExe -Icon $SublIcon
         }
-        $SumExe = "$SumatraDir\SumatraPDF-3.5.2-64.exe"
-        $SumIcon = "$SumatraDir\SumatraPDF-3.5.2-64.exe,0"
+        $SumExe = "$SumatraDir\$($SumatraExeName)"
+        $SumIcon = "$SumatraDir\$($SumatraExeName),0"
         Register-TeXLibAssociation -Ext ".pdf" -ProgID "TeXLib.SumatraPDF" -Desc "SumatraPDF Document" -Exe $SumExe -Icon $SumIcon
         Write-Host "  Registered .tex .cls .sty .bib .pdf and friends" -ForegroundColor Green
     } catch {
@@ -1246,7 +1328,7 @@ try {
     # needed, so TEXINPUTS the builder derives from it is kpathsea-safe.
     function ConvertTo-Psd1String { param($s) "'" + ("$s" -replace "'", "''") + "'" }
     $TlPerlBin = "$TexLiveDir\tlpkg\tlperl\bin"
-    $SumatraExe = "$SumatraDir\SumatraPDF-3.5.2-64.exe"
+    $SumatraExe = "$SumatraDir\$($SumatraExeName)"
     $SublimeExe = "$SublimeDir\sublime_text.exe"
     $ConfigLines = @(
         "# texlib-build.config.psd1 -- written by TeXLib-Installer $InstallerVersion.",
@@ -1370,7 +1452,7 @@ if (-not $OnlyTeXLib) {
     }
 
     New-DesktopAndStartMenuShortcut -SourceExe "$SublimeDir\sublime_text.exe"          -ShortcutName "Sublime"
-    New-DesktopAndStartMenuShortcut -SourceExe "$SumatraDir\SumatraPDF-3.5.2-64.exe"   -ShortcutName "Sumatra"
+    New-DesktopAndStartMenuShortcut -SourceExe "$SumatraDir\$($SumatraExeName)"   -ShortcutName "Sumatra"
 }
 
 

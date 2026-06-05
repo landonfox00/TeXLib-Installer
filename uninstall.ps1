@@ -21,7 +21,7 @@ param(
     [switch]$Silent
 )
 
-$UninstallerVersion = "0.4.0"
+$UninstallerVersion = "0.5.0"   # keep in lockstep with install.ps1 $InstallerVersion
 $InstallerRepo      = "https://github.com/landonfox00/TeXLib-Installer"
 
 $BaseDir = "$env:LOCALAPPDATA\TeXLib"
@@ -164,11 +164,32 @@ if ($CurrentPath) {
 # 5. Remove registry associations.
 Write-Host "Removing file-association registry keys..." -ForegroundColor Yellow
 $RegPath = "HKCU:\Software\Classes"
-foreach ($ID in @("TeXLib.SublimeFile", "TeXLib.SumatraPDF", "OneTeX.SublimeFile", "OneTeX.SumatraPDF", "TeXLib.BuildMenu")) {
+$TexlibProgIDs = @("TeXLib.SublimeFile", "TeXLib.SumatraPDF",
+                   "OneTeX.SublimeFile", "OneTeX.SumatraPDF")
+foreach ($ID in ($TexlibProgIDs + "TeXLib.BuildMenu")) {
     $full = "$RegPath\$ID"
     if (Test-Path $full) {
         Remove-Item -Path $full -Recurse -Force -ErrorAction SilentlyContinue
         Write-Host "  Removed $ID" -ForegroundColor Gray
+    }
+}
+
+# Remove the per-extension associations install created (HKCU\Software\Classes\
+# <ext> whose default points at one of our ProgIDs). Without this, uninstall
+# leaves .tex/.cls/... pointing at a now-deleted ProgID (a broken "open with"),
+# and -- most rudely -- leaves .txt hijacked. Only delete a key whose default
+# is OURS, so an association the user set themselves is never clobbered.
+# Removing HKCU\.txt restores the system (HKLM) default for .txt.
+foreach ($Ext in @(".txt", ".tex", ".cls", ".sty", ".bib",
+                   ".sublime-project", ".sublime-workspace", ".pdf")) {
+    $ExtKey = "$RegPath\$Ext"
+    if (Test-Path $ExtKey) {
+        $def = $null
+        try { $def = (Get-Item -Path $ExtKey).GetValue("") } catch { $def = $null }
+        if ($def -and ($TexlibProgIDs -contains $def)) {
+            Remove-Item -Path $ExtKey -Recurse -Force -ErrorAction SilentlyContinue
+            Write-Host "  Removed $Ext association ($def)" -ForegroundColor Gray
+        }
     }
 }
 # Build-from-Explorer right-click flyout on .tex.
