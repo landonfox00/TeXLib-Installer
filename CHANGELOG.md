@@ -20,7 +20,24 @@ The TEXINPUTS comma trap, finally fixed in code. kpathsea (TeX Live's file resol
 ### Changed
 
 - **`$InstallerVersion`** bumped 0.3.1 → 0.5.0. Adds the build-from-Explorer feature on top of the junction fix.
-- **`$UninstallerVersion`** bumped 0.2.0 → 0.4.0. The uninstaller now removes `%USERPROFILE%\TeXLib` if and only if it is a reparse point — verified via `(Get-Item $path -Force).Attributes -match 'ReparsePoint'` to make sure a coworker's real `TeXLib` folder in their home directory is never recurse-deleted. Removal uses `[System.IO.Directory]::Delete($path, $false)` to drop the junction entry without following the link into the OneDrive target. It also stops the `TeXLibHotkey` process, removes its Startup shortcut, and deletes the `TeXLib.BuildMenu` store + `.tex` `TeXLibBuild` verb.
+- **`$UninstallerVersion`** bumped 0.2.0 → 0.5.0 (kept in lockstep with the installer). The uninstaller now removes `%USERPROFILE%\TeXLib` if and only if it is a reparse point — verified via `(Get-Item $path -Force).Attributes -match 'ReparsePoint'` to make sure a coworker's real `TeXLib` folder in their home directory is never recurse-deleted. Removal uses `[System.IO.Directory]::Delete($path, $false)` to drop the junction entry without following the link into the OneDrive target. It also stops the `TeXLibHotkey` process, removes its Startup shortcut, and deletes the `TeXLib.BuildMenu` store + `.tex` `TeXLibBuild` verb.
+
+### Security
+
+- **LaTeXTools is pinned to a tagged release (`st4-4.5.12`) with a SHA256**, replacing the unverified, ever-moving `master`-branch download. The installer no longer runs an unpinned, unhashed copy of the third-party Python that Sublime executes; a hash mismatch now fails the install closed. Update by bumping the tag + hash in the `$Downloads` table.
+- **TLS 1.2 is forced** before any download (PowerShell 5.1 may otherwise negotiate TLS 1.0/1.1, which GitHub and several CDNs now reject).
+
+### Fixed
+
+- **`Stop-Installer` is defined above the section-1 user-root junction block.** It was called on the junction's failure paths (a real folder squatting at `%USERPROFILE%\TeXLib`, or a creation error) — which run at script load — but wasn't defined until ~130 lines later, so the installer crashed with "Stop-Installer is not recognized" on exactly the OneDrive comma/space case the feature exists to handle.
+- **Downloads retry** (3× with backoff + 120 s timeout) so a campus Wi-Fi blip on the multi-hundred-MB TeX Live pull no longer hard-fails the whole install.
+- **TeX Live install is verified** via `install-tl`'s exit code and the presence of `pdflatex.exe`; a failed install is now a hard stop, not a late non-fatal warning.
+- **Scratch is always cleaned** — `Stop-Installer` removes `%TEMP%\TeXLib_Install` on every exit, so a failed run no longer strands multi-GB of downloads.
+- **`$ErrorActionPreference = 'Stop'`** so an unguarded download/extract/copy error aborts instead of silently continuing into a half-built state.
+- **Existing `Packages\User` is backed up before the destructive first-install sync move** (the prior backup only covered the not-yet-existing sync target).
+- **Uninstall is a true reverse:** removes the per-extension association keys install created (`.tex/.cls/.sty/.bib/.pdf` and the hijacked `.txt`) when their default points at a TeXLib ProgID — previously left dangling at a deleted ProgID.
+- **Building several `.tex` from Explorer opens only the last PDF** (was one SumatraPDF window per file); the `.spl` split verifies both halves exist before consuming the signal and reports clearly when `pypdf` is missing, instead of faking success.
+- **Maintainability:** the SumatraPDF exe name is derived from the pinned zip (was hardcoded 5×) and the TeX Live year is centralized in `$TexLiveYear`.
 
 ## [0.3.1] — 2026-05-28
 
