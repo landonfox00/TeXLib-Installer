@@ -85,15 +85,35 @@ Copy-Item (Join-Path $RepoRoot "templates") $StageRoot -Recurse -Force
 # install.ps1 deploys/compiles on the target machine.
 Copy-Item (Join-Path $RepoRoot "runtime") $StageRoot -Recurse -Force
 
-# Bundle the TeXLib snapshot. We exclude .git/.github (history + CI not needed
-# in the release ZIP) and OneDrive sync metadata.
+# Bundle the TeXLib snapshot. Prefer `git archive` so ONLY tracked files at
+# HEAD are bundled -- a plain file copy would sweep in gitignored build
+# artifacts (.aux/.log/.pdf), __pycache__, scratch dirs, and editor state.
 Write-Host "Snapshotting TeXLib from $TexLibPath..." -ForegroundColor Cyan
 $TexLibStage = Join-Path $StageRoot "texlib"
 New-Item -ItemType Directory -Force -Path $TexLibStage | Out-Null
 
-$Excludes = @(".git", ".github", "desktop.ini", "Thumbs.db")
-Get-ChildItem -Path $TexLibPath -Force | Where-Object { $Excludes -notcontains $_.Name } | ForEach-Object {
-    Copy-Item $_.FullName $TexLibStage -Recurse -Force
+$gitOk = $false
+try {
+    & git -C $TexLibPath rev-parse --is-inside-work-tree 2>$null | Out-Null
+    $gitOk = ($LASTEXITCODE -eq 0)
+} catch { $gitOk = $false }
+
+if ($gitOk) {
+    Write-Host "  Using git archive (tracked files at HEAD only)." -ForegroundColor Gray
+    $TarPath = Join-Path $OutDir "texlib-snapshot.tar"
+    & git -C $TexLibPath archive --format=tar -o $TarPath HEAD
+    if ($LASTEXITCODE -ne 0) { throw "git archive failed for $TexLibPath" }
+    & tar -x -f $TarPath -C $TexLibStage
+    if ($LASTEXITCODE -ne 0) { throw "tar extraction of the TeXLib snapshot failed" }
+    Remove-Item $TarPath -Force
+    # CI config isn't needed in the release bundle.
+    Remove-Item (Join-Path $TexLibStage ".github") -Recurse -Force -ErrorAction SilentlyContinue
+} else {
+    Write-Host "  [warn] $TexLibPath is not a git repo; falling back to a filtered file copy (may include build artifacts)." -ForegroundColor Yellow
+    $Excludes = @(".git", ".github", "desktop.ini", "Thumbs.db", "__pycache__")
+    Get-ChildItem -Path $TexLibPath -Force | Where-Object { $Excludes -notcontains $_.Name } | ForEach-Object {
+        Copy-Item $_.FullName $TexLibStage -Recurse -Force
+    }
 }
 
 # Stamp the release metadata.
