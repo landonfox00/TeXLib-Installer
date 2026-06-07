@@ -4,6 +4,8 @@ All notable changes to TeXLib-Installer are recorded here. Format follows [Keep 
 
 ## [Unreleased]
 
+## [0.5.0] — 2026-06-07
+
 The TEXINPUTS comma trap, finally fixed in code. kpathsea (TeX Live's file resolver) splits `TEXINPUTS` entries on commas and chokes on spaces, so the UNR OneDrive folder ("OneDrive - University of Nevada, Reno") has silently broken every install on a UNR machine since v0.1.0. Landon hand-created a junction at `%USERPROFILE%\TeXLib` to work around it; coworkers didn't know to. v0.2.0's Doctor mode only printed a TEXINPUTS warning — useful diagnosis, no actual repair.
 
 ### Added
