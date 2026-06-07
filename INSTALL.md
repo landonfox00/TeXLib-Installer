@@ -222,6 +222,21 @@ If `Ctrl+B` says "Cannot find builder texlib", verify:
 
 Usually a `TEXINPUTS` problem. The most common cause is **commas (or spaces) in paths**. kpathsea (TeX Live's file resolver) splits `TEXINPUTS` on commas and chokes on spaces. OneDrive at universities often has both ("OneDrive - University of Nevada, Reno"). As of v0.4.0 the installer detects this and creates a junction at `%USERPROFILE%\TeXLib` automatically — see [About the user-root junction](#about-the-user-root-junction). If `install.bat -Doctor` reports the junction as `[FAIL]` (or doesn't mention it at all on an affected machine), re-run the installer to create it. Open an issue if the junction is in place and you're still hitting this.
 
+### Double-clicking a .tex or .pdf opens the wrong app
+
+This is a known **Windows** behavior, not a TeXLib bug. Modern Windows 10/11
+protects the default-app setting for each file type, so an installer can't
+silently flip it — the first time you open a `.tex`/`.pdf` you may have to set
+it once by hand:
+
+- Right-click the file → **Open with → Choose another app**
+- Pick **Sublime Text** (for `.tex`/`.cls`/`.sty`/`.bib`) or **SumatraPDF**
+  (for `.pdf`), and check **Always use this app**.
+
+It's purely cosmetic: the **right-click "Build with TeXLib"** menu, the optional
+**Ctrl+B** Explorer hotkey, and building from inside Sublime all work regardless
+of which app owns the double-click. You only need to do this once per file type.
+
 ### Getting help
 
 When opening an issue, the GitHub issue form asks for the **Doctor output** and the **install log**. The faster you can get those into the report, the faster I can help.

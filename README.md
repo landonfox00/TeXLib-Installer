@@ -23,21 +23,29 @@ One-click portable Windows installer for the [TeXLib](https://github.com/landonf
 ├── uninstall.ps1          # reverses install.ps1
 ├── install.bat            # wrapper: launches install.ps1 with ExecutionPolicy Bypass
 ├── uninstall.bat
-├── templates/             # config templates with {{...}} placeholders
+├── templates/                   # config templates with {{...}} placeholders
 │   ├── LaTeXTools.sublime-settings
 │   ├── Preferences.sublime-settings
 │   └── SumatraPDF-settings.txt
+├── runtime/                     # build-from-Explorer feature (bundled into releases)
+│   ├── texlib-build.ps1         # standalone PowerShell port of the texlib_builder recipe
+│   ├── texlib-build-selected.ps1 # builds the .tex selected in File Explorer
+│   └── TeXLibHotkey.cs          # resident Ctrl+B hotkey helper (opt-in)
 ├── tools/
-│   └── make-release.ps1   # builds the release ZIP (installer + TeXLib bundle)
+│   ├── make-release.ps1         # builds the release ZIP (installer + TeXLib bundle)
+│   ├── install_wrapper.ps1      # boot-log + always-pause wrapper for install.bat
+│   └── uninstall_wrapper.ps1    # same, for uninstall.bat
 ├── .github/
 │   ├── ISSUE_TEMPLATE/
-│   │   └── bug_report.yml # structured issue form for end-user bug reports
+│   │   └── bug_report.yml       # structured issue form for end-user bug reports
 │   └── workflows/
-│       └── lint.yml       # PSScriptAnalyzer on push/PR
-├── INSTALL.md             # end-user-facing install guide
+│       └── lint.yml             # PSScriptAnalyzer on push/PR
+├── PSScriptAnalyzerSettings.psd1 # lint rules used by lint.yml
+├── INSTALL.md                   # end-user-facing install guide
+├── TESTING.md                   # manual + automated test checklist
 ├── CHANGELOG.md
 ├── LICENSE
-└── README.md              # this file
+└── README.md                    # this file
 ```
 
 ## Installer flags
@@ -48,10 +56,12 @@ One-click portable Windows installer for the [TeXLib](https://github.com/landonf
 |---|---|
 | `-Silent` | Skip all interactive prompts. Safe defaults (skip if installed, abort on hash mismatch). Used for unattended deployment. |
 | `-Doctor` | Skip install; diagnose an existing install and print a pass/warn/fail report. Pastes cleanly into bug reports. |
-| `-Version` | Print installer version + bundled TeXLib version + currently-installed install metadata. Fast (no network). |
+| `-Version` | Print installer version + bundled TeXLib version + currently-installed version metadata. Fast (no network). |
 | `-DryRun` | Run pre-flight checks and print a plan of what would happen, without modifying the system. |
 | `-OnlyTeXLib` | Refresh only the TeXLib library bundle + Sublime builder files. Skips Sublime / Sumatra / TeX Live install entirely. Use after pulling a newer installer release whose only change is the library. |
 | `-InstallPath C:\path` | Override the install root. Defaults to `%LOCALAPPDATA%\TeXLib`. Use if `%LOCALAPPDATA%` is on a small SSD or locked down. |
+| `-HideJunction` | Apply the hidden attribute to the `%USERPROFILE%\TeXLib` junction created on comma/space OneDrive paths. Off by default (a visible junction is easier to diagnose). |
+| `-EnableBuildHotkey` | Also install the resident Ctrl+B Explorer build hotkey. Off by default; the right-click "Build with TeXLib" menu is always installed. |
 
 Combine as needed (e.g. `-OnlyTeXLib -Silent` for unattended library refreshes on lab machines).
 
@@ -60,10 +70,10 @@ Combine as needed (e.g. `-OnlyTeXLib -Silent` for unattended library refreshes o
 The installer needs a snapshot of TeXLib to deploy. We don't commit TeXLib into this repo (it has its own); instead, `tools/make-release.ps1` snapshots TeXLib at release time and bundles it into the release ZIP.
 
 ```powershell
-.\tools\make-release.ps1 -Version 0.2.0
+.\tools\make-release.ps1 -Version 0.5.0
 ```
 
-This produces `dist/TeXLib-Installer-v0.2.0.zip` and `dist/SHA256SUMS`. Upload both to a new GitHub Release.
+This produces `dist/TeXLib-Installer-v0.5.0.zip` and `dist/SHA256SUMS`. Upload both to a new GitHub Release.
 
 End users download the ZIP, extract it, and run `install.bat`. The installer finds the bundled `texlib/` folder next to the script and deploys it.
 

@@ -84,7 +84,12 @@ if (-not $texFiles.Count) {
     exit 0
 }
 
-foreach ($f in $texFiles) {
-    & powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden `
-        -File $builder -Path $f -Mode $Mode
+# Build each selected .tex. When several are selected, suppress the PDF viewer
+# for all but the last so we don't pop open N SumatraPDF windows at once; only
+# the final build opens its PDF.
+for ($i = 0; $i -lt $texFiles.Count; $i++) {
+    $argList = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden',
+                 '-File', $builder, '-Path', $texFiles[$i], '-Mode', $Mode)
+    if ($i -lt $texFiles.Count - 1) { $argList += '-NoOpen' }
+    & powershell.exe @argList
 }

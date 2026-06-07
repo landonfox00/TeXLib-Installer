@@ -327,10 +327,13 @@ function Split-PdfIfSignaled {
     }
     $script = @"
 import sys
-from pypdf import PdfReader, PdfWriter
+try:
+    from pypdf import PdfReader, PdfWriter
+except ImportError:
+    sys.exit(3)
 src, page, base = sys.argv[1], int(sys.argv[2]), sys.argv[3]
 r = PdfReader(src); total = len(r.pages)
-if not (0 < page < total): sys.exit(0)
+if not (0 < page < total): sys.exit(4)
 e = PdfWriter()
 for i in range(page): e.add_page(r.pages[i])
 with open(base + '_Exam.pdf','wb') as f: e.write(f)
@@ -341,6 +344,19 @@ with open(base + '_Solutions.pdf','wb') as f: s.write(f)
     $tmp = Join-Path ([System.IO.Path]::GetTempPath()) 'texlib_split.py'
     Set-Content -LiteralPath $tmp -Value $script -Encoding UTF8
     & $py.Source $tmp $pdf $splitPage $BasePath 2>&1 | Out-String | ForEach-Object { $Script:LogLines.Add($_) }
+    $rc = $LASTEXITCODE
+    Remove-Item $tmp -ErrorAction SilentlyContinue
+    if ($rc -eq 3) {
+        Write-Build "TeXLib: .spl split requested but pypdf is not installed (run: python -m pip install pypdf); leaving combined PDF."
+        return
+    }
+    # Only consume the .spl and report success once both halves actually exist;
+    # otherwise the split failed (out-of-range page, write error) and we keep the
+    # combined PDF and the .spl signal for inspection rather than faking success.
+    if ($rc -ne 0 -or -not (Test-Path "${BasePath}_Exam.pdf") -or -not (Test-Path "${BasePath}_Solutions.pdf")) {
+        Write-Build "TeXLib: .spl split did not complete (exit $rc); leaving combined PDF and the .spl signal."
+        return
+    }
     Remove-Item $spl -ErrorAction SilentlyContinue
     Write-Build "TeXLib: split into $(Split-Path $BasePath -Leaf)_Exam.pdf / _Solutions.pdf."
 }
