@@ -1,0 +1,272 @@
+name: install-test
+
+on:
+  push:
+  schedule:
+    # Daily 06:13 UTC: hash-rot canary (verify-downloads only).
+    - cron: '13 6 * * *'
+    # Weekly Mon 04:30 UTC: real full-install end-to-end (full-install only).
+    - cron: '30 4 * * 1'
+  workflow_dispatch:
+    inputs:
+      full:
+        description: 'Run the slow real full-install + Doctor + uninstall job'
+        type: boolean
+        required: false
+        default: false
+
+# Cancel superseded PUSH runs on the same ref so a stale push doesn't tie up a
+# runner. Scheduled runs execute against the default-branch ref (same ref as a
+# push to main), so a key of github.ref ALONE would let a push to main cancel
+# the in-flight weekly full-install. Gate cancellation to push events only:
+# fast push jobs supersede each other, the weekly full-install is never killed.
+concurrency:
+  group: install-test-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'push' }}
+
+permissions:
+  contents: read
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # 1. encoding-guard — FAST. Fails if install.ps1 / uninstall.ps1 ever regress
+  #    to UTF-8 *without* a BOM while containing non-ASCII (em-dashes). That
+  #    exact condition makes Windows PowerShell 5.1 (what install.bat launches)
+  #    decode the script as Windows-1252 and abort with a parse error before
+  #    running a line — the bug that shipped in v0.5.0. This guard makes the
+  #    regression impossible to merge unnoticed.
+  # ---------------------------------------------------------------------------
+  encoding-guard:
+    if: github.event_name != 'schedule'
+    runs-on: windows-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+      - name: Assert install.ps1 / uninstall.ps1 are UTF-8 with BOM
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $bad = @()
+          foreach ($f in 'install.ps1','uninstall.ps1') {
+            $b = [System.IO.File]::ReadAllBytes((Resolve-Path $f))
+            $hasBom = ($b.Length -ge 3 -and $b[0] -eq 0xEF -and $b[1] -eq 0xBB -and $b[2] -eq 0xBF)
+            $nonAscii = ($b | Where-Object { $_ -ge 0x80 }).Count
+            Write-Host ("{0}: BOM={1} nonAscii={2}" -f $f, $hasBom, $nonAscii)
+            if ((-not $hasBom) -and $nonAscii -gt 0) { $bad += $f }
+          }
+          if ($bad.Count) {
+            Write-Host "FAIL: non-ASCII without a UTF-8 BOM -> WinPS 5.1 will not parse: $($bad -join ', ')" -ForegroundColor Red
+            exit 1
+          }
+          Write-Host "Encoding guard passed." -ForegroundColor Green
+
+  # ---------------------------------------------------------------------------
+  # 2. verify-downloads — FAST hash-rot canary. Runs install.ps1 -VerifyDownloads
+  #    (early-exit: downloads each pinned component, checks its SHA256/512, exits
+  #    0 all-good / 20 drift) on a clean VM. Catches a vendor silently
+  #    repackaging a pinned artifact before it breaks a coworker. Needs NO texlib
+  #    bundle: -VerifyDownloads dispatches before pre-flight 7i.
+  #    Runs on push, manual dispatch, and the daily 06:13 cron — not the weekly.
+  # ---------------------------------------------------------------------------
+  verify-downloads:
+    if: github.event_name != 'schedule' || github.event.schedule == '13 6 * * *'
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Guard — the -VerifyDownloads switch exists
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # Fail fast (and legibly) if the switch was removed, rather than let
+          # WinPS 5.1's CmdletBinding param-binding error surface as an opaque
+          # exit 1 that looks just like a real hash drift.
+          if (-not (Select-String -Path .\install.ps1 -Pattern 'VerifyDownloads' -Quiet)) {
+            Write-Host "install.ps1 has no -VerifyDownloads switch; the canary cannot run." -ForegroundColor Red
+            exit 1
+          }
+
+      - name: install.ps1 -VerifyDownloads
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # -Silent as defense-in-depth: if this mode ever fell through to
+          # install logic it still could not block on a Read-Host. WRAPPED=1
+          # suppresses the wrapper-style final pause belt-and-suspenders.
+          $env:TEXLIB_INSTALLER_WRAPPED = '1'
+          powershell.exe -NoProfile -ExecutionPolicy Bypass `
+            -File .\install.ps1 -Silent -VerifyDownloads
+          $rc = $LASTEXITCODE
+          Write-Host "install.ps1 -VerifyDownloads exit code: $rc  (0=all good, 20=drift)"
+          exit $rc
+
+  # ---------------------------------------------------------------------------
+  # 3. dry-run — FAST sanity check. Pre-flight + plan only, no disk changes.
+  #    A stub texlib/ is staged so pre-flight 7i (the only hard bundle gate)
+  #    passes; junction logic is observe-only in -DryRun and OneDrive is nulled
+  #    so the junction branch is deterministically unreachable.
+  #    NOTE: -DryRun runs the FULL pre-flight, including the fatal HEAD check to
+  #    https://mirror.ctan.org/ (install.ps1). A transient CTAN mirror outage can
+  #    red this job; a dry-run log showing ONLY that HEAD failure is infra flake,
+  #    not an installer-logic defect.
+  # ---------------------------------------------------------------------------
+  dry-run:
+    if: github.event_name != 'schedule'
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Stage stub texlib bundle
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # install.ps1 requires a sibling texlib\ dir to clear pre-flight 7i in
+          # EVERY mode (incl. -DryRun) or it aborts exit 1. Nothing parses the
+          # .sty contents at install time, so a minimal stub suffices. Single-
+          # line Set-Content avoids any here-string terminator pitfalls.
+          New-Item -ItemType Directory -Force -Path 'texlib\Sublime' | Out-Null
+          # 'Unreleased' top entry makes Show-VersionInfo skip the banner.
+          Set-Content -Encoding UTF8 -Path 'texlib\CHANGELOG.md' -Value "# Changelog`r`n`r`n## [Unreleased]`r`n- CI stub bundle (not a real release)."
+
+      - name: install.ps1 -DryRun
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $env:TEXLIB_INSTALLER_WRAPPED = '1'
+          # Null OneDrive for the child so $NeedsUserRootJunction is
+          # deterministically false regardless of runner provisioning.
+          $env:OneDrive = ''
+          $env:OneDriveCommercial = ''
+          $env:OneDriveConsumer = ''
+          $installRoot = Join-Path $env:RUNNER_TEMP 'TeXLibRoot'
+          powershell.exe -NoProfile -ExecutionPolicy Bypass `
+            -File .\install.ps1 -Silent -DryRun -InstallPath $installRoot
+          $rc = $LASTEXITCODE
+          Write-Host "install.ps1 -DryRun exit code: $rc"
+          if ($rc -ne 0) {
+            Write-Host "Expected exit 0 from -DryRun, got $rc" -ForegroundColor Red
+          }
+          exit $rc
+
+  # ---------------------------------------------------------------------------
+  # 4. full-install — SLOW, GATED. Real -Silent install on a clean throwaway VM,
+  #    then -Doctor, then uninstall.ps1 -Silent teardown. Never on push: only
+  #    the weekly schedule OR a manual dispatch with full=true. TeX Live full
+  #    scheme + 2 apps fits well under the 6h job cap.
+  # ---------------------------------------------------------------------------
+  full-install:
+    if: >-
+      github.event.schedule == '30 4 * * 1' ||
+      (github.event_name == 'workflow_dispatch' && inputs.full)
+    runs-on: windows-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v6
+
+      # Export INSTALL_ROOT FIRST so it is set even if a later step aborts — the
+      # log-upload glob below depends on it. Pre-create it so the FIRST transcript
+      # lands in <root>\Logs rather than %TEMP%\TeXLib-Install on a clean VM.
+      - name: Export install root
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $installRoot = Join-Path $env:RUNNER_TEMP 'TeXLibRoot'
+          New-Item -ItemType Directory -Force -Path $installRoot | Out-Null
+          "INSTALL_ROOT=$installRoot" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Assemble stub texlib bundle
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # Minimal in-job stub. install.ps1 never parses/compiles the .sty during
+          # install (the end verification compiles a self-contained hello.tex with
+          # no \usepackage of the library), so stubs that merely EXIST satisfy
+          # pre-flight 7i, section 13 deploy, and the Test-Path-guarded Sublime
+          # deploy. Single-line Set-Content only — no here-strings (an indented
+          # '@ / "@ terminator after YAML de-indentation is a parse error).
+          New-Item -ItemType Directory -Force -Path 'texlib\Sublime' | Out-Null
+          Set-Content -Encoding UTF8 -Path 'texlib\CHANGELOG.md' -Value "# Changelog`r`n`r`n## [Unreleased]`r`n- CI stub bundle (not a real release)."
+          foreach ($p in 'course-metadata','texlib-build','basic-utilities') {
+            $sty = "\NeedsTeXFormat{LaTeX2e}`r`n\ProvidesPackage{$p}[2026/01/01 CI stub]`r`n\endinput"
+            Set-Content -Encoding UTF8 -Path ("texlib\{0}.sty" -f $p) -Value $sty
+          }
+          Set-Content -Encoding UTF8 -Path 'texlib\Sublime\texlib_builder.py' -Value '# CI stub builder.'
+          Set-Content -Encoding UTF8 -Path 'texlib\Sublime\TeXLib.sublime-build' -Value '{ "//": "CI stub build." }'
+          Set-Content -Encoding UTF8 -Path 'texlib\Sublime\Default.sublime-commands' -Value '[]'
+          Set-Content -Encoding UTF8 -Path 'texlib\Sublime\LaTeX.sublime-settings' -Value '{ "//": "CI stub settings." }'
+
+      - name: Real install (install.ps1 -Silent)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # Run the installer exactly as a coworker does: powershell.exe (WinPS
+          # 5.1), -Silent so no Read-Host / 'Press Enter' can hang. Null OneDrive
+          # for the child so $NeedsUserRootJunction is deterministically false
+          # (the load-time junction FATAL exit 12/13 is NOT gated by -Silent).
+          $env:TEXLIB_INSTALLER_WRAPPED = '1'
+          $env:OneDrive = ''
+          $env:OneDriveCommercial = ''
+          $env:OneDriveConsumer = ''
+          powershell.exe -NoProfile -ExecutionPolicy Bypass `
+            -File .\install.ps1 -Silent -InstallPath $env:INSTALL_ROOT
+          $rc = $LASTEXITCODE
+          Write-Host "install.ps1 -Silent exit code: $rc"
+          exit $rc
+
+      - name: Diagnose install (install.ps1 -Doctor)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # Invoke-Doctor ALWAYS ends in Stop-Installer 0 regardless of how many
+          # [FAIL] checks it printed, so its exit code has no teeth: capture
+          # stdout and fail the step ourselves if Doctor reported any [FAIL].
+          $env:TEXLIB_INSTALLER_WRAPPED = '1'
+          $env:OneDrive = ''
+          $env:OneDriveCommercial = ''
+          $env:OneDriveConsumer = ''
+          $out = & powershell.exe -NoProfile -ExecutionPolicy Bypass `
+            -File .\install.ps1 -Silent -Doctor -InstallPath $env:INSTALL_ROOT 2>&1 | Out-String
+          Write-Host $out
+          $rc = $LASTEXITCODE
+          Write-Host "install.ps1 -Doctor exit code: $rc"
+          if ($rc -ne 0) {
+            Write-Host "Doctor exited non-zero ($rc)." -ForegroundColor Red
+            exit $rc
+          }
+          if ($out -match '\[FAIL\]') {
+            Write-Host "Doctor reported one or more [FAIL] checks; failing the job." -ForegroundColor Red
+            exit 1
+          }
+          Write-Host "Doctor reported no [FAIL] checks." -ForegroundColor Green
+
+      - name: Upload install log
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: install-log-${{ github.run_id }}
+          # First-run transcript lands under <root>\Logs because we pre-created
+          # the root; glob %TEMP%\TeXLib-Install too as a fallback (dash dir =
+          # log dir; underscore dir = scratch, wiped). INSTALL_ROOT is always set.
+          path: |
+            ${{ env.INSTALL_ROOT }}\Logs\*.log
+            ${{ runner.temp }}\TeXLib-Install\*.log
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Teardown (uninstall.ps1 -Silent)
+        # Always run so the VM is left clean even if install/Doctor failed.
+        # uninstall.ps1 -Silent is fully non-interactive and always exits 0, so
+        # it never masks an earlier failure (install/Doctor own pass/fail).
+        # uninstall.ps1 has NO -InstallPath param and hardcodes %LOCALAPPDATA%\
+        # TeXLib, so it mainly clears the HKCU/PATH/shortcut artifacts here; the
+        # $RUNNER_TEMP install root is reclaimed when the VM is discarded.
+        if: always()
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $env:TEXLIB_INSTALLER_WRAPPED = '1'
+          powershell.exe -NoProfile -ExecutionPolicy Bypass `
+            -File .\uninstall.ps1 -Silent
+          Write-Host "uninstall.ps1 -Silent exit code: $LASTEXITCODE"
