@@ -15,13 +15,15 @@ on:
         required: false
         default: false
 
-# Cancel superseded PUSH runs on the same ref so a stale push doesn't tie up a
-# runner. Scheduled runs execute against the default-branch ref (same ref as a
-# push to main), so a key of github.ref ALONE would let a push to main cancel
-# the in-flight weekly full-install. Gate cancellation to push events only:
-# fast push jobs supersede each other, the weekly full-install is never killed.
+# Keep the event type in the group key so a push, a workflow_dispatch, and a
+# schedule run land in SEPARATE concurrency groups. Pushes and scheduled/
+# dispatched runs share a ref (refs/heads/main), and a *starting* run with
+# cancel-in-progress=true cancels other in-progress runs in its group -- so
+# without the event_name split, merging a PR (a push to main) would cancel an
+# in-flight full-install. cancel-in-progress stays push-only, so successive
+# pushes supersede each other but never kill a long dispatched/scheduled run.
 concurrency:
-  group: install-test-${{ github.workflow }}-${{ github.ref }}
+  group: install-test-${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'push' }}
 
 permissions:
