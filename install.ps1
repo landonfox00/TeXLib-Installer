@@ -417,12 +417,20 @@ function Invoke-Doctor {
     # 5c. LaTeX environment.
     Write-Host "LaTeX environment:" -ForegroundColor Cyan
     $PathPdflatex = Get-Command pdflatex -ErrorAction SilentlyContinue
-    if ($PathPdflatex) {
-        if ($PathPdflatex.Source -like "$TexBinPath\*") {
-            _Pass "pdflatex on PATH points to this install ($($PathPdflatex.Source))"
-        } else {
-            _Warn "pdflatex on PATH is from a DIFFERENT install: $($PathPdflatex.Source)"
-        }
+    # A freshly added user-PATH entry isn't visible to the current process (PATH
+    # is read at process start), so Get-Command misses it right after install /
+    # in the same session. Check the PERSISTED user PATH (registry) too, not just
+    # this process's $env:PATH, before declaring pdflatex missing.
+    $UserPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+    $OnPersistedPath = $UserPath -and (($UserPath -split ';') | Where-Object { $_.TrimEnd('\') -ieq $TexBinPath.TrimEnd('\') })
+    if ($PathPdflatex -and ($PathPdflatex.Source -like "$TexBinPath\*")) {
+        _Pass "pdflatex on PATH points to this install ($($PathPdflatex.Source))"
+    } elseif ($PathPdflatex) {
+        _Warn "pdflatex on PATH is from a DIFFERENT install: $($PathPdflatex.Source)"
+    } elseif ((Test-Path "$TexBinPath\pdflatex.exe") -and $OnPersistedPath) {
+        _Pass "pdflatex installed and on the persisted user PATH (open a new terminal to use it; this session hasn't reloaded PATH)"
+    } elseif (Test-Path "$TexBinPath\pdflatex.exe") {
+        _Fail "pdflatex.exe is at $TexBinPath but that dir is not on the user PATH; re-run the installer or add it manually"
     } else {
         _Fail "pdflatex not on PATH; reinstall or add $TexBinPath manually"
     }
@@ -528,12 +536,14 @@ function Invoke-VerifyDownloads {
     # scratch dir and verify its hash with the SAME algorithm/expected-hash
     # rules as Get-SourceFile -- without touching the install root, PATH,
     # registry, junction, or needing the texlib bundle.
-    #   exit 0  = every reachable component matched its pinned hash
-    #   exit 20 = a hash DRIFTED (vendor repackaged a pinned artifact; re-pin)
-    # A component we simply could not download (transient CTAN mirror outage,
-    # etc.) is reported [WARN] and does NOT fail the canary: its job is to catch
-    # drift, not mirror availability, and a daily job must not cry wolf on a
-    # network blip. Downloads and hash fetches retry a few times first.
+    #   exit 0  = every STATIC pin matched (and nothing was inconclusive-bad)
+    #   exit 20 = a STATIC pinned hash DRIFTED (vendor repackaged; re-pin)
+    # Inconclusive (reported [WARN], does NOT fail): a component we couldn't
+    # download (mirror outage), OR the Dynamic/rolling texlive component whose
+    # freshly-fetched hash and zip disagree (a redirector mirror skew/race, not
+    # a re-pinnable repackage). The canary's job is catching drift of the STATIC
+    # pins, not mirror availability/consistency, so a daily job won't cry wolf.
+    # Fetches retry a few times first.
     $ProgressPreference = "SilentlyContinue"   # WinPS 5.1 progress bar tanks download speed
     Show-Banner
     Write-Host "Verifying pinned component downloads..." -ForegroundColor Cyan
@@ -542,8 +552,8 @@ function Invoke-VerifyDownloads {
     if (Test-Path $ScratchDir) { Remove-Item $ScratchDir -Recurse -Force -ErrorAction SilentlyContinue }
     New-Item -ItemType Directory -Force -Path $ScratchDir | Out-Null
 
-    $drift = 0        # real hash mismatch -> re-pin needed
-    $unverified = 0   # couldn't fetch after retries -> network/mirror, not drift
+    $drift = 0        # STATIC pin mismatch -> re-pin needed
+    $unverified = 0   # couldn't fetch, or rolling-file mirror skew -> not drift
     foreach ($Key in $Downloads.Keys) {
         $Info = $Downloads[$Key]
         if ($Info.Type -eq "Skip") {
@@ -553,12 +563,20 @@ function Invoke-VerifyDownloads {
         # Algorithm + expected-hash resolution mirror Get-SourceFile exactly.
         $Algo = if ($Key -eq "texlive") { "SHA512" } else { "SHA256" }
         $ExpectedHash = $null
+        $SrcUrl = $Info.Url
         if ($Info.Type -eq "Static") {
             $ExpectedHash = $Info.Hash
         } elseif ($Info.Type -eq "Dynamic") {
+            # Rolling file behind a redirector: resolve ONE concrete mirror and
+            # read both the hash and (below) the zip from it, so a redirector
+            # re-roll can't pair version N's hash with version N-1's zip.
+            try {
+                $SrcUrl = (Invoke-WebRequest -Uri $Info.Url -Method Head -UseBasicParsing -MaximumRedirection 5 -TimeoutSec 30).BaseResponse.ResponseUri.AbsoluteUri
+            } catch { $SrcUrl = $Info.Url }
+            $HashUri = if ($SrcUrl -ne $Info.Url) { $SrcUrl + ".sha512" } else { $Info.HashUrl }
             $HashContent = $null
             for ($a = 1; $a -le 3 -and -not $HashContent; $a++) {
-                try { $HashContent = (Invoke-WebRequest -Uri $Info.HashUrl -UseBasicParsing -TimeoutSec 30).Content }
+                try { $HashContent = (Invoke-WebRequest -Uri $HashUri -UseBasicParsing -TimeoutSec 30).Content }
                 catch { if ($a -lt 3) { Start-Sleep -Seconds (5 * $a) } }
             }
             if (-not $HashContent) {
@@ -568,11 +586,12 @@ function Invoke-VerifyDownloads {
             if ($HashContent -is [byte[]]) { $HashContent = [System.Text.Encoding]::ASCII.GetString($HashContent) }
             $ExpectedHash = ($HashContent -split "\s+")[0].Trim()
         }
-        # Download with retry (mirrors Get-SourceFile's Invoke-DownloadWithRetry).
+        # Download with retry (mirrors Get-SourceFile's Invoke-DownloadWithRetry),
+        # from the same resolved mirror as the hash for the Dynamic component.
         $Dest = Join-Path $ScratchDir $Info.File
         $got = $false
         for ($a = 1; $a -le 3 -and -not $got; $a++) {
-            try { Invoke-WebRequest -Uri $Info.Url -OutFile $Dest -UseBasicParsing -TimeoutSec 120; $got = $true }
+            try { Invoke-WebRequest -Uri $SrcUrl -OutFile $Dest -UseBasicParsing -TimeoutSec 120; $got = $true }
             catch {
                 if ($a -lt 3) { Start-Sleep -Seconds (5 * $a) }
                 else { Write-Host "  [WARN] $($Info.File): download failed after retries (network, not drift): $_" -ForegroundColor Yellow }
@@ -582,6 +601,11 @@ function Invoke-VerifyDownloads {
         $Actual = (Get-FileHash $Dest -Algorithm $Algo).Hash
         if ($Actual -eq $ExpectedHash) {
             Write-Host "  [PASS] $($Info.File)" -ForegroundColor Green
+        } elseif ($Info.Type -eq "Dynamic") {
+            # A rolling file whose freshly-fetched hash and zip still disagree is
+            # a mirror race, not a re-pinnable vendor repackage -> inconclusive.
+            Write-Host "  [WARN] $($Info.File): rolling-file hash mismatch (mirror skew/race, not drift)" -ForegroundColor Yellow
+            $unverified++
         } else {
             Write-Host "  [FAIL] $($Info.File)"           -ForegroundColor Red
             Write-Host "         expected: $ExpectedHash"  -ForegroundColor Red
@@ -593,11 +617,11 @@ function Invoke-VerifyDownloads {
     Remove-Item $ScratchDir -Recurse -Force -ErrorAction SilentlyContinue
     Write-Host ""
     if ($drift -gt 0) {
-        Write-Host "$drift pinned component hash(es) drifted. A vendor likely repackaged an artifact; re-pin in `$Downloads." -ForegroundColor Red
+        Write-Host "$drift STATIC pinned component hash(es) drifted. A vendor likely repackaged an artifact; re-pin in `$Downloads." -ForegroundColor Red
         Stop-Installer 20
     }
     if ($unverified -gt 0) {
-        Write-Host "No hash drift, but $unverified component(s) could not be downloaded (network/mirror); canary inconclusive for those." -ForegroundColor Yellow
+        Write-Host "No drift in static pins, but $unverified component(s) were inconclusive (mirror outage/skew)." -ForegroundColor Yellow
         Stop-Installer 0
     }
     Write-Host "All pinned component hashes verified." -ForegroundColor Green
@@ -943,13 +967,24 @@ function Get-SourceFile {
     $Info = $Downloads[$Key]
     $LocalPath = "$ScriptDir\$($Info.File)"
     $ExpectedHash = $null
+    $ResolvedUrl  = $null
 
     if ($Info.Type -eq "Static") {
         $ExpectedHash = $Info.Hash
     } elseif ($Info.Type -eq "Dynamic") {
         Write-Host "Fetching latest hash for $($Info.File)..." -ForegroundColor Cyan
+        # install-tl.zip is a ROLLING file and mirror.ctan.org is a redirector,
+        # so fetching the .zip and its .sha512 in separate requests can land on
+        # two out-of-sync mirrors -> a false hash mismatch that aborts the whole
+        # install. Resolve ONE concrete mirror up front and pull both the hash
+        # (here) and the zip (below) from it. Best-effort: if resolution fails,
+        # fall back to the redirector URLs (original behaviour, no regression).
         try {
-            $HashContent = (Invoke-WebRequest -Uri $Info.HashUrl -UseBasicParsing -TimeoutSec 30).Content
+            $ResolvedUrl = (Invoke-WebRequest -Uri $Info.Url -Method Head -UseBasicParsing -MaximumRedirection 5 -TimeoutSec 30).BaseResponse.ResponseUri.AbsoluteUri
+        } catch { $ResolvedUrl = $null }
+        $HashUri = if ($ResolvedUrl) { $ResolvedUrl + ".sha512" } else { $Info.HashUrl }
+        try {
+            $HashContent = (Invoke-WebRequest -Uri $HashUri -UseBasicParsing -TimeoutSec 30).Content
             # Some CTAN mirrors serve the .sha512 with Content-Type application/zip,
             # so Invoke-WebRequest hands back a byte[] instead of a string; decode
             # it before splitting or the "expected hash" becomes garbage ("50"...).
@@ -981,7 +1016,11 @@ function Get-SourceFile {
     }
 
     Write-Host "Downloading $($Info.File)..." -ForegroundColor Yellow
-    Invoke-DownloadWithRetry -Uri $Info.Url -OutFile $DestPath
+    # For the Dynamic component, download from the SAME concrete mirror the hash
+    # was read from (resolved above) so a redirector re-roll can't hand us a
+    # different rolling build than the one we just hashed.
+    $DownloadUri = if ($ResolvedUrl) { $ResolvedUrl } else { $Info.Url }
+    Invoke-DownloadWithRetry -Uri $DownloadUri -OutFile $DestPath
 
     if ($Info.Type -ne "Skip" -and $ExpectedHash) {
         $NewHash = (Get-FileHash $DestPath -Algorithm $Algo).Hash
