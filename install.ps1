@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     TeXLib-Installer: portable Windows install of Sublime Text + SumatraPDF +
     TeX Live, pre-configured to use the TeXLib teaching library.
@@ -55,6 +55,13 @@
     login-launched background app. Compiles a small helper with the in-box
     .NET C# compiler and adds a Startup shortcut for the current user.
 
+.PARAMETER VerifyDownloads
+    Hash-rot canary. Download each pinned component and verify its SHA256/512
+    against $Downloads, then exit — without installing anything, touching the
+    registry/PATH/junction, or needing the texlib bundle. Exit 0 if every hash
+    matches, 20 if any drifted (a vendor silently repackaged a pinned artifact;
+    re-pin it). Used by CI to catch the break before a coworker does.
+
 .NOTES
     Refresh procedure (when component versions go stale):
       1. Edit the $Downloads hashtable below with the new file name + URL.
@@ -77,7 +84,8 @@ param(
     [switch]$OnlyTeXLib,
     [string]$InstallPath = "",
     [switch]$HideJunction,
-    [switch]$EnableBuildHotkey
+    [switch]$EnableBuildHotkey,
+    [switch]$VerifyDownloads
 )
 
 # =============================================================================
@@ -206,7 +214,7 @@ if ($NeedsUserRootJunction) {
 
     # Only the install path mutates disk. Doctor / Version / DryRun observe
     # and report, never create.
-    if (-not ($Version -or $Doctor -or $DryRun)) {
+    if (-not ($Version -or $Doctor -or $DryRun -or $VerifyDownloads)) {
         if ($UserRootJunctionState -eq "blocked") {
             Write-Host ""
             Write-Host "FATAL: $UserRootJunction exists but is not a junction." -ForegroundColor Red
@@ -513,8 +521,78 @@ function Invoke-Doctor {
 
 
 # =============================================================================
-# 6. EARLY-DISPATCH (-Version, -Doctor)
+# 5b. DOWNLOAD VERIFICATION MODE (-VerifyDownloads)
 # =============================================================================
+function Invoke-VerifyDownloads {
+    # Hash-rot canary: download each pinned non-Skip component to a private
+    # scratch dir and verify its hash with the SAME algorithm/expected-hash
+    # rules as Get-SourceFile -- without touching the install root, PATH,
+    # registry, junction, or needing the texlib bundle. Exits 0 if every hash
+    # matches, 20 if any drifted, so CI catches a vendor silently repackaging a
+    # pinned artifact before it breaks a real coworker install.
+    $ProgressPreference = "SilentlyContinue"   # WinPS 5.1 progress bar tanks download speed
+    Show-Banner
+    Write-Host "Verifying pinned component downloads..." -ForegroundColor Cyan
+    Write-Host ""
+    $ScratchDir = Join-Path $env:TEMP "TeXLib_Verify"
+    if (Test-Path $ScratchDir) { Remove-Item $ScratchDir -Recurse -Force -ErrorAction SilentlyContinue }
+    New-Item -ItemType Directory -Force -Path $ScratchDir | Out-Null
+
+    $fail = 0
+    foreach ($Key in $Downloads.Keys) {
+        $Info = $Downloads[$Key]
+        if ($Info.Type -eq "Skip") {
+            Write-Host "  [skip] $($Info.File) (rolling/unhashed by design)" -ForegroundColor Gray
+            continue
+        }
+        # Algorithm + expected-hash resolution mirror Get-SourceFile exactly.
+        $Algo = if ($Key -eq "texlive") { "SHA512" } else { "SHA256" }
+        $ExpectedHash = $null
+        if ($Info.Type -eq "Static") {
+            $ExpectedHash = $Info.Hash
+        } elseif ($Info.Type -eq "Dynamic") {
+            try {
+                $HashContent  = (Invoke-WebRequest -Uri $Info.HashUrl -UseBasicParsing -TimeoutSec 30).Content
+                if ($HashContent -is [byte[]]) { $HashContent = [System.Text.Encoding]::ASCII.GetString($HashContent) }
+                $ExpectedHash = ($HashContent -split "\s+")[0].Trim()
+            } catch {
+                Write-Host "  [FAIL] $($Info.File): could not fetch dynamic hash: $_" -ForegroundColor Red
+                $fail++; continue
+            }
+        }
+        $Dest = Join-Path $ScratchDir $Info.File
+        try {
+            Invoke-WebRequest -Uri $Info.Url -OutFile $Dest -UseBasicParsing -TimeoutSec 120
+        } catch {
+            Write-Host "  [FAIL] $($Info.File): download failed: $_" -ForegroundColor Red
+            $fail++; continue
+        }
+        $Actual = (Get-FileHash $Dest -Algorithm $Algo).Hash
+        if ($Actual -eq $ExpectedHash) {
+            Write-Host "  [PASS] $($Info.File)" -ForegroundColor Green
+        } else {
+            Write-Host "  [FAIL] $($Info.File)"           -ForegroundColor Red
+            Write-Host "         expected: $ExpectedHash"  -ForegroundColor Red
+            Write-Host "         actual:   $Actual"        -ForegroundColor Red
+            $fail++
+        }
+    }
+
+    Remove-Item $ScratchDir -Recurse -Force -ErrorAction SilentlyContinue
+    Write-Host ""
+    if ($fail -gt 0) {
+        Write-Host "$fail pinned component hash(es) drifted. A vendor likely repackaged an artifact; re-pin in `$Downloads." -ForegroundColor Red
+        Stop-Installer 20
+    }
+    Write-Host "All pinned component hashes verified." -ForegroundColor Green
+    Stop-Installer 0
+}
+
+
+# =============================================================================
+# 6. EARLY-DISPATCH (-VerifyDownloads, -Version, -Doctor)
+# =============================================================================
+if ($VerifyDownloads) { Invoke-VerifyDownloads }
 if ($Version) { Show-VersionInfo }
 if ($Doctor)  { Invoke-Doctor }
 
@@ -856,6 +934,10 @@ function Get-SourceFile {
         Write-Host "Fetching latest hash for $($Info.File)..." -ForegroundColor Cyan
         try {
             $HashContent = (Invoke-WebRequest -Uri $Info.HashUrl -UseBasicParsing -TimeoutSec 30).Content
+            # Some CTAN mirrors serve the .sha512 with Content-Type application/zip,
+            # so Invoke-WebRequest hands back a byte[] instead of a string; decode
+            # it before splitting or the "expected hash" becomes garbage ("50"...).
+            if ($HashContent -is [byte[]]) { $HashContent = [System.Text.Encoding]::ASCII.GetString($HashContent) }
             $ExpectedHash = ($HashContent -split "\s+")[0].Trim()
         } catch {
             Write-Host "  [FAIL] Could not fetch hash for $($Info.File): $_" -ForegroundColor Red
