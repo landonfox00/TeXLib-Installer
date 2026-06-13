@@ -4,7 +4,9 @@ All notable changes to TeXLib-Installer are recorded here. Format follows [Keep 
 
 ## [Unreleased]
 
-Three independent defects each blocked a fresh coworker install; together they explain the "it doesn't work" reports. They fail at different stages — the installer couldn't even parse, then (once it could) couldn't verify TeX Live, then (once it could) couldn't verify the apps — so all three had to be fixed before an end-to-end install was possible.
+## [0.5.1] — 2026-06-13
+
+Makes a fresh coworker install actually work. Three bugs each blocked the install at a different stage — Windows PowerShell 5.1 couldn't even *parse* the script (no BOM), then couldn't verify TeX Live, then couldn't verify the apps — so all three had to be fixed before an end-to-end install was possible. A new CI harness then ran the real install on a clean throwaway `windows-latest` VM, which surfaced two more verification-robustness fixes (CTAN mirror skew; a Doctor false-failure). Verified end-to-end: `install.ps1 -Silent` exits 0 with TeX Live, Sublime, SumatraPDF, LaTeXTools, the junction, and file associations all in place.
 
 ### Added
 
