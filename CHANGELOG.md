@@ -4,6 +4,18 @@ All notable changes to TeXLib-Installer are recorded here. Format follows [Keep 
 
 ## [Unreleased]
 
+Three independent defects each blocked a fresh coworker install; together they explain the "it doesn't work" reports. They fail at different stages — the installer couldn't even parse, then (once it could) couldn't verify TeX Live, then (once it could) couldn't verify the apps — so all three had to be fixed before an end-to-end install was possible.
+
+### Added
+
+- **`-VerifyDownloads` switch + `install-test.yml` CI.** A new early-exit mode downloads each pinned component and verifies its SHA256/512 against `$Downloads`, then exits 0 (all match) or 20 (drift), without installing anything, touching the registry/PATH/junction, or needing the texlib bundle. A GitHub Actions workflow runs it (plus a `-DryRun` sanity job and a gated real full-install job) on a clean `windows-latest` VM, so the next vendor repackage — or a regression of any of the fixes below — is caught on a throwaway machine before a coworker hits it. The workflow also guards against the BOM regression directly.
+
+### Fixed
+
+- **`install.ps1` / `uninstall.ps1` are now UTF-8 *with* BOM, so Windows PowerShell 5.1 can actually parse them.** Both files were saved UTF-8 *without* a BOM but contain em-dashes. Windows PowerShell 5.1 — what `install.bat` launches — decodes a BOM-less script as the system ANSI code page (Windows-1252), which mangles the multibyte characters into a parse error. The result: `& install.ps1` aborted *before executing a single line*, so a coworker double-clicking `install.bat` got a wall of red instead of an install. This affects shipped v0.5.0 as well. Verified the BOM'd files parse and run via both `-File` and the call-operator path the wrapper uses.
+- **TeX Live's dynamic hash check no longer reads the expected hash as `50`.** Some CTAN mirrors serve `install-tl.zip.sha512` with `Content-Type: application/zip`, so `Invoke-WebRequest` returns `.Content` as a `byte[]` rather than a string. `($HashContent -split "\s+")[0]` then stringified the byte array and used `50` (the first byte's decimal value) as the expected SHA512 — guaranteeing a mismatch and aborting the TeX Live install (exit 5). The dynamic-hash path now decodes a `byte[]` response before splitting.
+- **Re-pinned the Sublime Text (build 4180) and SumatraPDF (3.5.2) SHA256 hashes.** Both vendors repackaged their archives in place — same version, new bytes — so the pinned hashes no longer matched what the URLs serve. Because the installer fails closed on a hash mismatch (no continue-anyway prompt), this aborted every fresh install at the first download, before anything was installed. Verified the new archives still contain exactly build 4180 (`sublime_text.exe` FileVersion 4180) and `SumatraPDF-3.5.2-64.exe`, and that both hashes are stable across repeated downloads, so this is a pure re-pin with no version drift. LaTeXTools (`st4-4.5.12`) was unaffected.
+
 ## [0.5.0] — 2026-06-07
 
 The TEXINPUTS comma trap, finally fixed in code. kpathsea (TeX Live's file resolver) splits `TEXINPUTS` entries on commas and chokes on spaces, so the UNR OneDrive folder ("OneDrive - University of Nevada, Reno") has silently broken every install on a UNR machine since v0.1.0. Landon hand-created a junction at `%USERPROFILE%\TeXLib` to work around it; coworkers didn't know to. v0.2.0's Doctor mode only printed a TEXINPUTS warning — useful diagnosis, no actual repair.

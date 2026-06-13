@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     TeXLib-Installer uninstall: reverses install.ps1.
 
