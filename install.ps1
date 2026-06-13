@@ -527,9 +527,13 @@ function Invoke-VerifyDownloads {
     # Hash-rot canary: download each pinned non-Skip component to a private
     # scratch dir and verify its hash with the SAME algorithm/expected-hash
     # rules as Get-SourceFile -- without touching the install root, PATH,
-    # registry, junction, or needing the texlib bundle. Exits 0 if every hash
-    # matches, 20 if any drifted, so CI catches a vendor silently repackaging a
-    # pinned artifact before it breaks a real coworker install.
+    # registry, junction, or needing the texlib bundle.
+    #   exit 0  = every reachable component matched its pinned hash
+    #   exit 20 = a hash DRIFTED (vendor repackaged a pinned artifact; re-pin)
+    # A component we simply could not download (transient CTAN mirror outage,
+    # etc.) is reported [WARN] and does NOT fail the canary: its job is to catch
+    # drift, not mirror availability, and a daily job must not cry wolf on a
+    # network blip. Downloads and hash fetches retry a few times first.
     $ProgressPreference = "SilentlyContinue"   # WinPS 5.1 progress bar tanks download speed
     Show-Banner
     Write-Host "Verifying pinned component downloads..." -ForegroundColor Cyan
@@ -538,7 +542,8 @@ function Invoke-VerifyDownloads {
     if (Test-Path $ScratchDir) { Remove-Item $ScratchDir -Recurse -Force -ErrorAction SilentlyContinue }
     New-Item -ItemType Directory -Force -Path $ScratchDir | Out-Null
 
-    $fail = 0
+    $drift = 0        # real hash mismatch -> re-pin needed
+    $unverified = 0   # couldn't fetch after retries -> network/mirror, not drift
     foreach ($Key in $Downloads.Keys) {
         $Info = $Downloads[$Key]
         if ($Info.Type -eq "Skip") {
@@ -551,22 +556,29 @@ function Invoke-VerifyDownloads {
         if ($Info.Type -eq "Static") {
             $ExpectedHash = $Info.Hash
         } elseif ($Info.Type -eq "Dynamic") {
-            try {
-                $HashContent  = (Invoke-WebRequest -Uri $Info.HashUrl -UseBasicParsing -TimeoutSec 30).Content
-                if ($HashContent -is [byte[]]) { $HashContent = [System.Text.Encoding]::ASCII.GetString($HashContent) }
-                $ExpectedHash = ($HashContent -split "\s+")[0].Trim()
-            } catch {
-                Write-Host "  [FAIL] $($Info.File): could not fetch dynamic hash: $_" -ForegroundColor Red
-                $fail++; continue
+            $HashContent = $null
+            for ($a = 1; $a -le 3 -and -not $HashContent; $a++) {
+                try { $HashContent = (Invoke-WebRequest -Uri $Info.HashUrl -UseBasicParsing -TimeoutSec 30).Content }
+                catch { if ($a -lt 3) { Start-Sleep -Seconds (5 * $a) } }
+            }
+            if (-not $HashContent) {
+                Write-Host "  [WARN] $($Info.File): could not fetch hash after retries (network, not drift)" -ForegroundColor Yellow
+                $unverified++; continue
+            }
+            if ($HashContent -is [byte[]]) { $HashContent = [System.Text.Encoding]::ASCII.GetString($HashContent) }
+            $ExpectedHash = ($HashContent -split "\s+")[0].Trim()
+        }
+        # Download with retry (mirrors Get-SourceFile's Invoke-DownloadWithRetry).
+        $Dest = Join-Path $ScratchDir $Info.File
+        $got = $false
+        for ($a = 1; $a -le 3 -and -not $got; $a++) {
+            try { Invoke-WebRequest -Uri $Info.Url -OutFile $Dest -UseBasicParsing -TimeoutSec 120; $got = $true }
+            catch {
+                if ($a -lt 3) { Start-Sleep -Seconds (5 * $a) }
+                else { Write-Host "  [WARN] $($Info.File): download failed after retries (network, not drift): $_" -ForegroundColor Yellow }
             }
         }
-        $Dest = Join-Path $ScratchDir $Info.File
-        try {
-            Invoke-WebRequest -Uri $Info.Url -OutFile $Dest -UseBasicParsing -TimeoutSec 120
-        } catch {
-            Write-Host "  [FAIL] $($Info.File): download failed: $_" -ForegroundColor Red
-            $fail++; continue
-        }
+        if (-not $got) { $unverified++; continue }
         $Actual = (Get-FileHash $Dest -Algorithm $Algo).Hash
         if ($Actual -eq $ExpectedHash) {
             Write-Host "  [PASS] $($Info.File)" -ForegroundColor Green
@@ -574,15 +586,19 @@ function Invoke-VerifyDownloads {
             Write-Host "  [FAIL] $($Info.File)"           -ForegroundColor Red
             Write-Host "         expected: $ExpectedHash"  -ForegroundColor Red
             Write-Host "         actual:   $Actual"        -ForegroundColor Red
-            $fail++
+            $drift++
         }
     }
 
     Remove-Item $ScratchDir -Recurse -Force -ErrorAction SilentlyContinue
     Write-Host ""
-    if ($fail -gt 0) {
-        Write-Host "$fail pinned component hash(es) drifted. A vendor likely repackaged an artifact; re-pin in `$Downloads." -ForegroundColor Red
+    if ($drift -gt 0) {
+        Write-Host "$drift pinned component hash(es) drifted. A vendor likely repackaged an artifact; re-pin in `$Downloads." -ForegroundColor Red
         Stop-Installer 20
+    }
+    if ($unverified -gt 0) {
+        Write-Host "No hash drift, but $unverified component(s) could not be downloaded (network/mirror); canary inconclusive for those." -ForegroundColor Yellow
+        Stop-Installer 0
     }
     Write-Host "All pinned component hashes verified." -ForegroundColor Green
     Stop-Installer 0
