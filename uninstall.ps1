@@ -21,7 +21,7 @@ param(
     [switch]$Silent
 )
 
-$UninstallerVersion = "0.5.0"   # keep in lockstep with install.ps1 $InstallerVersion
+$UninstallerVersion = "0.5.1"   # keep in lockstep with install.ps1 $InstallerVersion
 $InstallerRepo      = "https://github.com/landonfox00/TeXLib-Installer"
 
 $BaseDir = "$env:LOCALAPPDATA\TeXLib"
