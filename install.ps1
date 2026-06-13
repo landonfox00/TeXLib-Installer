@@ -246,13 +246,13 @@ $Downloads = @{
         "Url"  = "https://download.sublimetext.com/sublime_text_build_4180_x64.zip"
         "File" = "sublime_text_build_4180_x64.zip"
         "Type" = "Static"
-        "Hash" = "6B6B53AEDCDEE13A19D33363FF9ED48A1549463647567C93E12F5260F7AA911F"
+        "Hash" = "A8855CC1834F644CD3B74E5B90B73AE5CDA60F0172284B979B99A6B5A1E0A912"
     }
     "sumatra" = @{
         "Url"  = "https://www.sumatrapdfreader.org/dl/rel/3.5.2/SumatraPDF-3.5.2-64.zip"
         "File" = "SumatraPDF-3.5.2-64.zip"
         "Type" = "Static"
-        "Hash" = "78D6397D8C4598F7C6B37B246A360D6D29871578351C2C903001878E48D6C58B"
+        "Hash" = "66CCB395C9184DCE6822DFBB9970C877383B3EAD6D9417B5106A844AAC512989"
     }
     "texlive" = @{
         "Url"     = "https://mirror.ctan.org/systems/texlive/tlnet/install-tl.zip"

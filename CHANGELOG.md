@@ -4,6 +4,10 @@ All notable changes to TeXLib-Installer are recorded here. Format follows [Keep 
 
 ## [Unreleased]
 
+### Fixed
+
+- **Re-pinned the Sublime Text (build 4180) and SumatraPDF (3.5.2) SHA256 hashes.** Both vendors repackaged their archives in place — same version, new bytes — so the pinned hashes no longer matched what the URLs serve. Because the installer fails closed on a hash mismatch (no continue-anyway prompt), this aborted every fresh install at the first download, before anything was installed. Verified the new archives still contain exactly build 4180 (`sublime_text.exe` FileVersion 4180) and `SumatraPDF-3.5.2-64.exe`, and that both hashes are stable across repeated downloads, so this is a pure re-pin with no version drift. LaTeXTools (`st4-4.5.12`) was unaffected.
+
 ## [0.5.0] — 2026-06-07
 
 The TEXINPUTS comma trap, finally fixed in code. kpathsea (TeX Live's file resolver) splits `TEXINPUTS` entries on commas and chokes on spaces, so the UNR OneDrive folder ("OneDrive - University of Nevada, Reno") has silently broken every install on a UNR machine since v0.1.0. Landon hand-created a junction at `%USERPROFILE%\TeXLib` to work around it; coworkers didn't know to. v0.2.0's Doctor mode only printed a TEXINPUTS warning — useful diagnosis, no actual repair.
