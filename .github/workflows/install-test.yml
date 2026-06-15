@@ -137,6 +137,9 @@ jobs:
           if ($rc -eq 0) { Write-Host "FAIL: expected non-zero exit when the bundle is missing" -ForegroundColor Red; exit 1 }
           if ($out -notmatch 'GitHub SOURCE download') { Write-Host "FAIL: source-download guidance not shown" -ForegroundColor Red; exit 1 }
           Write-Host "OK: missing-bundle pre-flight points users to the release zip." -ForegroundColor Green
+          # $LASTEXITCODE is still 1 from the intentional non-zero -DryRun above;
+          # exit 0 explicitly so the step passes once the assertions hold.
+          exit 0
 
       - name: Stage stub texlib bundle
         shell: pwsh
