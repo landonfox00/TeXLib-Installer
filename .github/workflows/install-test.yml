@@ -241,7 +241,59 @@ jobs:
           Write-Host "OK: %USERPROFILE%\TeXLib is a junction at the comma/space OneDrive path; bundle deployed through it." -ForegroundColor Green
 
   # ---------------------------------------------------------------------------
-  # 5. full-install — SLOW, GATED. Real -Silent install on a clean throwaway VM,
+  # 5. package-integrity — FAST. Builds an actual release bundle with
+  #    make-release.ps1 and LAUNCHES install.bat from it (the real user path),
+  #    catching packaging gaps the other jobs miss because they run install.ps1
+  #    directly. Born from the 2026-06-15 flash-and-die: make-release omitted
+  #    tools\install_wrapper.ps1, which install.bat invokes.
+  # ---------------------------------------------------------------------------
+  package-integrity:
+    if: github.event_name != 'schedule'
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Build a release bundle and launch install.bat from it
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # make-release snapshots a texlib library; a stub suffices to check
+          # PACKAGING completeness and that install.bat launches.
+          $stub = Join-Path $env:RUNNER_TEMP 'texlib-src'
+          New-Item -ItemType Directory -Force -Path $stub | Out-Null
+          Set-Content -Encoding UTF8 -Path (Join-Path $stub 'CHANGELOG.md') -Value "# Changelog`r`n`r`n## [Unreleased]`r`n- stub"
+          $out = Join-Path $env:RUNNER_TEMP 'rel'
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tools\make-release.ps1 -Version 0.0.0-ci -TexLibPath $stub -OutDir $out
+          if ($LASTEXITCODE -ne 0) { Write-Host "FAIL: make-release exited $LASTEXITCODE" -ForegroundColor Red; exit 1 }
+          $stage = Join-Path $out 'TeXLib-Installer-v0.0.0-ci'
+
+          # Every file install.bat / uninstall.bat invoke must ship, or the .bat
+          # flashes open and dies (PowerShell -File on a missing script).
+          $required = @('install.bat','uninstall.bat','install.ps1','uninstall.ps1',
+                        'tools\install_wrapper.ps1','tools\uninstall_wrapper.ps1',
+                        'texlib','runtime','templates')
+          $missing = $required | Where-Object { -not (Test-Path (Join-Path $stage $_)) }
+          if ($missing) { Write-Host "FAIL: bundle missing: $($missing -join ', ')" -ForegroundColor Red; exit 1 }
+          # make-release.ps1 itself must NOT ship (build tool only).
+          if (Test-Path (Join-Path $stage 'tools\make-release.ps1')) { Write-Host "FAIL: make-release.ps1 should not be in the bundle" -ForegroundColor Red; exit 1 }
+
+          # Launch install.bat exactly as a user does (-DryRun; blank line piped
+          # so the wrapper's final prompt can't hang) and assert it REACHES
+          # install.ps1 -- i.e. it does not flash open and die.
+          $env:TEXLIB_INSTALLER_WRAPPED = '1'
+          $env:OneDrive = ''; $env:OneDriveCommercial = ''; $env:OneDriveConsumer = ''
+          $log = '' | & (Join-Path $stage 'install.bat') -Silent -DryRun 2>&1 | Out-String
+          Write-Host $log
+          if ($log -notmatch 'Running pre-flight checks') {
+            Write-Host "FAIL: install.bat did not reach install.ps1 (flashed and died?)" -ForegroundColor Red; exit 1
+          }
+          Write-Host "OK: bundle is complete and install.bat launches install.ps1." -ForegroundColor Green
+          # $LASTEXITCODE may be non-zero from the intentional -DryRun above.
+          exit 0
+
+  # ---------------------------------------------------------------------------
+  # 6. full-install — SLOW, GATED. Real -Silent install on a clean throwaway VM,
   #    then -Doctor, then uninstall.ps1 -Silent teardown. Never on push: only
   #    the weekly schedule OR a manual dispatch with full=true. TeX Live full
   #    scheme + 2 apps fits well under the 6h job cap.

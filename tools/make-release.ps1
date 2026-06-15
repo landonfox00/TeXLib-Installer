@@ -85,6 +85,16 @@ Copy-Item (Join-Path $RepoRoot "templates") $StageRoot -Recurse -Force
 # install.ps1 deploys/compiles on the target machine.
 Copy-Item (Join-Path $RepoRoot "runtime") $StageRoot -Recurse -Force
 
+# install.bat / uninstall.bat invoke tools\install_wrapper.ps1 /
+# uninstall_wrapper.ps1, so those wrappers MUST ship -- without them the .bat
+# just flashes open and dies (PowerShell -File on a missing script). make-
+# release.ps1 itself is the build tool and is deliberately NOT shipped.
+$ToolsStage = Join-Path $StageRoot "tools"
+New-Item -ItemType Directory -Force -Path $ToolsStage | Out-Null
+foreach ($w in @("install_wrapper.ps1", "uninstall_wrapper.ps1")) {
+    Copy-Item (Join-Path $RepoRoot "tools\$w") $ToolsStage -Force
+}
+
 # Bundle the TeXLib snapshot. Prefer `git archive` so ONLY tracked files at
 # HEAD are bundled -- a plain file copy would sweep in gitignored build
 # artifacts (.aux/.log/.pdf), __pycache__, scratch dirs, and editor state.
