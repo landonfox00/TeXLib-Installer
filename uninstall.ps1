@@ -64,7 +64,7 @@ if (-not $Silent) {
     Write-Host "  - PATH entries pointing at TeX Live" -ForegroundColor Gray
     Write-Host "  - File-association registry keys" -ForegroundColor Gray
     Write-Host "  - 'Build with TeXLib' right-click menu + Ctrl+B hotkey (if installed)" -ForegroundColor Gray
-    Write-Host "  - $env:USERPROFILE\TeXLib  (only if it is a junction — see notes)" -ForegroundColor Gray
+    Write-Host "  - $env:USERPROFILE\TeXLib  (only if it is a junction -- see notes)" -ForegroundColor Gray
     Write-Host ""
     Write-Host "PRESERVES:" -ForegroundColor Green
     Write-Host "  - $env:USERPROFILE\Documents\TeXLib  (or OneDrive equivalent)" -ForegroundColor Gray
@@ -99,7 +99,7 @@ if (Test-Path $BaseDir) {
 # install.ps1 when the OneDrive folder contains a space or comma).
 # Critical safety check: only remove if it's actually a reparse point. If the
 # user has a real folder at %USERPROFILE%\TeXLib (e.g. they built one before
-# this installer existed), we must not touch it — that would destroy their
+# this installer existed), we must not touch it -- that would destroy their
 # library.
 $UserRootJunction = "$env:USERPROFILE\TeXLib"
 if (Test-Path $UserRootJunction) {
@@ -143,8 +143,9 @@ if (Test-Path $StartupLnk) {
 
 # 4. Clean PATH.
 Write-Host "Cleaning user PATH..." -ForegroundColor Yellow
-$TexBinPath   = "$BaseDir\TexLive\2025\bin\windows"
-$LegacyOneTeX = "$env:LOCALAPPDATA\OneTeX\TexLive\2025\bin\windows"
+$TexLiveYear  = "2025"   # keep in lockstep with install.ps1 $TexLiveYear
+$TexBinPath   = "$BaseDir\TexLive\$TexLiveYear\bin\windows"
+$LegacyOneTeX = "$env:LOCALAPPDATA\OneTeX\TexLive\$TexLiveYear\bin\windows"
 $LegacyWrappers = "$env:LOCALAPPDATA\OneTeX\Wrappers"
 
 $CurrentPath = [Environment]::GetEnvironmentVariable("Path", "User")

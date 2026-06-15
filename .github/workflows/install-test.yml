@@ -153,7 +153,74 @@ jobs:
           exit $rc
 
   # ---------------------------------------------------------------------------
-  # 4. full-install — SLOW, GATED. Real -Silent install on a clean throwaway VM,
+  # 4. junction — FAST. Exercises the OneDrive comma/space path that the v0.5.0
+  #    user-root junction feature exists for, which CI otherwise never reaches
+  #    (no OneDrive on the runner). Fakes $env:OneDrive to a comma+space path and
+  #    runs -OnlyTeXLib (junction + bundle deploy, NOT the ~30 min TeX Live
+  #    install), then asserts %USERPROFILE%\TeXLib is a junction pointing there.
+  # ---------------------------------------------------------------------------
+  junction:
+    if: github.event_name != 'schedule'
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Stage stub texlib bundle
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force -Path 'texlib\Sublime' | Out-Null
+          Set-Content -Encoding UTF8 -Path 'texlib\CHANGELOG.md' -Value "# Changelog`r`n`r`n## [Unreleased]`r`n- CI stub bundle (not a real release)."
+
+      - name: Install with a faked comma/space OneDrive path
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $env:TEXLIB_INSTALLER_WRAPPED = '1'
+          # Fake an OneDrive whose path has BOTH a space and a comma (like
+          # "OneDrive - University of Nevada, Reno") so $NeedsUserRootJunction
+          # fires -- the exact UNR environment GitHub runners never reproduce.
+          $fakeOneDrive = Join-Path $env:RUNNER_TEMP 'OneDrive - Fake University, Org'
+          New-Item -ItemType Directory -Force -Path (Join-Path $fakeOneDrive 'Documents') | Out-Null
+          $env:OneDrive = $fakeOneDrive
+          $env:OneDriveCommercial = ''
+          $env:OneDriveConsumer = ''
+          # -OnlyTeXLib exercises junction creation + bundle deploy WITHOUT the
+          # ~30 min TeX Live full install.
+          powershell.exe -NoProfile -ExecutionPolicy Bypass `
+            -File .\install.ps1 -Silent -OnlyTeXLib
+          $rc = $LASTEXITCODE
+          Write-Host "install.ps1 -Silent -OnlyTeXLib exit code: $rc"
+          if ($rc -ne 0) { exit $rc }
+
+      - name: Assert the user-root junction was created correctly
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $junction = Join-Path $env:USERPROFILE 'TeXLib'
+          if (-not (Test-Path $junction)) {
+            Write-Host "FAIL: $junction was not created" -ForegroundColor Red; exit 1
+          }
+          $item = Get-Item $junction -Force
+          if ($item.Attributes -notmatch 'ReparsePoint') {
+            Write-Host "FAIL: $junction exists but is not a reparse point (junction)" -ForegroundColor Red; exit 1
+          }
+          $target = $item.Target; if (-not $target) { $target = $item.LinkTarget }
+          $target = ($target -join ';')
+          Write-Host "junction target: $target"
+          if ($target -and ($target -notlike '*OneDrive - Fake University, Org*')) {
+            Write-Host "FAIL: junction points somewhere unexpected" -ForegroundColor Red; exit 1
+          }
+          # The stub bundle deploys into $TeXLibDir, which was reassigned to the
+          # junction -- so it must be visible through it.
+          if (-not (Test-Path (Join-Path $junction 'CHANGELOG.md'))) {
+            Write-Host "FAIL: stub bundle not visible through the junction" -ForegroundColor Red; exit 1
+          }
+          Write-Host "OK: %USERPROFILE%\TeXLib is a junction at the comma/space OneDrive path; bundle deployed through it." -ForegroundColor Green
+
+  # ---------------------------------------------------------------------------
+  # 5. full-install — SLOW, GATED. Real -Silent install on a clean throwaway VM,
   #    then -Doctor, then uninstall.ps1 -Silent teardown. Never on push: only
   #    the weekly schedule OR a manual dispatch with full=true. TeX Live full
   #    scheme + 2 apps fits well under the 6h job cap.
