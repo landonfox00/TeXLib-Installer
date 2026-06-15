@@ -824,11 +824,21 @@ try {
 # PSScriptAnalyzer's "hardcoded ComputerName" rule (false positive for a
 # public mirror).
 if (-not $OnlyTeXLib) {
-    try {
-        $null = Invoke-WebRequest -Uri "https://mirror.ctan.org/" -Method Head -UseBasicParsing -TimeoutSec 5 -ErrorAction Stop
+    # Retry with a longer timeout: mirror.ctan.org is a redirector to regional
+    # mirrors and can be briefly slow even when the connection is fine, so a
+    # single 5s HEAD was flaky and would hard-fail the whole pre-flight.
+    $reachable = $false
+    $netErr = $null
+    for ($a = 1; $a -le 3 -and -not $reachable; $a++) {
+        try {
+            $null = Invoke-WebRequest -Uri "https://mirror.ctan.org/" -Method Head -UseBasicParsing -TimeoutSec 15 -ErrorAction Stop
+            $reachable = $true
+        } catch { $netErr = $_; if ($a -lt 3) { Start-Sleep -Seconds (2 * $a) } }
+    }
+    if ($reachable) {
         Add-PreflightOK "Internet connectivity to mirror.ctan.org (HTTPS)"
-    } catch {
-        Add-PreflightFailure "Cannot reach https://mirror.ctan.org/ ($($_.Exception.Message)); check your internet connection / firewall / VPN"
+    } else {
+        Add-PreflightFailure "Cannot reach https://mirror.ctan.org/ after 3 tries ($($netErr.Exception.Message)); check your internet connection / firewall / VPN"
     }
 } else {
     Add-PreflightOK "Skipping internet check (-OnlyTeXLib doesn't download anything)"
@@ -885,8 +895,23 @@ if ($UsingOneDrive) {
 }
 
 # 7i. TeXLib bundle is present (always required, even in -OnlyTeXLib).
-if (Test-Path $TexLibBundle) { Add-PreflightOK "TeXLib bundle found at $TexLibBundle" }
-else                         { Add-PreflightFailure "TeXLib bundle not found at $TexLibBundle; were you running the installer from a partial download?" }
+if (Test-Path $TexLibBundle) {
+    Add-PreflightOK "TeXLib bundle found at $TexLibBundle"
+} else {
+    # The texlib\ library ships ONLY in the release zip (assembled by
+    # tools\make-release.ps1); it is NOT in the GitHub source tree. The #1 cause
+    # of this failure is downloading the source via "Code -> Download ZIP"
+    # instead of a release asset. Detect that (the source tree has tools\,
+    # .github\, or .git\, none of which are in a release zip) and say so plainly.
+    $looksLikeSource = (Test-Path (Join-Path $ScriptDir "tools\make-release.ps1")) -or
+                       (Test-Path (Join-Path $ScriptDir ".github")) -or
+                       (Test-Path (Join-Path $ScriptDir ".git"))
+    if ($looksLikeSource) {
+        Add-PreflightFailure "TeXLib bundle is missing because this is the GitHub SOURCE download, which does not include the TeXLib library. Do NOT use 'Code -> Download ZIP'. Download the release zip (TeXLib-Installer-v<version>.zip) from $InstallerRepo/releases, extract it, and run install.bat from inside THAT folder."
+    } else {
+        Add-PreflightFailure "TeXLib bundle not found at $TexLibBundle; the download looks incomplete. Re-download the release zip from $InstallerRepo/releases, extract it fully, and run install.bat from the extracted folder."
+    }
+}
 
 if ($PreflightFailed) {
     Write-Host ""
