@@ -824,11 +824,21 @@ try {
 # PSScriptAnalyzer's "hardcoded ComputerName" rule (false positive for a
 # public mirror).
 if (-not $OnlyTeXLib) {
-    try {
-        $null = Invoke-WebRequest -Uri "https://mirror.ctan.org/" -Method Head -UseBasicParsing -TimeoutSec 5 -ErrorAction Stop
+    # Retry with a longer timeout: mirror.ctan.org is a redirector to regional
+    # mirrors and can be briefly slow even when the connection is fine, so a
+    # single 5s HEAD was flaky and would hard-fail the whole pre-flight.
+    $reachable = $false
+    $netErr = $null
+    for ($a = 1; $a -le 3 -and -not $reachable; $a++) {
+        try {
+            $null = Invoke-WebRequest -Uri "https://mirror.ctan.org/" -Method Head -UseBasicParsing -TimeoutSec 15 -ErrorAction Stop
+            $reachable = $true
+        } catch { $netErr = $_; if ($a -lt 3) { Start-Sleep -Seconds (2 * $a) } }
+    }
+    if ($reachable) {
         Add-PreflightOK "Internet connectivity to mirror.ctan.org (HTTPS)"
-    } catch {
-        Add-PreflightFailure "Cannot reach https://mirror.ctan.org/ ($($_.Exception.Message)); check your internet connection / firewall / VPN"
+    } else {
+        Add-PreflightFailure "Cannot reach https://mirror.ctan.org/ after 3 tries ($($netErr.Exception.Message)); check your internet connection / firewall / VPN"
     }
 } else {
     Add-PreflightOK "Skipping internet check (-OnlyTeXLib doesn't download anything)"
