@@ -1,0 +1,17 @@
+# Windows shells (cmd, Windows PowerShell 5.1) run these scripts, so force CRLF
+# and treat them as text. The UTF-8 BOM on install.ps1 / uninstall.ps1 -- which
+# Windows PowerShell 5.1 needs to parse their (formerly em-dash-bearing) content
+# without mis-decoding it -- is file content and is preserved by git regardless
+# of these rules. The scripts are now ASCII-only as well, and CI's
+# `encoding-guard` job fails the build if either ever regresses to non-ASCII
+# without a BOM. Belt, suspenders, and a second belt.
+*.ps1   text eol=crlf
+*.psd1  text eol=crlf
+*.bat   text eol=crlf
+*.cmd   text eol=crlf
+
+# Binary assets: never normalize line endings.
+*.zip   binary
+*.pdf   binary
+*.png   binary
+*.ico   binary

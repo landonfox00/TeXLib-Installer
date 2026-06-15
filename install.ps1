@@ -25,7 +25,7 @@
 
 .PARAMETER Version
     Print installer version + bundled component versions and exit. Lightweight
-    — no network calls (unless combined with non-silent update check).
+    -- no network calls (unless combined with non-silent update check).
 
 .PARAMETER DryRun
     Run pre-flight checks and summarize what would happen, but do not modify
@@ -43,7 +43,7 @@
 .PARAMETER HideJunction
     Apply the +h (hidden) file attribute to the %USERPROFILE%\TeXLib junction
     that gets created when your OneDrive path contains a space or comma (e.g.
-    "OneDrive - University of Nevada, Reno"). Off by default — a visible
+    "OneDrive - University of Nevada, Reno"). Off by default -- a visible
     junction is easier to discover and diagnose. Has no effect when no
     junction is needed.
 
@@ -57,7 +57,7 @@
 
 .PARAMETER VerifyDownloads
     Hash-rot canary. Download each pinned component and verify its SHA256/512
-    against $Downloads, then exit — without installing anything, touching the
+    against $Downloads, then exit -- without installing anything, touching the
     registry/PATH/junction, or needing the texlib bundle. Exit 0 if every hash
     matches, 20 if any drifted (a vendor silently repackaged a pinned artifact;
     re-pin it). Used by CI to catch the break before a coworker does.
@@ -110,7 +110,7 @@ try {
 # --- Early exit + banner -----------------------------------------------------
 # Defined up here (before the user-root junction logic in section 1) because
 # that block can call Stop-Installer on its failure paths, which execute at
-# script load — before the rest of the function definitions further down.
+# script load -- before the rest of the function definitions further down.
 function Show-Banner {
     Write-Host ""
     Write-Host "==============================================" -ForegroundColor Cyan
@@ -316,7 +316,7 @@ Start-Transcript -Path $LogFile -IncludeInvocationHeader | Out-Null
 # 3. UPDATE CHECKER
 # =============================================================================
 function Test-LatestVersion {
-    # Best-effort GitHub API check. Never fatal — print the result and move on.
+    # Best-effort GitHub API check. Never fatal -- print the result and move on.
     try {
         $resp = Invoke-RestMethod -Uri $ReleasesApi -TimeoutSec 5 -ErrorAction Stop
         $latest = $resp.tag_name -replace '^v', ''
@@ -371,7 +371,7 @@ function Show-VersionInfo {
 # =============================================================================
 function Invoke-Doctor {
     Show-Banner
-    Write-Host "TeXLib Doctor — diagnostic report" -ForegroundColor Cyan
+    Write-Host "TeXLib Doctor -- diagnostic report" -ForegroundColor Cyan
     Write-Host "Generated: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss zzz')" -ForegroundColor Gray
     Write-Host ""
 
@@ -397,7 +397,7 @@ function Invoke-Doctor {
         Write-Host ""
         Write-Host "Doctor cannot continue without an install. Run install.bat first." -ForegroundColor Yellow
         Write-Host ""
-        Stop-Installer 0
+        Stop-Installer 1
     }
     Write-Host ""
 
@@ -524,7 +524,9 @@ function Invoke-Doctor {
     Write-Host "If you're still seeing problems, paste this entire output into an issue at" -ForegroundColor Gray
     Write-Host "  $InstallerRepo/issues" -ForegroundColor Gray
     Write-Host ""
-    Stop-Installer 0
+    # Exit non-zero when any check failed, so -Doctor works as a scriptable
+    # health gate (CI / automation), not just a human-readable report.
+    if ($script:DoctorFail -gt 0) { Stop-Installer 1 } else { Stop-Installer 0 }
 }
 
 
@@ -802,7 +804,7 @@ if ($PSMajor -gt 5 -or ($PSMajor -eq 5 -and $PSMinor -ge 1)) {
     Add-PreflightFailure "PowerShell $($PSVersionTable.PSVersion) detected; need 5.1 or newer"
 }
 
-# 7c. Disk space — skip the 6GB check in -OnlyTeXLib mode (bundle is tiny).
+# 7c. Disk space -- skip the 6GB check in -OnlyTeXLib mode (bundle is tiny).
 try {
     $Drive = (Get-Item (Split-Path $BaseDir -Qualifier)).PSDrive
     $FreeGB = [math]::Round($Drive.Free / 1GB, 1)
@@ -817,7 +819,7 @@ try {
 }
 
 # 7d. Internet connectivity (skip in -OnlyTeXLib if no downloads needed).
-# HEAD request against the CTAN mirror — confirms TLS reachability without
+# HEAD request against the CTAN mirror -- confirms TLS reachability without
 # pulling any payload. Test-NetConnection would also work but trips
 # PSScriptAnalyzer's "hardcoded ComputerName" rule (false positive for a
 # public mirror).
@@ -907,7 +909,7 @@ if (-not $OnlyTeXLib) {
 # 9. DRY-RUN: print plan and exit
 # =============================================================================
 if ($DryRun) {
-    Write-Host "DRY RUN — would do:" -ForegroundColor Yellow
+    Write-Host "DRY RUN -- would do:" -ForegroundColor Yellow
     if ($NeedsUserRootJunction) {
         if ($UserRootJunctionState -eq "present") {
             Write-Host "  * Reuse existing user-root junction $UserRootJunction -> $UserRootJunctionTarget" -ForegroundColor Gray
@@ -1024,6 +1026,30 @@ function Get-SourceFile {
 
     if ($Info.Type -ne "Skip" -and $ExpectedHash) {
         $NewHash = (Get-FileHash $DestPath -Algorithm $Algo).Hash
+        # A rolling Dynamic component (texlive) can mismatch because the zip and
+        # its .sha512 came from mirrors at slightly different sync states. Re-roll
+        # the redirector to a fresh concrete mirror and re-pull both, a few times,
+        # before giving up, so a transient skew self-heals instead of aborting a
+        # perfectly good install. (A Static pin never retries: a mismatch there is
+        # real drift to be re-pinned.)
+        $tries = 0
+        while ($NewHash -ne $ExpectedHash -and $Info.Type -eq "Dynamic" -and $tries -lt 3) {
+            $tries++
+            Write-Host "  [retry] $($Info.File) hash mismatch (likely CTAN mirror skew); re-resolving mirror (attempt $tries)..." -ForegroundColor Yellow
+            Start-Sleep -Seconds (3 * $tries)
+            try {
+                $ResolvedUrl = (Invoke-WebRequest -Uri $Info.Url -Method Head -UseBasicParsing -MaximumRedirection 5 -TimeoutSec 30).BaseResponse.ResponseUri.AbsoluteUri
+            } catch { $ResolvedUrl = $null }
+            $RetryHashUri = if ($ResolvedUrl) { $ResolvedUrl + ".sha512" } else { $Info.HashUrl }
+            try {
+                $rc = (Invoke-WebRequest -Uri $RetryHashUri -UseBasicParsing -TimeoutSec 30).Content
+                if ($rc -is [byte[]]) { $rc = [System.Text.Encoding]::ASCII.GetString($rc) }
+                $ExpectedHash = ($rc -split "\s+")[0].Trim()
+            } catch { continue }
+            $RetryDownloadUri = if ($ResolvedUrl) { $ResolvedUrl } else { $Info.Url }
+            Invoke-DownloadWithRetry -Uri $RetryDownloadUri -OutFile $DestPath
+            $NewHash = (Get-FileHash $DestPath -Algorithm $Algo).Hash
+        }
         if ($NewHash -ne $ExpectedHash) {
             Write-Host "  [FAIL] Hash mismatch for $($Info.File)" -ForegroundColor Red
             Write-Host "         expected: $ExpectedHash" -ForegroundColor Red
@@ -1331,7 +1357,7 @@ if (-not $OnlyTeXLib) {
 
 
 # =============================================================================
-# 16. CONFIGURE PROGRAMS  (always — -OnlyTeXLib still refreshes builder files)
+# 16. CONFIGURE PROGRAMS  (always -- -OnlyTeXLib still refreshes builder files)
 # =============================================================================
 Write-Host ""
 Write-Host "Writing program configurations..." -ForegroundColor Cyan
