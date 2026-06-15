@@ -885,8 +885,23 @@ if ($UsingOneDrive) {
 }
 
 # 7i. TeXLib bundle is present (always required, even in -OnlyTeXLib).
-if (Test-Path $TexLibBundle) { Add-PreflightOK "TeXLib bundle found at $TexLibBundle" }
-else                         { Add-PreflightFailure "TeXLib bundle not found at $TexLibBundle; were you running the installer from a partial download?" }
+if (Test-Path $TexLibBundle) {
+    Add-PreflightOK "TeXLib bundle found at $TexLibBundle"
+} else {
+    # The texlib\ library ships ONLY in the release zip (assembled by
+    # tools\make-release.ps1); it is NOT in the GitHub source tree. The #1 cause
+    # of this failure is downloading the source via "Code -> Download ZIP"
+    # instead of a release asset. Detect that (the source tree has tools\,
+    # .github\, or .git\, none of which are in a release zip) and say so plainly.
+    $looksLikeSource = (Test-Path (Join-Path $ScriptDir "tools\make-release.ps1")) -or
+                       (Test-Path (Join-Path $ScriptDir ".github")) -or
+                       (Test-Path (Join-Path $ScriptDir ".git"))
+    if ($looksLikeSource) {
+        Add-PreflightFailure "TeXLib bundle is missing because this is the GitHub SOURCE download, which does not include the TeXLib library. Do NOT use 'Code -> Download ZIP'. Download the release zip (TeXLib-Installer-v<version>.zip) from $InstallerRepo/releases, extract it, and run install.bat from inside THAT folder."
+    } else {
+        Add-PreflightFailure "TeXLib bundle not found at $TexLibBundle; the download looks incomplete. Re-download the release zip from $InstallerRepo/releases, extract it fully, and run install.bat from the extracted folder."
+    }
+}
 
 if ($PreflightFailed) {
     Write-Host ""
