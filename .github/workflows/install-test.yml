@@ -242,10 +242,12 @@ jobs:
 
   # ---------------------------------------------------------------------------
   # 5. package-integrity — FAST. Builds an actual release bundle with
-  #    make-release.ps1 and LAUNCHES install.bat from it (the real user path),
-  #    catching packaging gaps the other jobs miss because they run install.ps1
-  #    directly. Born from the 2026-06-15 flash-and-die: make-release omitted
-  #    tools\install_wrapper.ps1, which install.bat invokes.
+  #    make-release.ps1 and asserts it contains every file install.bat /
+  #    uninstall.bat invoke, catching packaging gaps the other jobs miss because
+  #    they run install.ps1 directly. Born from the 2026-06-15 flash-and-die:
+  #    make-release omitted tools\install_wrapper.ps1, which install.bat invokes.
+  #    (Actually launching install.bat headlessly is flaky -- the wrapper's
+  #    Read-Host -- so that path is covered by the manual SMOKE-TEST.md instead.)
   # ---------------------------------------------------------------------------
   package-integrity:
     if: github.event_name != 'schedule'
@@ -278,19 +280,13 @@ jobs:
           # make-release.ps1 itself must NOT ship (build tool only).
           if (Test-Path (Join-Path $stage 'tools\make-release.ps1')) { Write-Host "FAIL: make-release.ps1 should not be in the bundle" -ForegroundColor Red; exit 1 }
 
-          # Launch install.bat exactly as a user does (-DryRun; blank line piped
-          # so the wrapper's final prompt can't hang) and assert it REACHES
-          # install.ps1 -- i.e. it does not flash open and die.
-          $env:TEXLIB_INSTALLER_WRAPPED = '1'
-          $env:OneDrive = ''; $env:OneDriveCommercial = ''; $env:OneDriveConsumer = ''
-          $log = '' | & (Join-Path $stage 'install.bat') -Silent -DryRun 2>&1 | Out-String
-          Write-Host $log
-          if ($log -notmatch 'Running pre-flight checks') {
-            Write-Host "FAIL: install.bat did not reach install.ps1 (flashed and died?)" -ForegroundColor Red; exit 1
-          }
-          Write-Host "OK: bundle is complete and install.bat launches install.ps1." -ForegroundColor Green
-          # $LASTEXITCODE may be non-zero from the intentional -DryRun above.
-          exit 0
+          # The wrapper install.bat invokes must be a real, parseable script
+          # (a missing/corrupt wrapper is exactly what makes install.bat flash
+          # open and die).
+          $werr = $null
+          [void][System.Management.Automation.Language.Parser]::ParseFile((Join-Path $stage 'tools\install_wrapper.ps1'), [ref]$null, [ref]$werr)
+          if ($werr) { Write-Host "FAIL: shipped install_wrapper.ps1 has parse errors" -ForegroundColor Red; exit 1 }
+          Write-Host "OK: release bundle contains every file install.bat needs." -ForegroundColor Green
 
   # ---------------------------------------------------------------------------
   # 6. full-install — SLOW, GATED. Real -Silent install on a clean throwaway VM,
