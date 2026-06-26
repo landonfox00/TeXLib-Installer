@@ -126,11 +126,25 @@ if ($gitOk) {
     }
 }
 
+# Record the exact TeXLib state bundled, for traceability. The bundle is a
+# git-archive of HEAD, so this pins which TeXLib commit shipped -- the source
+# path alone never told you that.
+$TexLibCommit = ""
+$TexLibDescribe = ""
+if ($gitOk) {
+    $TexLibCommit = (& git -C $TexLibPath rev-parse HEAD 2>$null)
+    if ($TexLibCommit) { $TexLibCommit = "$TexLibCommit".Trim() }
+    $TexLibDescribe = (& git -C $TexLibPath describe --tags --always 2>$null)
+    if ($TexLibDescribe) { $TexLibDescribe = "$TexLibDescribe".Trim() }
+}
+
 # Stamp the release metadata.
 $Stamp = @"
 release_version=$Version
 built_at=$(Get-Date -Format 'o')
 texlib_source=$TexLibPath
+texlib_commit=$TexLibCommit
+texlib_describe=$TexLibDescribe
 "@
 Set-Content -Path (Join-Path $StageRoot "RELEASE") -Value $Stamp -Encoding UTF8
 
