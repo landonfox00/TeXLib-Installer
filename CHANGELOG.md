@@ -4,9 +4,14 @@ All notable changes to TeXLib-Installer are recorded here. Format follows [Keep 
 
 ## [Unreleased]
 
-## [0.5.1] — 2026-06-13
+## [0.5.1] — 2026-06-26
 
-Makes a fresh coworker install actually work. Three bugs each blocked the install at a different stage — Windows PowerShell 5.1 couldn't even *parse* the script (no BOM), then couldn't verify TeX Live, then couldn't verify the apps — so all three had to be fixed before an end-to-end install was possible. A new CI harness then ran the real install on a clean throwaway `windows-latest` VM, which surfaced two more verification-robustness fixes (CTAN mirror skew; a Doctor false-failure). Verified end-to-end: `install.ps1 -Silent` exits 0 with TeX Live, Sublime, SumatraPDF, LaTeXTools, the junction, and file associations all in place.
+Makes a fresh coworker install actually work. Three bugs each blocked the install at a different stage — Windows PowerShell 5.1 couldn't even *parse* the script (no BOM), then couldn't verify TeX Live, then couldn't verify the apps — so all three had to be fixed before an end-to-end install was possible. A new CI harness then ran the real install on a clean throwaway `windows-latest` VM, which surfaced two more verification-robustness fixes (CTAN mirror skew; a Doctor false-failure). Verified end-to-end: `install.ps1 -Silent` exits 0 with TeX Live, Sublime, SumatraPDF, LaTeXTools, the junction, and file associations all in place. This release also refreshes the bundled TeXLib library to current `main` (the large batch merged 2026-06-24/25 that v0.5.0, a 2026-06-07 snapshot, predated).
+
+### Changed
+
+- **Bundled TeXLib refreshed to `main` (`v0.1.1-110-ge998875`).** This release carries the large library batch merged 2026-06-24/25 that v0.5.0 predated — the region-delimited bank format + multiple-choice redesign, repeatable `{problems}`/`{mcproblems}` sections, the layered metadata engine with coursemeta-driven exam dates, friendly "requires LuaLaTeX" guards, inline `\solution`/`\answer`/`\pf` lead-ins, shared `{hint}`/`{readings}` callouts, and an end-to-end example course. See the TeXLib CHANGELOG for the full list.
+- **`make-release.ps1` records the bundled TeXLib commit + `git describe` in the `RELEASE` stamp** (`texlib_commit` / `texlib_describe`), so every installer release is traceable to an exact TeXLib state instead of only a source path.
 
 ### Added
 
@@ -164,9 +169,9 @@ Initial release. Reorganized and hardened port of the OneTeX installer (now arch
 - Final `Pause` at end of install (anti-pattern; replaced with conditional Read-Host on failure only).
 - Legacy `SublimeUser` folder references (TeXLib now uses `Sublime/` as the canonical sync location).
 
-[Unreleased]: https://github.com/landonfox00/TeXLib-Installer/compare/v0.3.1...HEAD
-[0.3.1]: https://github.com/landonfox00/TeXLib-Installer/releases/tag/v0.3.1
-[0.3.0]: https://github.com/landonfox00/TeXLib-Installer/releases/tag/v0.3.0
-[0.2.1]: https://github.com/landonfox00/TeXLib-Installer/releases/tag/v0.2.1
-[0.2.0]: https://github.com/landonfox00/TeXLib-Installer/releases/tag/v0.2.0
+[Unreleased]: https://github.com/landonfox00/TeXLib-Installer/compare/v0.5.1...HEAD
+[0.5.1]: https://github.com/landonfox00/TeXLib-Installer/compare/v0.5.0...v0.5.1
+[0.5.0]: https://github.com/landonfox00/TeXLib-Installer/compare/v0.2.1...v0.5.0
+[0.2.1]: https://github.com/landonfox00/TeXLib-Installer/compare/v0.2.0...v0.2.1
+[0.2.0]: https://github.com/landonfox00/TeXLib-Installer/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/landonfox00/TeXLib-Installer/releases/tag/v0.1.0
