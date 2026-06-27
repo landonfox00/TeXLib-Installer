@@ -4,6 +4,15 @@ All notable changes to TeXLib-Installer are recorded here. Format follows [Keep 
 
 ## [Unreleased]
 
+## [0.6.0] — 2026-06-26
+
+Removes the build-a-`.tex`-from-Windows-Explorer feature and refreshes the bundled TeXLib library to v0.3.0.
+
+### Changed
+
+- **Bundled TeXLib refreshed to `v0.3.0`** (from `v0.2.0` in v0.5.1): syllabus section shortcuts (`\officehours`, `\communication`, `\academicintegrity`, …), a `\MetaHumanMonthDay` robustness fix, and two breaking removals — the syllabus command-style metadata shims and the library `\dd`/`\deriv`/`\inte` macros. See the TeXLib CHANGELOG for the full list.
+- **`$InstallerVersion` / `$UninstallerVersion` bumped 0.5.1 → 0.6.0.**
+
 ### Removed
 
 - **Build-a-`.tex`-from-Windows-Explorer feature, entirely.** Dropped the right-click "Build with TeXLib" context-menu flyout on `.tex`, the opt-in `-EnableBuildHotkey` Ctrl+B Explorer hotkey (the resident `TeXLibHotkey.exe` background process compiled from `TeXLibHotkey.cs`, plus its Startup shortcut), and the standalone `runtime/texlib-build.ps1` / `texlib-build-selected.ps1` builders (the `runtime/` folder is gone). `install.ps1` no longer registers the menu, compiles/launches the hotkey, or deploys the standalone builder + `texlib-build.config.psd1`; `uninstall.ps1` drops the matching cleanup (hotkey process, Startup shortcut, the `TeXLib.BuildMenu` ProgID, the `.tex` `TeXLibBuild` verb); `make-release.ps1` no longer bundles `runtime/`. Building a `.tex` is done from the editor — Sublime's Ctrl+B / the LaTeXTools "texlib" build — which is unchanged.
@@ -173,7 +182,8 @@ Initial release. Reorganized and hardened port of the OneTeX installer (now arch
 - Final `Pause` at end of install (anti-pattern; replaced with conditional Read-Host on failure only).
 - Legacy `SublimeUser` folder references (TeXLib now uses `Sublime/` as the canonical sync location).
 
-[Unreleased]: https://github.com/landonfox00/TeXLib-Installer/compare/v0.5.1...HEAD
+[Unreleased]: https://github.com/landonfox00/TeXLib-Installer/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/landonfox00/TeXLib-Installer/compare/v0.5.1...v0.6.0
 [0.5.1]: https://github.com/landonfox00/TeXLib-Installer/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/landonfox00/TeXLib-Installer/compare/v0.2.1...v0.5.0
 [0.2.1]: https://github.com/landonfox00/TeXLib-Installer/compare/v0.2.0...v0.2.1
