@@ -63,7 +63,6 @@ if (-not $Silent) {
     Write-Host "  - Desktop and Start Menu shortcuts" -ForegroundColor Gray
     Write-Host "  - PATH entries pointing at TeX Live" -ForegroundColor Gray
     Write-Host "  - File-association registry keys" -ForegroundColor Gray
-    Write-Host "  - 'Build with TeXLib' right-click menu + Ctrl+B hotkey (if installed)" -ForegroundColor Gray
     Write-Host "  - $env:USERPROFILE\TeXLib  (only if it is a junction -- see notes)" -ForegroundColor Gray
     Write-Host ""
     Write-Host "PRESERVES:" -ForegroundColor Green
@@ -74,14 +73,6 @@ if (-not $Silent) {
         Write-Host "Aborted." -ForegroundColor Yellow
         Stop-Uninstaller 0
     }
-}
-
-# 0. Stop the resident Ctrl+B hotkey so its exe isn't locked under BaseDir.
-$Hk = Get-Process -Name "TeXLibHotkey" -ErrorAction SilentlyContinue
-if ($Hk) {
-    Write-Host "Stopping TeXLib build hotkey..." -ForegroundColor Yellow
-    $Hk | Stop-Process -Force -ErrorAction SilentlyContinue
-    Start-Sleep -Milliseconds 300
 }
 
 # 1. Remove install directory.
@@ -134,12 +125,6 @@ foreach ($n in $ShortcutNames) {
         }
     }
 }
-# Build-hotkey Startup shortcut (present only with -EnableBuildHotkey).
-$StartupLnk = Join-Path ([Environment]::GetFolderPath("Startup")) "TeXLib Build Hotkey.lnk"
-if (Test-Path $StartupLnk) {
-    Remove-Item $StartupLnk -Force -ErrorAction SilentlyContinue
-    Write-Host "  Removed $StartupLnk" -ForegroundColor Gray
-}
 
 # 4. Clean PATH.
 Write-Host "Cleaning user PATH..." -ForegroundColor Yellow
@@ -167,7 +152,7 @@ Write-Host "Removing file-association registry keys..." -ForegroundColor Yellow
 $RegPath = "HKCU:\Software\Classes"
 $TexlibProgIDs = @("TeXLib.SublimeFile", "TeXLib.SumatraPDF",
                    "OneTeX.SublimeFile", "OneTeX.SumatraPDF")
-foreach ($ID in ($TexlibProgIDs + "TeXLib.BuildMenu")) {
+foreach ($ID in $TexlibProgIDs) {
     $full = "$RegPath\$ID"
     if (Test-Path $full) {
         Remove-Item -Path $full -Recurse -Force -ErrorAction SilentlyContinue
@@ -192,12 +177,6 @@ foreach ($Ext in @(".txt", ".tex", ".cls", ".sty", ".bib",
             Write-Host "  Removed $Ext association ($def)" -ForegroundColor Gray
         }
     }
-}
-# Build-from-Explorer right-click flyout on .tex.
-$BuildVerbKey = "$RegPath\SystemFileAssociations\.tex\shell\TeXLibBuild"
-if (Test-Path $BuildVerbKey) {
-    Remove-Item -Path $BuildVerbKey -Recurse -Force -ErrorAction SilentlyContinue
-    Write-Host "  Removed .tex 'Build with TeXLib' menu" -ForegroundColor Gray
 }
 
 Write-Host ""

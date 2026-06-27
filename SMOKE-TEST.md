@@ -2,8 +2,8 @@
 
 CI proves the installer **installs** correctly on a clean Windows VM, but a
 headless CI job can't *activate* the things that need a real interactive
-desktop session — double-clicking a file, a global hotkey, a PDF viewer
-opening. Run this five-minute checklist once on a real machine after an
+desktop session — double-clicking a file, a PDF viewer opening. Run this
+five-minute checklist once on a real machine after an
 install (ideally a coworker's UNR machine, since the OneDrive-path junction is
 the one behavior CI can only simulate).
 
@@ -34,11 +34,6 @@ the one behavior CI can only simulate).
 - [ ] **Double-click a `.tex` file** in Explorer → it opens in Sublime Text.
 - [ ] In Sublime, build the document (LaTeXTools) → a PDF is produced and opens
       in **SumatraPDF**.
-- [ ] **Right-click a `.tex`** in Explorer → the **"Build with TeXLib"** menu
-      appears; pick a build and confirm the PDF is produced.
-- [ ] (If installed with `-EnableBuildHotkey`) select a `.tex` in Explorer with
-      no editor open and press **Ctrl+B** → it builds. Also confirm your
-      antivirus / endpoint-security didn't quarantine `TeXLibHotkey.exe`.
 - [ ] **Double-click a `.pdf`** → it opens in SumatraPDF. Note: the installer
       also takes over `.txt` (opens in Sublime) — confirm that's intended.
 

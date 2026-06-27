@@ -27,10 +27,6 @@ One-click portable Windows installer for the [TeXLib](https://github.com/landonf
 │   ├── LaTeXTools.sublime-settings
 │   ├── Preferences.sublime-settings
 │   └── SumatraPDF-settings.txt
-├── runtime/                     # build-from-Explorer feature (bundled into releases)
-│   ├── texlib-build.ps1         # standalone PowerShell port of the texlib_builder recipe
-│   ├── texlib-build-selected.ps1 # builds the .tex selected in File Explorer
-│   └── TeXLibHotkey.cs          # resident Ctrl+B hotkey helper (opt-in)
 ├── tools/
 │   ├── make-release.ps1         # builds the release ZIP (installer + TeXLib bundle)
 │   ├── install_wrapper.ps1      # boot-log + always-pause wrapper for install.bat
@@ -61,7 +57,6 @@ One-click portable Windows installer for the [TeXLib](https://github.com/landonf
 | `-OnlyTeXLib` | Refresh only the TeXLib library bundle + Sublime builder files. Skips Sublime / Sumatra / TeX Live install entirely. Use after pulling a newer installer release whose only change is the library. |
 | `-InstallPath C:\path` | Override the install root. Defaults to `%LOCALAPPDATA%\TeXLib`. Use if `%LOCALAPPDATA%` is on a small SSD or locked down. |
 | `-HideJunction` | Apply the hidden attribute to the `%USERPROFILE%\TeXLib` junction created on comma/space OneDrive paths. Off by default (a visible junction is easier to diagnose). |
-| `-EnableBuildHotkey` | Also install the resident Ctrl+B Explorer build hotkey. Off by default; the right-click "Build with TeXLib" menu is always installed. |
 
 Combine as needed (e.g. `-OnlyTeXLib -Silent` for unattended library refreshes on lab machines).
 

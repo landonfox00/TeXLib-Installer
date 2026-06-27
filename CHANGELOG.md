@@ -4,6 +4,10 @@ All notable changes to TeXLib-Installer are recorded here. Format follows [Keep 
 
 ## [Unreleased]
 
+### Removed
+
+- **Build-a-`.tex`-from-Windows-Explorer feature, entirely.** Dropped the right-click "Build with TeXLib" context-menu flyout on `.tex`, the opt-in `-EnableBuildHotkey` Ctrl+B Explorer hotkey (the resident `TeXLibHotkey.exe` background process compiled from `TeXLibHotkey.cs`, plus its Startup shortcut), and the standalone `runtime/texlib-build.ps1` / `texlib-build-selected.ps1` builders (the `runtime/` folder is gone). `install.ps1` no longer registers the menu, compiles/launches the hotkey, or deploys the standalone builder + `texlib-build.config.psd1`; `uninstall.ps1` drops the matching cleanup (hotkey process, Startup shortcut, the `TeXLib.BuildMenu` ProgID, the `.tex` `TeXLibBuild` verb); `make-release.ps1` no longer bundles `runtime/`. Building a `.tex` is done from the editor — Sublime's Ctrl+B / the LaTeXTools "texlib" build — which is unchanged.
+
 ## [0.5.1] — 2026-06-26
 
 Makes a fresh coworker install actually work. Three bugs each blocked the install at a different stage — Windows PowerShell 5.1 couldn't even *parse* the script (no BOM), then couldn't verify TeX Live, then couldn't verify the apps — so all three had to be fixed before an end-to-end install was possible. A new CI harness then ran the real install on a clean throwaway `windows-latest` VM, which surfaced two more verification-robustness fixes (CTAN mirror skew; a Doctor false-failure). Verified end-to-end: `install.ps1 -Silent` exits 0 with TeX Live, Sublime, SumatraPDF, LaTeXTools, the junction, and file associations all in place. This release also refreshes the bundled TeXLib library to **v0.2.0** (the large batch merged 2026-06-24/25 that v0.5.0, a 2026-06-07 snapshot, predated).

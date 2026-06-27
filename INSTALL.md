@@ -99,22 +99,6 @@ You should see a PDF open in SumatraPDF a few seconds later.
 
 For variant builds (answer key, student copy, etc.), press **Ctrl+Shift+B** and pick from the menu, or open the command palette (**Ctrl+Shift+P**) and type "TeXLib".
 
-## Step 6 — Build without opening the editor (optional)
-
-You can also build a `.tex` straight from File Explorer, with no editor open.
-
-**Right-click menu (always installed).** Right-click any `.tex` file and choose **Build with TeXLib**. A submenu offers every mode — Build, Answer Key, Solutions, Student Copy, Rubric, Draft, All Versions. The PDF opens in SumatraPDF when it finishes; if the build fails you get a notification and the `.log` opens so you can see why. This uses the exact same engine/mode/rerun logic as the in-editor build.
-
-**Ctrl+B hotkey (opt-in).** If you install with:
-
-```
-install.bat -EnableBuildHotkey
-```
-
-a tiny background helper starts at login and gives File Explorer a **Ctrl+B** shortcut: click a `.tex` in Explorer, press Ctrl+B, and it builds (default mode) — no right-click needed. The hotkey only fires while a File Explorer window is focused, so Ctrl+B keeps meaning "bold" in Word, your browser, and everywhere else. It's opt-in because it runs a small program at startup; the right-click menu needs nothing resident.
-
-> The Explorer builder mirrors the editor's build recipe but is a separate script (`%LOCALAPPDATA%\TeXLib\Scripts\texlib-build.ps1`). A `.tex` with a `% !TeX root = master.tex` line builds the master, just like in Sublime.
-
 ## Updating
 
 Re-running the installer with a newer release ZIP **does not** wipe your settings — they live in `Documents\TeXLib\Sublime` and are preserved across re-installs via a junction.
@@ -159,7 +143,6 @@ A few details worth knowing:
 | `install.bat -InstallPath C:\Tools\TeXLib` | Install to a non-default location (e.g. if `%LOCALAPPDATA%` is on a small SSD). |
 | `install.bat -Silent` | No prompts; safe defaults; intended for unattended deployment. |
 | `install.bat -HideJunction` | Hide the `%USERPROFILE%\TeXLib` junction (see [About the user-root junction](#about-the-user-root-junction)). Off by default. |
-| `install.bat -EnableBuildHotkey` | Install the resident **Ctrl+B** Explorer build hotkey (see [Step 6](#step-6--build-without-opening-the-editor-optional)). Off by default; the right-click menu is installed either way. |
 
 Flags can be combined: `install.bat -OnlyTeXLib -Silent` is the typical lab-machine refresh.
 
@@ -167,7 +150,7 @@ Flags can be combined: `install.bat -OnlyTeXLib -Silent` is the typical lab-mach
 
 Double-click `uninstall.bat` from the same folder you ran the installer from. It will:
 
-- Remove `%LOCALAPPDATA%\TeXLib` (Sublime, Sumatra, TeX Live, logs, scripts)
+- Remove `%LOCALAPPDATA%\TeXLib` (Sublime, Sumatra, TeX Live, logs)
 - Clean PATH and registry entries
 - Remove Desktop and Start Menu shortcuts
 - Remove the `%USERPROFILE%\TeXLib` junction, if one was created (only if it's actually a junction — a real folder with the same name is preserved)
@@ -233,9 +216,8 @@ it once by hand:
 - Pick **Sublime Text** (for `.tex`/`.cls`/`.sty`/`.bib`) or **SumatraPDF**
   (for `.pdf`), and check **Always use this app**.
 
-It's purely cosmetic: the **right-click "Build with TeXLib"** menu, the optional
-**Ctrl+B** Explorer hotkey, and building from inside Sublime all work regardless
-of which app owns the double-click. You only need to do this once per file type.
+It's purely cosmetic: building from inside Sublime works regardless of which app
+owns the double-click. You only need to do this once per file type.
 
 ### Getting help
 

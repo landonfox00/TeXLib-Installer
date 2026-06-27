@@ -47,14 +47,6 @@
     junction is easier to discover and diagnose. Has no effect when no
     junction is needed.
 
-.PARAMETER EnableBuildHotkey
-    Also install the resident Explorer hotkey (Ctrl+B builds the selected .tex
-    with no editor open). Off by default: every install gets the right-click
-    "Build with TeXLib" menu, but the auto-starting background hook is opt-in
-    so coworker installs stay lean and avoid antivirus questions about a
-    login-launched background app. Compiles a small helper with the in-box
-    .NET C# compiler and adds a Startup shortcut for the current user.
-
 .PARAMETER VerifyDownloads
     Hash-rot canary. Download each pinned component and verify its SHA256/512
     against $Downloads, then exit -- without installing anything, touching the
@@ -84,7 +76,6 @@ param(
     [switch]$OnlyTeXLib,
     [string]$InstallPath = "",
     [switch]$HideJunction,
-    [switch]$EnableBuildHotkey,
     [switch]$VerifyDownloads
 )
 
@@ -1489,132 +1480,6 @@ if (-not $OnlyTeXLib) {
         Write-Host "  (Non-fatal; you can set defaults manually via Right Click -> Open With.)" -ForegroundColor Yellow
     }
 }
-
-
-# =============================================================================
-# 17b. BUILD-FROM-EXPLORER  (right-click menu always; Ctrl+B hotkey opt-in)
-# =============================================================================
-# Lets a .tex be built without opening an editor: a "Build with TeXLib" flyout
-# on the .tex right-click menu (all modes), plus an optional resident Ctrl+B
-# hotkey scoped to File Explorer. Both call runtime\texlib-build.ps1, a
-# standalone port of the texlib_builder.py recipe. Script deploy + config
-# refresh run in every mode (incl. -OnlyTeXLib) so the recipe stays current.
-Write-Host ""
-Write-Host "Configuring build-from-Explorer..." -ForegroundColor Cyan
-
-try {
-    $RuntimeSrc = Join-Path $ScriptDir "runtime"
-
-    # --- Deploy the standalone builder + selection wrapper -------------------
-    foreach ($f in @("texlib-build.ps1", "texlib-build-selected.ps1")) {
-        $src = Join-Path $RuntimeSrc $f
-        if (Test-Path $src) { Copy-Item $src $ScriptsDir -Force }
-    }
-
-    # --- Write the resolved-paths config the builder reads at runtime --------
-    # $TeXLibDir here is already the comma-free (junction) path when one was
-    # needed, so TEXINPUTS the builder derives from it is kpathsea-safe.
-    function ConvertTo-Psd1String { param($s) "'" + ("$s" -replace "'", "''") + "'" }
-    $TlPerlBin = "$TexLiveDir\tlpkg\tlperl\bin"
-    $SumatraExe = "$SumatraDir\$($SumatraExeName)"
-    $SublimeExe = "$SublimeDir\sublime_text.exe"
-    $ConfigLines = @(
-        "# texlib-build.config.psd1 -- written by TeXLib-Installer $InstallerVersion.",
-        "# Paths the standalone Explorer builder (texlib-build.ps1) reads. Regenerated on install.",
-        "@{",
-        "    TexBin     = $(ConvertTo-Psd1String $TexBinPath)",
-        "    TlPerlBin  = $(ConvertTo-Psd1String $TlPerlBin)",
-        "    TexLibRoot = $(ConvertTo-Psd1String $TeXLibDir)",
-        "    SumatraExe = $(ConvertTo-Psd1String $SumatraExe)",
-        "    SublimeExe = $(ConvertTo-Psd1String $SublimeExe)",
-        "    AuxMode    = '<<temp>>'",
-        "}"
-    )
-    Set-Content -Path "$ScriptsDir\texlib-build.config.psd1" -Value $ConfigLines -Encoding UTF8
-    Write-Host "  Deployed texlib-build.ps1 + config" -ForegroundColor Green
-
-    # --- Register the right-click "Build with TeXLib" flyout on .tex --------
-    # A per-user submenu via ExtendedSubCommandsKey (no admin, no COM handler).
-    $PsExe = "$env:WINDIR\System32\WindowsPowerShell\v1.0\powershell.exe"
-    $BuildScript = "$ScriptsDir\texlib-build.ps1"
-    $StoreProgID = "TeXLib.BuildMenu"
-    $StoreKey = "HKCU:\Software\Classes\$StoreProgID"
-    $EntryKey = "HKCU:\Software\Classes\SystemFileAssociations\.tex\shell\TeXLibBuild"
-
-    # Rebuild from clean so removed or renamed modes do not linger.
-    Remove-Item $StoreKey -Recurse -Force -ErrorAction SilentlyContinue
-    Remove-Item $EntryKey -Recurse -Force -ErrorAction SilentlyContinue
-
-    New-Item -Path $EntryKey -Force | Out-Null
-    Set-ItemProperty -Path $EntryKey -Name "MUIVerb" -Value "Build with TeXLib"
-    Set-ItemProperty -Path $EntryKey -Name "Icon" -Value "$SublimeExe,0"
-    Set-ItemProperty -Path $EntryKey -Name "ExtendedSubCommandsKey" -Value $StoreProgID
-
-    # Ordered by key name (Explorer sorts alphabetically), so prefix NN_.
-    $Modes = @(
-        @{ Key = "01_build";       Label = "Build";          Mode = "default" }
-        @{ Key = "02_key";         Label = "Answer Key";     Mode = "key" }
-        @{ Key = "03_solutions";   Label = "Solutions";      Mode = "solutions" }
-        @{ Key = "04_student";     Label = "Student Copy";   Mode = "student" }
-        @{ Key = "05_rubric";      Label = "Rubric";         Mode = "rubric" }
-        @{ Key = "06_draft";       Label = "Draft";          Mode = "draft" }
-        @{ Key = "07_allversions"; Label = "All Versions";   Mode = "allversions" }
-    )
-    foreach ($m in $Modes) {
-        $verbKey = "$StoreKey\shell\$($m.Key)"
-        $cmdKey = "$verbKey\command"
-        New-Item -Path $cmdKey -Force | Out-Null
-        Set-ItemProperty -Path $verbKey -Name "(default)" -Value $m.Label
-        $cmd = '"' + $PsExe + '" -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden ' +
-               '-File "' + $BuildScript + '" -Path "%1" -Mode ' + $m.Mode
-        Set-ItemProperty -Path $cmdKey -Name "(default)" -Value $cmd
-    }
-    Write-Host "  Registered .tex right-click 'Build with TeXLib' menu" -ForegroundColor Green
-} catch {
-    Write-Host "  [warn] build-from-Explorer setup failed: $_" -ForegroundColor Yellow
-    Write-Host "  (Non-fatal; editor builds are unaffected.)" -ForegroundColor Yellow
-}
-
-# --- Opt-in resident Ctrl+B hotkey (scoped to File Explorer) ----------------
-if ($EnableBuildHotkey) {
-    Write-Host "Installing Ctrl+B Explorer hotkey..." -ForegroundColor Cyan
-    try {
-        $CsSrc = Join-Path $RuntimeSrc "TeXLibHotkey.cs"
-        $CsDest = "$ScriptsDir\TeXLibHotkey.cs"
-        $ExeDest = "$ScriptsDir\TeXLibHotkey.exe"
-        if (-not (Test-Path $CsSrc)) { throw "runtime\TeXLibHotkey.cs not found in the installer bundle." }
-        Copy-Item $CsSrc $CsDest -Force
-
-        # Find the in-box .NET Framework C# compiler (present on all Win10/11).
-        $Csc = @(
-            "$env:WINDIR\Microsoft.NET\Framework64\v4.0.30319\csc.exe",
-            "$env:WINDIR\Microsoft.NET\Framework\v4.0.30319\csc.exe"
-        ) | Where-Object { Test-Path $_ } | Select-Object -First 1
-        if (-not $Csc) { throw "csc.exe (.NET Framework compiler) not found." }
-
-        # Stop any running instance so we can overwrite the exe.
-        Get-Process -Name "TeXLibHotkey" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-        & $Csc /nologo /target:winexe /out:"$ExeDest" "$CsDest" | Out-Null
-        if (-not (Test-Path $ExeDest)) { throw "compilation produced no exe." }
-
-        # Auto-start at login via a Startup-folder shortcut.
-        $StartupDir = [Environment]::GetFolderPath("Startup")
-        $WS = New-Object -ComObject WScript.Shell
-        $Lnk = $WS.CreateShortcut("$StartupDir\TeXLib Build Hotkey.lnk")
-        $Lnk.TargetPath = $ExeDest
-        $Lnk.WorkingDirectory = $ScriptsDir
-        $Lnk.Description = "TeXLib: Ctrl+B builds the selected .tex in File Explorer"
-        $Lnk.Save()
-
-        # Launch now so it works without a reboot (mutex guards against dupes).
-        Start-Process -FilePath $ExeDest | Out-Null
-        Write-Host "  Hotkey active: select a .tex in Explorer and press Ctrl+B" -ForegroundColor Green
-    } catch {
-        Write-Host "  [warn] could not install the Ctrl+B hotkey: $_" -ForegroundColor Yellow
-        Write-Host "  (The right-click 'Build with TeXLib' menu still works.)" -ForegroundColor Yellow
-    }
-}
-
 
 # =============================================================================
 # 18. SHORTCUTS (skipped in -OnlyTeXLib)

@@ -274,7 +274,7 @@ jobs:
           # flashes open and dies (PowerShell -File on a missing script).
           $required = @('install.bat','uninstall.bat','install.ps1','uninstall.ps1',
                         'tools\install_wrapper.ps1','tools\uninstall_wrapper.ps1',
-                        'texlib','runtime','templates')
+                        'texlib','templates')
           $missing = $required | Where-Object { -not (Test-Path (Join-Path $stage $_)) }
           if ($missing) { Write-Host "FAIL: bundle missing: $($missing -join ', ')" -ForegroundColor Red; exit 1 }
           # make-release.ps1 itself must NOT ship (build tool only).
