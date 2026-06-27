@@ -81,9 +81,6 @@ foreach ($f in $InstallerFiles) {
     if (Test-Path $src) { Copy-Item $src $StageRoot -Force }
 }
 Copy-Item (Join-Path $RepoRoot "templates") $StageRoot -Recurse -Force
-# runtime/ holds the standalone Explorer builder + Ctrl+B hotkey source that
-# install.ps1 deploys/compiles on the target machine.
-Copy-Item (Join-Path $RepoRoot "runtime") $StageRoot -Recurse -Force
 
 # install.bat / uninstall.bat invoke tools\install_wrapper.ps1 /
 # uninstall_wrapper.ps1, so those wrappers MUST ship -- without them the .bat
