@@ -2,6 +2,12 @@
 	// Preferences.sublime-settings -- TeXLib-Installer default editor prefs.
 	// Edit freely after install; this file gets overwritten only by re-installs.
 
+	// Pin Ctrl+B to the TeXLib build system. LaTeXTools also ships a
+	// "Compile to PDF" build with the same text.tex.latex selector, so leaving
+	// this on "Automatic" makes the pick ambiguous -- and only TeXLib's build
+	// exposes the Ctrl+Shift+B mode variants (Answer Key / Solutions / ...).
+	"build_system": "Packages/User/TeXLib.sublime-build",
+
 	"ignored_packages": ["Vintage"],
 
 	"font_size": 11,

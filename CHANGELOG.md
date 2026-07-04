@@ -4,6 +4,31 @@ All notable changes to TeXLib-Installer are recorded here. Format follows [Keep 
 
 ## [Unreleased]
 
+### Fixed
+
+- **Ctrl+B now builds on a clean install — LaTeXTools' `regex` dependency is
+  installed.** The installer drops LaTeXTools from a raw source archive (not via
+  Package Control), so its declared dependency `regex` was never installed. On a
+  machine with no prior Package-Control LaTeXTools, `latextools/utils/analysis.py`
+  does a bare `import regex` that LaTeXTools' `plugin.py` triggers at load, so the
+  import failed, **no** LaTeXTools command registered — including
+  `latextools_make_pdf`, the target of `TeXLib.sublime-build` — and Ctrl+B did
+  nothing at all. The installer now downloads and installs the hash-pinned `regex`
+  wheel (cp38-win-amd64, Sublime 4's plugin-host ABI) into `<Sublime>\Data\Lib\python38`.
+  (`mdpopups`, the other dependency, is imported guarded and only affects previews,
+  so it is intentionally not installed in this fix.)
+
+### Changed
+
+- **Ctrl+B is pinned to the TeXLib build system.** The Preferences template now
+  sets `"build_system": "Packages/User/TeXLib.sublime-build"`. LaTeXTools ships
+  `Compile to PDF.sublime-build` with the same `text.tex.latex` selector, so
+  "Automatic" was ambiguous — and only TeXLib's build exposes the Ctrl+Shift+B
+  mode variants (Answer Key / Solutions / Student / …).
+- **Install verification and `-Doctor` now check the `regex` dependency**, so a
+  broken Sublime build can't ship green (`install.ps1 -Doctor` reports it, and the
+  end-of-install step warns if it's missing).
+
 ## [0.6.0] — 2026-06-26
 
 Removes the build-a-`.tex`-from-Windows-Explorer feature and refreshes the bundled TeXLib library to v0.3.0.
