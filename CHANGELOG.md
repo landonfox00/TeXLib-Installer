@@ -4,6 +4,33 @@ All notable changes to TeXLib-Installer are recorded here. Format follows [Keep 
 
 ## [Unreleased]
 
+### Added
+
+- **Detect an existing TeXLib library and reuse it, like the other components.**
+  Pre-flight now treats the library the way it treats TeX Live / Sublime /
+  SumatraPDF: if a valid library (core `.sty` files present) is already synced to
+  the content location, the installer reuses it and skips deploying a bundle — so
+  an installer copy with no bundled `texlib\` (a source checkout, or a copy synced
+  without its `dist\`) installs instead of hard-failing. A bundled snapshot still
+  takes priority when present, and `-OnlyTeXLib` still requires a bundle (its job
+  is to push a newer one).
+
+### Changed
+
+- **Clearer "wrong download" failure** — the missing-bundle error now also names
+  the release page's "Source code (zip)" link (not just "Code → Download ZIP")
+  and reports whether an existing library was found. Reuse detection prints the
+  library version, reading the first concrete `CHANGELOG.md` heading past
+  `[Unreleased]`.
+- **Ctrl+B is pinned to the TeXLib build system.** The Preferences template now
+  sets `"build_system": "Packages/User/TeXLib.sublime-build"`. LaTeXTools ships
+  `Compile to PDF.sublime-build` with the same `text.tex.latex` selector, so
+  "Automatic" was ambiguous — and only TeXLib's build exposes the Ctrl+Shift+B
+  mode variants (Answer Key / Solutions / Student / …).
+- **Install verification and `-Doctor` now check the `regex` dependency**, so a
+  broken Sublime build can't ship green (`install.ps1 -Doctor` reports it, and the
+  end-of-install step warns if it's missing).
+
 ### Fixed
 
 - **Ctrl+B now builds on a clean install — LaTeXTools' `regex` dependency is
@@ -17,17 +44,6 @@ All notable changes to TeXLib-Installer are recorded here. Format follows [Keep 
   wheel (cp38-win-amd64, Sublime 4's plugin-host ABI) into `<Sublime>\Data\Lib\python38`.
   (`mdpopups`, the other dependency, is imported guarded and only affects previews,
   so it is intentionally not installed in this fix.)
-
-### Changed
-
-- **Ctrl+B is pinned to the TeXLib build system.** The Preferences template now
-  sets `"build_system": "Packages/User/TeXLib.sublime-build"`. LaTeXTools ships
-  `Compile to PDF.sublime-build` with the same `text.tex.latex` selector, so
-  "Automatic" was ambiguous — and only TeXLib's build exposes the Ctrl+Shift+B
-  mode variants (Answer Key / Solutions / Student / …).
-- **Install verification and `-Doctor` now check the `regex` dependency**, so a
-  broken Sublime build can't ship green (`install.ps1 -Doctor` reports it, and the
-  end-of-install step warns if it's missing).
 
 ## [0.6.0] — 2026-06-26
 
