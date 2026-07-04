@@ -4,6 +4,10 @@ All notable changes to TeXLib-Installer are recorded here. Format follows [Keep 
 
 ## [Unreleased]
 
+## [0.6.1] — 2026-07-04
+
+A Sublime-integration point release. Fixes the headline bug on a clean install — **Ctrl+B doing nothing** — by installing LaTeXTools' missing `regex` dependency and pinning Ctrl+B to the TeXLib build system. Also makes the installer **reuse a TeXLib library that's already synced** (OneDrive), so a source checkout or a copy without its `dist\` installs instead of hard-failing at pre-flight. Same bundled TeXLib library as v0.6.0 (`v0.3.0`); no library changes.
+
 ### Added
 
 - **Detect an existing TeXLib library and reuse it, like the other components.**
