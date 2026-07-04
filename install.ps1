@@ -652,6 +652,22 @@ function Add-PreflightWarning { param([string]$M); Write-Host "  [WARN] $M" -For
 function Add-PreflightOK      { param([string]$M); Write-Host "  [ OK ] $M" -ForegroundColor Green }
 function Add-PreflightNote    { param([string]$M); Write-Host "         $M" -ForegroundColor Gray }
 
+function Get-TeXLibVersion {
+    # Read the top [x.y.z] heading from a TeXLib library's CHANGELOG.md.
+    # Returns "0.6.0" (raw, no leading v) or $null when unknown/Unreleased/absent.
+    param([string]$LibDir)
+    $ChangelogPath = Join-Path $LibDir "CHANGELOG.md"
+    if (-not (Test-Path $ChangelogPath)) { return $null }
+    # First concrete version heading, skipping a leading [Unreleased] section --
+    # a live/dev copy (the common reuse case) keeps [Unreleased] at the top.
+    $Line = Get-Content $ChangelogPath |
+        Select-String -Pattern '^## \[(?<ver>[^\]]+)\]' |
+        Where-Object { $_.Matches[0].Groups['ver'].Value -ne 'Unreleased' } |
+        Select-Object -First 1
+    if ($Line) { return $Line.Matches[0].Groups['ver'].Value }
+    return $null
+}
+
 # --- External-install detection -----------------------------------------------
 # Phase A: detect-and-report only. Findings are informational; the installer
 # still always installs portable copies of every component. Future versions
@@ -885,22 +901,52 @@ if ($UsingOneDrive) {
     Add-PreflightWarning "OneDrive not detected; TeXLib will live at $TeXLibDir (no multi-machine sync)"
 }
 
-# 7i. TeXLib bundle is present (always required, even in -OnlyTeXLib).
-if (Test-Path $TexLibBundle) {
+# 7i. TeXLib library source. Mirrors how we treat Sublime / Sumatra / TeX Live:
+# detect an existing install and reuse it, else deploy our own copy. Two valid
+# sources, in priority order:
+#   1. bundled snapshot (texlib\, shipped in the release zip) -- deploy it
+#   2. an existing synced library already at the content location -- reuse it
+# -OnlyTeXLib exists to PUSH a newer bundle, so it still requires a bundle.
+$HaveBundle = Test-Path $TexLibBundle
+
+# An existing library counts only if the core .sty files are actually present
+# at the content location (same core-file probe the Doctor uses). We check the
+# physical target ($UserRootJunctionTarget), which is where content really
+# lives regardless of whether the TEXINPUTS-safe junction exists yet.
+$TeXLibCoreFiles = @("course-metadata.sty", "texlib-build.sty", "basic-utilities.sty")
+$HaveExistingLibrary = (Test-Path $UserRootJunctionTarget) -and
+    (@($TeXLibCoreFiles | Where-Object { -not (Test-Path (Join-Path $UserRootJunctionTarget $_)) }).Count -eq 0)
+
+$UseExistingTeXLib = $false
+
+if ($HaveBundle) {
     Add-PreflightOK "TeXLib bundle found at $TexLibBundle"
+} elseif ($HaveExistingLibrary -and -not $OnlyTeXLib) {
+    # No bundle in this installer copy (e.g. running from a source checkout, or
+    # a copy synced without its dist\ folder), but this machine already has the
+    # library synced here. Reuse it, exactly like a detected TeX distribution --
+    # no bundle needed. Skips the deploy copy (13), which also spares OneDrive a
+    # burst of write I/O into the very folder it is syncing.
+    $UseExistingTeXLib = $true
+    $ExistingVer = Get-TeXLibVersion $UserRootJunctionTarget
+    $VerNote = if ($ExistingVer) { " (TeXLib $ExistingVer)" } else { "" }
+    Add-PreflightOK "Existing TeXLib library detected at $UserRootJunctionTarget$VerNote; will use it (no bundle needed)"
+    Add-PreflightNote "(this installer copy ships no texlib\ bundle; reusing the already-synced library, like a detected TeX distribution)"
 } else {
-    # The texlib\ library ships ONLY in the release zip (assembled by
-    # tools\make-release.ps1); it is NOT in the GitHub source tree. The #1 cause
-    # of this failure is downloading the source via "Code -> Download ZIP"
-    # instead of a release asset. Detect that (the source tree has tools\,
-    # .github\, or .git\, none of which are in a release zip) and say so plainly.
+    # Neither a bundle nor an existing library: nothing to install from. The #1
+    # cause is grabbing the source tree ("Code -> Download ZIP", or the release
+    # page's "Source code (zip)") instead of a release asset. Detect that (the
+    # source tree carries tools\make-release.ps1, .github\, or .git\, none of
+    # which ride in a release zip) and say so plainly.
     $looksLikeSource = (Test-Path (Join-Path $ScriptDir "tools\make-release.ps1")) -or
                        (Test-Path (Join-Path $ScriptDir ".github")) -or
                        (Test-Path (Join-Path $ScriptDir ".git"))
-    if ($looksLikeSource) {
-        Add-PreflightFailure "TeXLib bundle is missing because this is the GitHub SOURCE download, which does not include the TeXLib library. Do NOT use 'Code -> Download ZIP'. Download the release zip (TeXLib-Installer-v<version>.zip) from $InstallerRepo/releases, extract it, and run install.bat from inside THAT folder."
+    if ($OnlyTeXLib) {
+        Add-PreflightFailure "-OnlyTeXLib refreshes the library FROM a bundled texlib\ snapshot, but none is present next to install.ps1. Use a release zip (it contains texlib\), or run a normal install without -OnlyTeXLib to reuse an already-synced library."
+    } elseif ($looksLikeSource) {
+        Add-PreflightFailure "TeXLib bundle is missing because this is the GitHub SOURCE download, which does not include the TeXLib library, and no existing TeXLib library was found at $UserRootJunctionTarget to reuse. Do NOT use 'Code -> Download ZIP' or the release page's 'Source code (zip)'. Download the release zip (TeXLib-Installer-v<version>.zip) from $InstallerRepo/releases, extract it, and run install.bat from inside THAT folder."
     } else {
-        Add-PreflightFailure "TeXLib bundle not found at $TexLibBundle; the download looks incomplete. Re-download the release zip from $InstallerRepo/releases, extract it fully, and run install.bat from the extracted folder."
+        Add-PreflightFailure "TeXLib bundle not found at $TexLibBundle and no existing TeXLib library found at $UserRootJunctionTarget; the download looks incomplete. Re-download the release zip from $InstallerRepo/releases, extract it fully, and run install.bat from the extracted folder."
     }
 }
 
@@ -935,15 +981,20 @@ if ($DryRun) {
             Write-Host "  * Create user-root junction $UserRootJunction -> $UserRootJunctionTarget (TEXINPUTS-safe path)" -ForegroundColor Gray
         }
     }
+    $TeXLibPlan = if ($UseExistingTeXLib) {
+        "Reuse existing TeXLib library at $TeXLibDir (no bundle to deploy)"
+    } else {
+        "Deploy TeXLib bundle from $TexLibBundle to $TeXLibDir"
+    }
     if ($OnlyTeXLib) {
-        Write-Host "  * Deploy TeXLib bundle from $TexLibBundle to $TeXLibDir" -ForegroundColor Gray
+        Write-Host "  * $TeXLibPlan" -ForegroundColor Gray
         Write-Host "  * Refresh texlib_builder.py + TeXLib.sublime-build in Packages\User" -ForegroundColor Gray
         Write-Host "  * Write $BaseDir\VERSION" -ForegroundColor Gray
     } else {
         Write-Host "  * Install Sublime Text to $SublimeDir" -ForegroundColor Gray
         Write-Host "  * Install SumatraPDF to $SumatraDir"   -ForegroundColor Gray
         Write-Host "  * Install TeX Live to $TexLiveDir (30-60 min)" -ForegroundColor Gray
-        Write-Host "  * Deploy TeXLib bundle from $TexLibBundle to $TeXLibDir" -ForegroundColor Gray
+        Write-Host "  * $TeXLibPlan" -ForegroundColor Gray
         Write-Host "  * Add $TexBinPath to user PATH" -ForegroundColor Gray
         Write-Host "  * Junction $SublimeDir\Data\Packages\User -> $SublimeUserSync" -ForegroundColor Gray
         Write-Host "  * Write LaTeXTools / Preferences / SumatraPDF settings" -ForegroundColor Gray
@@ -1280,17 +1331,20 @@ option_src 0
 # 13. DEPLOY TEXLIB BUNDLE TO ONEDRIVE / DOCUMENTS
 # =============================================================================
 Write-Host ""
-Write-Host "Deploying TeXLib library..." -ForegroundColor Cyan
-
-try {
-    # Mirror the bundle into the TeXLib documents folder. We don't delete extra
-    # files here (the user may have course materials sitting alongside the
-    # library), only overwrite the library bits.
-    Copy-Item "$TexLibBundle\*" $TeXLibDir -Recurse -Force -Exclude ".git", ".github"
-    Write-Host "  Library deployed to $TeXLibDir" -ForegroundColor Green
-} catch {
-    Write-Host "TeXLib deploy failed: $_" -ForegroundColor Red
-    Stop-Installer 7
+if ($UseExistingTeXLib) {
+    Write-Host "Using existing TeXLib library at $TeXLibDir (no bundle to deploy)." -ForegroundColor Cyan
+} else {
+    Write-Host "Deploying TeXLib library..." -ForegroundColor Cyan
+    try {
+        # Mirror the bundle into the TeXLib documents folder. We don't delete
+        # extra files here (the user may have course materials sitting alongside
+        # the library), only overwrite the library bits.
+        Copy-Item "$TexLibBundle\*" $TeXLibDir -Recurse -Force -Exclude ".git", ".github"
+        Write-Host "  Library deployed to $TeXLibDir" -ForegroundColor Green
+    } catch {
+        Write-Host "TeXLib deploy failed: $_" -ForegroundColor Red
+        Stop-Installer 7
+    }
 }
 
 
@@ -1392,11 +1446,14 @@ try {
     }
 
     # 16b. Deploy the TeXLib custom builder + bundled spell-check dictionary.
-    # Source of truth is the bundle. LaTeX.sublime-settings is a syntax-
-    # scoped settings file shipping curated math added_words / ignored_words;
-    # it stacks on top of the user's global Preferences.sublime-settings so
-    # personal proper nouns (collaborators, lab jargon) still apply.
-    $BundledSublimeDir = Join-Path $TexLibBundle "Sublime"
+    # Source of truth is the bundle; when reusing an already-synced library (no
+    # bundle in this installer copy), pull the same files from the library's own
+    # Sublime\ subfolder, which a prior install deployed there. LaTeX.sublime-
+    # settings is a syntax-scoped settings file shipping curated math added_words
+    # / ignored_words; it stacks on top of the user's global
+    # Preferences.sublime-settings so personal proper nouns (collaborators, lab
+    # jargon) still apply.
+    $BundledSublimeDir = if ($UseExistingTeXLib) { Join-Path $TeXLibDir "Sublime" } else { Join-Path $TexLibBundle "Sublime" }
     if (Test-Path $BundledSublimeDir) {
         foreach ($f in @("texlib_builder.py", "TeXLib.sublime-build", "Default.sublime-commands", "LaTeX.sublime-settings")) {
             $src = Join-Path $BundledSublimeDir $f

@@ -4,6 +4,25 @@ All notable changes to TeXLib-Installer are recorded here. Format follows [Keep 
 
 ## [Unreleased]
 
+### Added
+
+- **Detect an existing TeXLib library and reuse it, like the other components.**
+  Pre-flight now treats the library the way it treats TeX Live / Sublime /
+  SumatraPDF: if a valid library (core `.sty` files present) is already synced to
+  the content location, the installer reuses it and skips deploying a bundle — so
+  an installer copy with no bundled `texlib\` (a source checkout, or a copy synced
+  without its `dist\`) installs instead of hard-failing. A bundled snapshot still
+  takes priority when present, and `-OnlyTeXLib` still requires a bundle (its job
+  is to push a newer one).
+
+### Changed
+
+- **Clearer "wrong download" failure** — the missing-bundle error now also names
+  the release page's "Source code (zip)" link (not just "Code → Download ZIP")
+  and reports whether an existing library was found. Reuse detection prints the
+  library version, reading the first concrete `CHANGELOG.md` heading past
+  `[Unreleased]`.
+
 ## [0.6.0] — 2026-06-26
 
 Removes the build-a-`.tex`-from-Windows-Explorer feature and refreshes the bundled TeXLib library to v0.3.0.
