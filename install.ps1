@@ -278,6 +278,23 @@ $Downloads = @{
         "Type" = "Static"
         "Hash" = "3952E9F4825D706DB1A579B52E70663AFA4674C2501A30A8168631424D7AD1B6"
     }
+    "regex" = @{
+        # LaTeXTools' one build-critical dependency. Its plugin.py imports the
+        # whole package at load time, and latextools\utils\analysis.py does a
+        # bare `import regex`; with regex absent that import throws, plugin.py
+        # fails, NO LaTeXTools command registers (including latextools_make_pdf),
+        # and Ctrl+B silently does nothing. Package Control installs this for
+        # you -- but we drop LaTeXTools as a raw archive, so we install it too.
+        # Sublime Text 4's plugin host is CPython 3.8 (win-amd64), so the
+        # cp38-win_amd64 wheel is the correct ABI for every Windows box. To bump:
+        # pick a version at pypi.org/project/regex/#files, take the matching
+        # cp38-cp38-win_amd64 wheel URL + its SHA256. (mdpopups, the other
+        # LaTeXTools dependency, is imported guarded -- previews only -- skipped.)
+        "Url"  = "https://files.pythonhosted.org/packages/cf/69/c39e16320400842eb4358c982ef5fc680800866f35ebfd4dd38a22967ce0/regex-2024.11.6-cp38-cp38-win_amd64.whl"
+        "File" = "regex.zip"
+        "Type" = "Static"
+        "Hash" = "BB8F74F2F10DBF13A0BE8DE623BA4F9491FAF58C24064F32B65679B021ED0001"
+    }
 }
 
 # Folder name inside the pinned LaTeXTools archive (GitHub names it
@@ -478,6 +495,15 @@ function Invoke-Doctor {
         }
     } else {
         _Fail "LaTeXTools.sublime-settings missing from $UserPackagesLocal"
+    }
+
+    # LaTeXTools' build-critical `regex` dependency (see $Downloads). Missing =>
+    # plugin.py fails to load, latextools_make_pdf never registers, Ctrl+B dead.
+    $RegexInit = "$SublimeDir\Data\Lib\python38\regex\__init__.py"
+    if (Test-Path $RegexInit) {
+        _Pass "LaTeXTools 'regex' dependency present (Ctrl+B build enabled)"
+    } else {
+        _Fail "LaTeXTools 'regex' dependency missing ($RegexInit); LaTeXTools won't load and Ctrl+B does nothing"
     }
 
     Write-Host ""
@@ -1445,6 +1471,27 @@ try {
         Move-Item -Path "$TempDir\lt_extract\$LaTeXToolsZipDir" -Destination $LaTeXToolsDir
     }
 
+    # 16a-2. Install LaTeXTools' `regex` dependency into Sublime's ST4 library
+    # path. Without it LaTeXTools' plugin.py fails to import, latextools_make_pdf
+    # never registers, and Ctrl+B does nothing. ST4's plugin host loads libraries
+    # from <Data>\Lib\python38. Not gated on the LaTeXTools install above, so a
+    # re-run repairs a machine whose regex is missing. Idempotent.
+    if (-not $OnlyTeXLib) {
+        $SublimeLibDir = "$SublimeDir\Data\Lib\python38"
+        $RegexPkgDir   = "$SublimeLibDir\regex"
+        if (-not (Test-Path "$RegexPkgDir\__init__.py")) {
+            $RegexZip     = "$TempDir\regex.zip"
+            $RegexExtract = "$TempDir\regex_extract"
+            Get-SourceFile -Key "regex" -DestPath $RegexZip   # a wheel is a zip
+            if (Test-Path $RegexExtract) { Remove-Item $RegexExtract -Recurse -Force }
+            Expand-Archive -Path $RegexZip -DestinationPath $RegexExtract
+            New-Item -ItemType Directory -Force -Path $SublimeLibDir | Out-Null
+            if (Test-Path $RegexPkgDir) { Remove-Item $RegexPkgDir -Recurse -Force }
+            Move-Item -Path "$RegexExtract\regex" -Destination $RegexPkgDir
+            Write-Host "  Installed LaTeXTools dependency 'regex' to $SublimeLibDir" -ForegroundColor Green
+        }
+    }
+
     # 16b. Deploy the TeXLib custom builder + bundled spell-check dictionary.
     # Source of truth is the bundle; when reusing an already-synced library (no
     # bundle in this installer copy), pull the same files from the library's own
@@ -1619,6 +1666,17 @@ TeXLib install verified -- $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss').
             }
         } finally {
             Pop-Location
+        }
+
+        # Sublime build readiness: LaTeXTools' plugin.py won't load without its
+        # `regex` dependency, and then Ctrl+B silently does nothing. Confirm the
+        # library landed where ST4's plugin host looks for it.
+        $RegexInit = "$SublimeDir\Data\Lib\python38\regex\__init__.py"
+        if (Test-Path $RegexInit) {
+            Write-Host "  [OK] LaTeXTools 'regex' dependency present -- Ctrl+B build enabled" -ForegroundColor Green
+        } else {
+            Write-Host "  [WARN] LaTeXTools 'regex' dependency missing ($RegexInit)." -ForegroundColor Yellow
+            Write-Host "         LaTeXTools will not load and Ctrl+B will do nothing. Re-run the installer." -ForegroundColor Yellow
         }
     } catch {
         Write-Host "  [WARN] Verification step failed: $_" -ForegroundColor Yellow
