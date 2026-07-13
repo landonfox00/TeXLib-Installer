@@ -41,7 +41,7 @@ Write-Host ""
 function Stop-Uninstaller {
     param([int]$ExitCode = 0)
     try { Stop-Transcript | Out-Null } catch { $null = $_ }
-    # tools\uninstall_wrapper.ps1 owns the prompt when present; see the
+    # tools\boot_wrapper.ps1 owns the prompt when present; see the
     # matching note in install.ps1's Stop-Installer.
     if (-not $Silent -and $ExitCode -ne 0 -and -not $env:TEXLIB_INSTALLER_WRAPPED) {
         Write-Host ""

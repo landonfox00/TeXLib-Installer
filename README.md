@@ -29,8 +29,7 @@ One-click portable Windows installer for the [TeXLib](https://github.com/landonf
 │   └── SumatraPDF-settings.txt
 ├── tools/
 │   ├── make-release.ps1         # builds the release ZIP (installer + TeXLib bundle)
-│   ├── install_wrapper.ps1      # boot-log + always-pause wrapper for install.bat
-│   └── uninstall_wrapper.ps1    # same, for uninstall.bat
+│   └── boot_wrapper.ps1         # boot-log + always-pause wrapper for install.bat / uninstall.bat
 ├── .github/
 │   ├── ISSUE_TEMPLATE/
 │   │   └── bug_report.yml       # structured issue form for end-user bug reports
