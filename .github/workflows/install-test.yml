@@ -273,7 +273,7 @@ jobs:
           # Every file install.bat / uninstall.bat invoke must ship, or the .bat
           # flashes open and dies (PowerShell -File on a missing script).
           $required = @('install.bat','uninstall.bat','install.ps1','uninstall.ps1',
-                        'tools\install_wrapper.ps1','tools\uninstall_wrapper.ps1',
+                        'tools\boot_wrapper.ps1',
                         'texlib','templates')
           $missing = $required | Where-Object { -not (Test-Path (Join-Path $stage $_)) }
           if ($missing) { Write-Host "FAIL: bundle missing: $($missing -join ', ')" -ForegroundColor Red; exit 1 }
@@ -284,8 +284,8 @@ jobs:
           # (a missing/corrupt wrapper is exactly what makes install.bat flash
           # open and die).
           $werr = $null
-          [void][System.Management.Automation.Language.Parser]::ParseFile((Join-Path $stage 'tools\install_wrapper.ps1'), [ref]$null, [ref]$werr)
-          if ($werr) { Write-Host "FAIL: shipped install_wrapper.ps1 has parse errors" -ForegroundColor Red; exit 1 }
+          [void][System.Management.Automation.Language.Parser]::ParseFile((Join-Path $stage 'tools\boot_wrapper.ps1'), [ref]$null, [ref]$werr)
+          if ($werr) { Write-Host "FAIL: shipped boot_wrapper.ps1 has parse errors" -ForegroundColor Red; exit 1 }
           Write-Host "OK: release bundle contains every file install.bat needs." -ForegroundColor Green
 
   # ---------------------------------------------------------------------------

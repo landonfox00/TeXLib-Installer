@@ -123,7 +123,7 @@ function Stop-Installer {
     if ($TempDir -and (Test-Path $TempDir)) {
         Remove-Item $TempDir -Recurse -Force -ErrorAction SilentlyContinue
     }
-    # When launched via install.bat -> tools\install_wrapper.ps1, the wrapper
+    # When launched via install.bat -> tools\boot_wrapper.ps1, the wrapper
     # owns the pause-on-failure prompt and the exit-code surfacing. Skip our
     # own prompt to avoid two "Press Enter to close" prompts back to back.
     # Direct PS launches (no bat) still see the prompt here.
