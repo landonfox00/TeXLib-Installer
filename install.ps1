@@ -694,135 +694,6 @@ function Get-TeXLibVersion {
     return $null
 }
 
-# --- External-install detection -----------------------------------------------
-# Phase A: detect-and-report only. Findings are informational; the installer
-# still always installs portable copies of every component. Future versions
-# may opt to reuse detected externals (TeX Live + Sumatra are the realistic
-# candidates; Sublime needs config modifications either way so an isolated
-# copy is the right call).
-
-function Find-ExistingSublime {
-    # App Paths registry (set by Sublime's official installer).
-    $appPaths = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\sublime_text.exe"
-    if (Test-Path $appPaths) {
-        $p = (Get-ItemProperty -Path $appPaths -Name "(default)" -ErrorAction SilentlyContinue)."(default)"
-        if ($p -and (Test-Path $p) -and ($p -notlike "$BaseDir*")) { return $p }
-    }
-    # Sublime's own install key.
-    foreach ($hive in @("HKLM:\SOFTWARE\Sublime Text", "HKCU:\SOFTWARE\Sublime Text")) {
-        if (Test-Path $hive) {
-            $base = (Get-ItemProperty -Path $hive -Name "(default)" -ErrorAction SilentlyContinue)."(default)"
-            if ($base) {
-                $exe = Join-Path $base "sublime_text.exe"
-                if ((Test-Path $exe) -and ($exe -notlike "$BaseDir*")) { return $exe }
-            }
-        }
-    }
-    # Common install locations.
-    $candidates = @(
-        "$env:ProgramFiles\Sublime Text\sublime_text.exe",
-        "${env:ProgramFiles(x86)}\Sublime Text\sublime_text.exe",
-        "$env:ProgramFiles\Sublime Text 3\sublime_text.exe",
-        "$env:LOCALAPPDATA\Programs\Sublime Text\sublime_text.exe"
-    )
-    foreach ($c in $candidates) {
-        if ($c -and (Test-Path $c) -and ($c -notlike "$BaseDir*")) { return $c }
-    }
-    # PATH.
-    $cmd = Get-Command sublime_text -ErrorAction SilentlyContinue
-    if ($cmd -and ($cmd.Source -notlike "$BaseDir*")) { return $cmd.Source }
-    return $null
-}
-
-function Find-ExistingSumatra {
-    # App Paths registry.
-    $appPaths = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\SumatraPDF.exe"
-    if (Test-Path $appPaths) {
-        $p = (Get-ItemProperty -Path $appPaths -Name "(default)" -ErrorAction SilentlyContinue)."(default)"
-        if ($p -and (Test-Path $p) -and ($p -notlike "$BaseDir*")) { return $p }
-    }
-    # Common install locations.
-    $candidates = @(
-        "$env:ProgramFiles\SumatraPDF\SumatraPDF.exe",
-        "${env:ProgramFiles(x86)}\SumatraPDF\SumatraPDF.exe",
-        "$env:LOCALAPPDATA\SumatraPDF\SumatraPDF.exe"
-    )
-    foreach ($c in $candidates) {
-        if ($c -and (Test-Path $c) -and ($c -notlike "$BaseDir*")) { return $c }
-    }
-    # Versioned portable copies (e.g. SumatraPDF-3.5.2-64.exe) in LOCALAPPDATA\SumatraPDF.
-    $portableDir = "$env:LOCALAPPDATA\SumatraPDF"
-    if (Test-Path $portableDir) {
-        $glob = Get-ChildItem -Path $portableDir -Filter "SumatraPDF*.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
-        if ($glob -and ($glob.FullName -notlike "$BaseDir*")) { return $glob.FullName }
-    }
-    return $null
-}
-
-function Find-ExistingTeXLive {
-    # Returns @{ Path = 'C:\...\pdflatex.exe'; Year = '2024'; OnPath = $true/$false }
-    # or $null. Excludes installs under $BaseDir.
-
-    # PATH (most reliable signal that pdflatex is actually usable).
-    $found = $null
-    $onPath = $false
-    $cmd = Get-Command pdflatex -ErrorAction SilentlyContinue
-    if ($cmd -and ($cmd.Source -notlike "$BaseDir*")) {
-        $found = $cmd.Source
-        $onPath = $true
-    }
-
-    # Common TeX Live install roots, most recent year first.
-    if (-not $found) {
-        $years = @("2026", "2025", "2024", "2023", "2022")
-        foreach ($y in $years) {
-            foreach ($root in @("C:\texlive\$y\bin\windows", "$env:ProgramFiles\texlive\$y\bin\windows")) {
-                $candidate = Join-Path $root "pdflatex.exe"
-                if ((Test-Path $candidate) -and ($candidate -notlike "$BaseDir*")) {
-                    $found = $candidate
-                    break
-                }
-            }
-            if ($found) { break }
-        }
-    }
-
-    if (-not $found) { return $null }
-
-    # Parse TL year from pdflatex --version output.
-    $year = "unknown"
-    try {
-        $verOut = & $found --version 2>$null | Out-String
-        if ($verOut -match "TeX Live (\d{4})") { $year = $matches[1] }
-        elseif ($verOut -match "MiKTeX")       { return $null }  # handled separately
-    } catch {
-        # Couldn't run it; report path only.
-    }
-
-    return @{ Path = $found; Year = $year; OnPath = $onPath }
-}
-
-function Find-ExistingMiKTeX {
-    # Common install locations for both per-machine and per-user MiKTeX.
-    $candidates = @(
-        "$env:ProgramFiles\MiKTeX\miktex\bin\x64\pdflatex.exe",
-        "${env:ProgramFiles(x86)}\MiKTeX\miktex\bin\x64\pdflatex.exe",
-        "$env:LOCALAPPDATA\Programs\MiKTeX\miktex\bin\x64\pdflatex.exe"
-    )
-    foreach ($c in $candidates) {
-        if ($c -and (Test-Path $c)) { return $c }
-    }
-    # If pdflatex on PATH reports MiKTeX, count that too.
-    $cmd = Get-Command pdflatex -ErrorAction SilentlyContinue
-    if ($cmd) {
-        try {
-            $verOut = & $cmd.Source --version 2>$null | Out-String
-            if ($verOut -match "MiKTeX") { return $cmd.Source }
-        } catch {}
-    }
-    return $null
-}
-
 # 7a. Windows version (need Windows 10 1809 / build 17763 or newer).
 $WinBuild = [System.Environment]::OSVersion.Version.Build
 if ($WinBuild -ge 17763) { Add-PreflightOK "Windows build $WinBuild (>= 17763 required)" }
@@ -882,36 +753,14 @@ $OurTex = Get-Command pdflatex -ErrorAction SilentlyContinue
 if ($OurTex -and ($OurTex.Source -like "$BaseDir*")) {
     Add-PreflightOK "Existing TeXLib install detected at $($OurTex.Source) (Skip/Reinstall prompt below)"
 } else {
-    $extTL = Find-ExistingTeXLive
-    $extMK = Find-ExistingMiKTeX
-    if ($extTL) {
-        Add-PreflightOK "TeX Live $($extTL.Year) detected at $($extTL.Path)"
-        Add-PreflightNote "(still installing our own TL 2025 in this version; future -UseSystemTeX flag will let you reuse it without re-downloading)"
-    } elseif ($extMK) {
-        Add-PreflightOK "MiKTeX detected at $extMK"
-        Add-PreflightNote "(will install our own TL 2025 alongside; MiKTeX and TeX Live coexist fine, PATH order will favor whichever was added last)"
-    } else {
-        Add-PreflightOK "No existing TeX distribution detected; will install TL 2025"
-    }
+    Add-PreflightOK "Will install an isolated TeX Live 2025 under $BaseDir"
 }
 
-# 7f. Detect existing Sublime Text.
-$extSublime = Find-ExistingSublime
-if ($extSublime) {
-    Add-PreflightOK "Sublime Text detected at $extSublime"
-    Add-PreflightNote "(installing isolated portable copy under $SublimeDir; your existing Sublime is not modified, and our texlib_builder plugin is scoped to the portable install)"
-} else {
-    Add-PreflightOK "No existing Sublime Text detected; will install portable copy"
-}
+# 7f. Sublime Text: always an isolated portable copy.
+Add-PreflightOK "Installing an isolated portable Sublime Text under $SublimeDir (any existing Sublime is left untouched; our texlib_builder plugin is scoped to it)"
 
-# 7g. Detect existing SumatraPDF.
-$extSumatra = Find-ExistingSumatra
-if ($extSumatra) {
-    Add-PreflightOK "SumatraPDF detected at $extSumatra"
-    Add-PreflightNote "(still installing our own portable copy in this version; future -UseSystemSumatra flag will let you reuse it)"
-} else {
-    Add-PreflightOK "No existing SumatraPDF detected; will install portable copy"
-}
+# 7g. SumatraPDF: always a portable copy.
+Add-PreflightOK "Installing a portable SumatraPDF (any existing install is left untouched)"
 
 # 7h. OneDrive enrollment.
 if ($UsingOneDrive) {

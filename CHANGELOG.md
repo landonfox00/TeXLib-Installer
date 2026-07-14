@@ -14,6 +14,17 @@ All notable changes to TeXLib-Installer are recorded here. Format follows [Keep 
   `install.bat` / `uninstall.bat` and `make-release.ps1`'s ship list updated to
   match.
 
+### Removed
+
+- **Speculative external-install detection** (~150 lines). The four
+  `Find-Existing*` probes (system TeX Live / MiKTeX / Sublime / SumatraPDF) and
+  their preflight notes were detect-and-report only — the installer always
+  installs isolated portable copies regardless — and were groundwork for a
+  `-UseSystemTeX` / `-UseSystemSumatra` reuse feature that isn't planned. The
+  "existing TeXLib install detected" idempotency check (for the Skip/Reinstall
+  prompt) is unchanged; preflight still reports that portable copies will be
+  installed without touching any existing tools.
+
 ## [0.6.1] — 2026-07-04
 
 A Sublime-integration point release. Fixes the headline bug on a clean install — **Ctrl+B doing nothing** — by installing LaTeXTools' missing `regex` dependency and pinning Ctrl+B to the TeXLib build system. Also makes the installer **reuse a TeXLib library that's already synced** (OneDrive), so a source checkout or a copy without its `dist\` installs instead of hard-failing at pre-flight. Same bundled TeXLib library as v0.6.0 (`v0.3.0`); no library changes.
