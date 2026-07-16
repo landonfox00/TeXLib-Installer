@@ -25,6 +25,21 @@ All notable changes to TeXLib-Installer are recorded here. Format follows [Keep 
   prompt) is unchanged; preflight still reports that portable copies will be
   installed without touching any existing tools.
 
+### Fixed
+
+- **Uninstaller crashed on a no-arg launch** (the normal double-click) with
+  `A positional parameter cannot be found that accepts argument '$null'`,
+  aborting before removing anything. `tools\boot_wrapper.ps1` collects passthrough
+  args via `ValueFromRemainingArguments`, which WinPS 5.1 leaves as `$null` (not
+  an empty array) when none are given; splatting `$null` forwarded a lone
+  positional `$null` to the inner script, and `uninstall.ps1` — whose only
+  parameter is `[switch]$Silent` — had nothing to bind it to. (`install.ps1`
+  escaped by luck: its `[string]$InstallPath` positional absorbed the stray
+  `$null`.) The wrapper now coerces `$InnerArgs` to `@()` before the splat. Shipped
+  in v0.6.0's `tools\uninstall_wrapper.ps1`; carried into the merged
+  `boot_wrapper.ps1`. New `wrapper-arg-forwarding` CI job drives the real wrapper
+  against a switch-only stub inner script to lock the fix in.
+
 ## [0.6.1] — 2026-07-04
 
 A Sublime-integration point release. Fixes the headline bug on a clean install — **Ctrl+B doing nothing** — by installing LaTeXTools' missing `regex` dependency and pinning Ctrl+B to the TeXLib build system. Also makes the installer **reuse a TeXLib library that's already synced** (OneDrive), so a source checkout or a copy without its `dist\` installs instead of hard-failing at pre-flight. Same bundled TeXLib library as v0.6.0 (`v0.3.0`); no library changes.
