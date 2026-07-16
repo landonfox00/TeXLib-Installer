@@ -75,6 +75,16 @@ try {
         throw "$Kind.ps1 not found at $InnerScript. Is this a complete release archive?"
     }
 
+    # A no-arg launch (the normal double-click path) leaves $InnerArgs = $null
+    # under WinPS 5.1 -- ValueFromRemainingArguments binds nothing to $null, not
+    # an empty array. Splatting $null passes a single positional $null to the
+    # inner script; uninstall.ps1 has only [switch]$Silent (no positional-capable
+    # param), so it aborts with "A positional parameter cannot be found that
+    # accepts argument '$null'" BEFORE doing anything. (install.ps1 dodged this
+    # by luck -- its [string]$InstallPath positional absorbed the stray $null.)
+    # Coerce to an empty array so the splat forwards zero args, as intended.
+    if ($null -eq $InnerArgs) { $InnerArgs = @() }
+
     # *>&1 merges every output stream into the success stream so Tee-Object
     # captures host writes, warnings, verbose, AND error records to the boot
     # log without losing colors on the live console.
