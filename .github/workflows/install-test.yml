@@ -63,6 +63,67 @@ jobs:
           Write-Host "Encoding guard passed." -ForegroundColor Green
 
   # ---------------------------------------------------------------------------
+  # 1b. wrapper-arg-forwarding — FAST. Regression for the v0.6.0 uninstaller
+  #     crash: a no-arg launch (normal double-click) left $InnerArgs = $null, and
+  #     `& $Inner @InnerArgs` splatted a lone $null as a POSITIONAL argument.
+  #     uninstall.ps1 has only [switch]$Silent (no positional-capable param), so
+  #     WinPS 5.1 aborted with "A positional parameter cannot be found that
+  #     accepts argument '$null'" BEFORE uninstalling anything. install.ps1 only
+  #     dodged it because its [string]$InstallPath positional absorbed the null.
+  #     Drives the REAL boot_wrapper.ps1 against a stub inner script whose param
+  #     block matches uninstall.ps1 (switch-only), reproducing the exact crash
+  #     condition, and asserts it does not recur. The other jobs run install.ps1
+  #     directly and never exercise the wrapper's splat, so this is the only
+  #     guard for it.
+  # ---------------------------------------------------------------------------
+  wrapper-arg-forwarding:
+    if: github.event_name != 'schedule'
+    runs-on: windows-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+      - name: boot_wrapper.ps1 forwards zero inner args without a stray $null
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # Assemble a sandbox mirroring the release layout (tools\ one level
+          # below the inner script) so the REAL wrapper's Split-Path resolution
+          # finds our stub as the sibling '<Kind>.ps1'.
+          $sandbox = Join-Path $env:RUNNER_TEMP 'wrap-arg-test'
+          Remove-Item -Recurse -Force $sandbox -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force -Path (Join-Path $sandbox 'tools') | Out-Null
+          Copy-Item .\tools\boot_wrapper.ps1 (Join-Path $sandbox 'tools\boot_wrapper.ps1')
+          # Stub inner script with uninstall.ps1's exact switch-only signature.
+          $stub = @(
+            '[CmdletBinding()]'
+            'param([switch]$Silent)'
+            'Write-Host "STUB-INNER-RAN Silent=$Silent"'
+            'exit 0'
+          ) -join "`r`n"
+          Set-Content -Encoding UTF8 -Path (Join-Path $sandbox 'uninstall.ps1') -Value $stub
+
+          # Launch exactly as uninstall.bat does: WinPS 5.1, -File, positional
+          # 'uninstall', NO further args. `type nul |` feeds a closed, empty
+          # stdin so the wrapper's final Read-Host returns at once instead of
+          # hanging the headless job.
+          $wrapper = Join-Path $sandbox 'tools\boot_wrapper.ps1'
+          $out = & cmd /c "type nul | powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$wrapper`" uninstall" 2>&1 | Out-String
+          $rc = $LASTEXITCODE
+          Write-Host $out
+          Write-Host "wrapper exit code: $rc"
+
+          if ($out -match 'positional parameter cannot be found') {
+            Write-Host "FAIL: the stray-`$null splat regressed." -ForegroundColor Red; exit 1
+          }
+          if ($out -notmatch 'STUB-INNER-RAN') {
+            Write-Host "FAIL: inner script never ran through the wrapper." -ForegroundColor Red; exit 1
+          }
+          if ($rc -ne 0) {
+            Write-Host "FAIL: wrapper exited $rc (expected 0)." -ForegroundColor Red; exit 1
+          }
+          Write-Host "OK: boot_wrapper forwards zero inner args cleanly." -ForegroundColor Green
+
+  # ---------------------------------------------------------------------------
   # 2. verify-downloads — FAST hash-rot canary. Runs install.ps1 -VerifyDownloads
   #    (early-exit: downloads each pinned component, checks its SHA256/512, exits
   #    0 all-good / 20 drift) on a clean VM. Catches a vendor silently
