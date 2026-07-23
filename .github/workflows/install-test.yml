@@ -123,6 +123,67 @@ jobs:
           }
           Write-Host "OK: boot_wrapper forwards zero inner args cleanly." -ForegroundColor Green
 
+      - name: boot_wrapper.ps1 forwards NAMED arguments to the right parameters
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # Testing only the zero-arg case is precisely why the named-argument
+          # bug shipped from v0.3.0 through v0.6.0. `& $script @array` splats
+          # POSITIONALLY, so every documented `install.bat -Flag` form was
+          # wrong: -Doctor landed in install.ps1's positional [string]
+          # $InstallPath (starting a real install into a folder named
+          # "-Doctor"), while uninstall.ps1 -- with no positional parameter to
+          # absorb it -- aborted outright. This drives the REAL wrapper against
+          # stubs shaped like the real scripts and checks where each token
+          # actually lands.
+          $sandbox = Join-Path $env:RUNNER_TEMP 'wrap-named-test'
+          Remove-Item -Recurse -Force $sandbox -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force -Path (Join-Path $sandbox 'tools') | Out-Null
+          Copy-Item .\tools\boot_wrapper.ps1 (Join-Path $sandbox 'tools\boot_wrapper.ps1')
+
+          # install.ps1's shape: switches PLUS a positional string parameter.
+          $inst = @(
+            '[CmdletBinding()]'
+            'param([switch]$Silent,[switch]$Doctor,[switch]$DryRun,[string]$InstallPath = "")'
+            'Write-Host "BOUND Silent=$Silent Doctor=$Doctor DryRun=$DryRun InstallPath=[$InstallPath]"'
+            'exit 0'
+          ) -join "`r`n"
+          Set-Content -Encoding UTF8 -Path (Join-Path $sandbox 'install.ps1') -Value $inst
+          # uninstall.ps1's shape: switch-only, nothing to absorb a stray token.
+          $unin = @(
+            '[CmdletBinding()]'
+            'param([switch]$Silent,[switch]$RemoveJunction)'
+            'Write-Host "BOUND Silent=$Silent RemoveJunction=$RemoveJunction"'
+            'exit 0'
+          ) -join "`r`n"
+          Set-Content -Encoding UTF8 -Path (Join-Path $sandbox 'uninstall.ps1') -Value $unin
+
+          $wrapper = Join-Path $sandbox 'tools\boot_wrapper.ps1'
+          $bad = 0
+          function Drive($argline, $expect) {
+            $out = & cmd /c "type nul | powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$wrapper`" $argline" 2>&1 | Out-String
+            $line = ($out -split "`r?`n" | Where-Object { $_ -match '^BOUND ' } | Select-Object -First 1)
+            $ok = ($line -eq $expect)
+            if ($out -match 'positional parameter cannot be found') { $ok = $false }
+            if (-not $ok) { $script:bad++ }
+            "{0}  {1,-38} {2}" -f $(if($ok){'PASS'}else{'FAIL'}), $argline, $line
+            if (-not $ok) { "        expected: $expect" }
+          }
+
+          Drive 'uninstall'                          'BOUND Silent=False RemoveJunction=False'
+          Drive 'uninstall -Silent'                  'BOUND Silent=True RemoveJunction=False'
+          Drive 'uninstall -RemoveJunction -Silent'  'BOUND Silent=True RemoveJunction=True'
+          Drive 'install'                            'BOUND Silent=False Doctor=False DryRun=False InstallPath=[]'
+          Drive 'install -Silent'                    'BOUND Silent=True Doctor=False DryRun=False InstallPath=[]'
+          Drive 'install -Doctor'                    'BOUND Silent=False Doctor=True DryRun=False InstallPath=[]'
+          Drive 'install -DryRun -Silent'            'BOUND Silent=True Doctor=False DryRun=True InstallPath=[]'
+          Drive 'install -InstallPath C:\Tools\TL'   'BOUND Silent=False Doctor=False DryRun=False InstallPath=[C:\Tools\TL]'
+          Drive 'install -Silent -InstallPath C:\Tools\TL' 'BOUND Silent=True Doctor=False DryRun=False InstallPath=[C:\Tools\TL]'
+          Drive 'install C:\Tools\TL'                'BOUND Silent=False Doctor=False DryRun=False InstallPath=[C:\Tools\TL]'
+
+          if ($bad) { Write-Host "$bad case(s) failed." -ForegroundColor Red; exit 1 }
+          Write-Host "OK: named arguments reach their real parameters through the wrapper." -ForegroundColor Green
+
   # ---------------------------------------------------------------------------
   # 1c. unit-helpers — FASTEST. Pure-logic coverage for install.ps1's decision
   #     helpers, with no VM install and no network.
@@ -238,6 +299,66 @@ jobs:
 
           if ($bad) { Write-Host "$bad case(s) failed." -ForegroundColor Red; exit 1 }
           Write-Host "OK: junction-ownership decision holds." -ForegroundColor Green
+
+      - name: ConvertTo-InnerArgumentBinding case table (extracted from boot_wrapper.ps1)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $ast = [System.Management.Automation.Language.Parser]::ParseFile(
+                   (Resolve-Path .\tools\boot_wrapper.ps1), [ref]$null, [ref]$null)
+          $fn = $ast.FindAll({
+                  param($n)
+                  $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+                  $n.Name -eq 'ConvertTo-InnerArgumentBinding' }, $true)
+          if ($fn.Count -ne 1) {
+            Write-Host "FAIL: expected exactly 1 ConvertTo-InnerArgumentBinding, found $($fn.Count)." -ForegroundColor Red
+            exit 1
+          }
+          . ([scriptblock]::Create($fn[0].Extent.Text))
+
+          # Mirrors install.ps1's real parameter shape: switches plus two
+          # value-taking parameters, one of which ($InstallPath) is positional
+          # and therefore silently absorbed stray tokens before the fix.
+          $IsSwitch = @{
+            Silent = $true; Doctor = $true; Version = $true; DryRun = $true
+            OnlyTeXLib = $true; Sandbox = $true; HideJunction = $true; VerifyDownloads = $true
+            InstallPath = $false; TeXLibPath = $false
+          }
+          $bad = 0
+          function Check($desc, $tokens, $expectNamed, $expectPositional) {
+            $b = ConvertTo-InnerArgumentBinding -Tokens $tokens -IsSwitch $IsSwitch
+            $gotN = ($b.Named.GetEnumerator() | Sort-Object Key | ForEach-Object { "$($_.Key)=$($_.Value)" }) -join ','
+            $gotP = (@($b.Positional)) -join ','
+            $ok = ($gotN -eq $expectNamed) -and ($gotP -eq $expectPositional)
+            if (-not $ok) { $script:bad++ }
+            "{0}  {1,-34} named[{2}] pos[{3}]" -f $(if($ok){'PASS'}else{'FAIL'}), $desc, $gotN, $gotP
+            if (-not $ok) { "        expected named[$expectNamed] pos[$expectPositional]" }
+          }
+
+          Check 'no tokens'                 @()                                ''                             ''
+          Check 'null tokens'               $null                              ''                             ''
+          Check 'single switch'             @('-Silent')                       'Silent=True'                  ''
+          Check 'two switches'              @('-DryRun','-Silent')             'DryRun=True,Silent=True'      ''
+          Check 'value param'               @('-InstallPath','C:\T')           'InstallPath=C:\T'             ''
+          Check 'switch + value param'      @('-Silent','-InstallPath','C:\T') 'InstallPath=C:\T,Silent=True' ''
+          Check 'bare positional'           @('C:\T')                          ''                             'C:\T'
+          Check 'lowercase name'            @('-silent')                       'Silent=True'                  ''
+          Check 'UPPERCASE name'            @('-SILENT')                       'Silent=True'                  ''
+          Check 'unique prefix'             @('-Sandb')                        'Sandbox=True'                 ''
+          Check 'colon form, value'         @('-InstallPath:C:\T')             'InstallPath=C:\T'             ''
+          Check 'colon form, switch $false' @('-Silent:$false')                'Silent=False'                 ''
+          Check 'colon form, switch true'   @('-Silent:true')                  'Silent=True'                  ''
+          Check 'unknown flag stays named'  @('-Bogus')                        'Bogus=True'                   ''
+          Check 'value param at end'        @('-InstallPath')                  'InstallPath=True'             ''
+          Check 'value param before flag'   @('-InstallPath','-Silent')        'InstallPath=True,Silent=True' ''
+          Check 'positional then switch'    @('C:\T','-Silent')                'Silent=True'                  'C:\T'
+          Check 'lone dash is positional'   @('-')                             ''                             '-'
+          # -V is ambiguous (Version / VerifyDownloads): forward as-is and let
+          # the inner script reject it rather than silently picking one.
+          Check 'ambiguous prefix forwarded' @('-V')                           'V=True'                       ''
+
+          if ($bad) { Write-Host "$bad case(s) failed." -ForegroundColor Red; exit 1 }
+          Write-Host "OK: argument binding holds across 19 forms." -ForegroundColor Green
 
   # ---------------------------------------------------------------------------
   # 2. verify-downloads — FAST hash-rot canary. Runs install.ps1 -VerifyDownloads

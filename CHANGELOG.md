@@ -65,6 +65,36 @@ Also adds `-TeXLibPath` / `-Sandbox`, which make the installer runnable on a dev
   string comparison got backwards). Falls back to string inequality for tags
   that don't parse.
 
+- **Every documented `install.bat -Flag` / `uninstall.bat -Flag` form was
+  broken** — present since v0.3.0 and shipped in v0.5.0, v0.5.1 and v0.6.0.
+  `tools\boot_wrapper.ps1` collected passthrough arguments into an array and
+  forwarded them with `& $InnerScript @InnerArgs`; **array splatting binds
+  positionally** and never re-reads `-Silent` as a parameter name (only a
+  hashtable splat does). The consequences differed by script, and the quieter
+  one was the worse one:
+
+  | invocation | before |
+  | --- | --- |
+  | `install.bat -Doctor` | ran a **full install** into a folder named `-Doctor` |
+  | `install.bat -Silent` | installed **non**-silently into a folder named `-Silent` |
+  | `install.bat -DryRun -Silent` | crashed |
+  | `install.bat -InstallPath <dir>` | crashed |
+  | `uninstall.bat -Silent` | crashed, exit 99, removing nothing |
+
+  `install.ps1`'s positional `[string]$InstallPath` silently swallowed the first
+  flag, so the two most-recommended commands in INSTALL.md — including
+  "First thing to try: `install.bat -Doctor`" — did the opposite of what they
+  say. The wrapper now reads the inner script's own parameter metadata to learn
+  which names are switches, and rebuilds the tokens into a named hashtable plus
+  positional array (handling `-Name:Value`, `-Switch:$false`, case, and unique
+  prefixes; ambiguous or unknown names are forwarded as-is so the inner script
+  reports them properly). If the metadata can't be read it falls back to the old
+  positional splat — a boot wrapper degrades, it does not refuse to launch.
+
+  Caught by the `full-install` teardown, which this release routes through
+  `uninstall.bat` for the first time; `wrapper-arg-forwarding` previously tested
+  only the zero-argument case, which is exactly how it went unnoticed.
+
 - **The uninstaller removed any junction at `%USERPROFILE%\TeXLib`, not just
   its own.** It checked that the path was a reparse point — so a real folder was
   always safe, and the target's contents were never at risk — but not that the
@@ -109,9 +139,14 @@ Also adds `-TeXLibPath` / `-Sandbox`, which make the installer runnable on a dev
   The job fails loudly if the function is renamed or re-inlined. A second step
   covers `uninstall.ps1`'s `Test-InstallerOwnsJunction` the same way — there the
   isolation is the point, since the alternative is creating a real junction at
-  `%USERPROFILE%\TeXLib`. `reuse-existing-library` also plants an *unclaimed*
-  junction before teardown and asserts the uninstaller leaves it, and its
-  target's contents, alone.
+  `%USERPROFILE%\TeXLib`. A third covers `boot_wrapper.ps1`'s
+  `ConvertTo-InnerArgumentBinding` across 19 token forms.
+  `reuse-existing-library` also plants an *unclaimed* junction before teardown
+  and asserts the uninstaller leaves it, and its target's contents, alone, and
+  `wrapper-arg-forwarding` grew from a single zero-argument case into a
+  ten-form matrix that drives the real wrapper against stubs shaped like the
+  real scripts and checks **where each token actually lands** — the assertion
+  the previous version was missing.
 
 - **`tools\dev-install-test.ps1`** — seeds a returning machine in a temp
   sandbox and drives a real full install through it twice (silent, then
