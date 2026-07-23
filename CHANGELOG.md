@@ -4,6 +4,14 @@ All notable changes to TeXLib-Installer are recorded here. Format follows [Keep 
 
 ## [Unreleased]
 
+## [0.6.2] — 2026-07-23
+
+A reliability release for the **returning machine** — a computer that already has TeXLib. Every path unique to that state was broken or untested: reusing an already-synced library aborted the install at the very last step, the uninstaller crashed on a plain double-click before removing anything, the update check offered to "update" you to an older release, and the uninstaller would unlink a `%USERPROFILE%\TeXLib` junction it had never created. None of it was visible to CI, which only ever installed once onto a clean VM.
+
+Also adds `-TeXLibPath` / `-Sandbox`, which make the installer runnable on a development machine without writing outside a throwaway directory, and the test tiers that keep the above from regressing.
+
+> **v0.6.1 was prepared but never tagged or published** — no `v0.6.1` tag exists in this repository. Its changes (LaTeXTools' missing `regex` dependency, Ctrl+B pinned to the TeXLib build system, and reuse of an already-synced library) ship to users for the first time here. Anyone who ran a "0.6.1" build took it from the source tree, which is how the reuse path above got exercised before it was fixed.
+
 ### Changed
 
 - **Merged `tools\install_wrapper.ps1` + `tools\uninstall_wrapper.ps1` into one
@@ -57,6 +65,36 @@ All notable changes to TeXLib-Installer are recorded here. Format follows [Keep 
   string comparison got backwards). Falls back to string inequality for tags
   that don't parse.
 
+- **Every documented `install.bat -Flag` / `uninstall.bat -Flag` form was
+  broken** — present since v0.3.0 and shipped in v0.5.0, v0.5.1 and v0.6.0.
+  `tools\boot_wrapper.ps1` collected passthrough arguments into an array and
+  forwarded them with `& $InnerScript @InnerArgs`; **array splatting binds
+  positionally** and never re-reads `-Silent` as a parameter name (only a
+  hashtable splat does). The consequences differed by script, and the quieter
+  one was the worse one:
+
+  | invocation | before |
+  | --- | --- |
+  | `install.bat -Doctor` | ran a **full install** into a folder named `-Doctor` |
+  | `install.bat -Silent` | installed **non**-silently into a folder named `-Silent` |
+  | `install.bat -DryRun -Silent` | crashed |
+  | `install.bat -InstallPath <dir>` | crashed |
+  | `uninstall.bat -Silent` | crashed, exit 99, removing nothing |
+
+  `install.ps1`'s positional `[string]$InstallPath` silently swallowed the first
+  flag, so the two most-recommended commands in INSTALL.md — including
+  "First thing to try: `install.bat -Doctor`" — did the opposite of what they
+  say. The wrapper now reads the inner script's own parameter metadata to learn
+  which names are switches, and rebuilds the tokens into a named hashtable plus
+  positional array (handling `-Name:Value`, `-Switch:$false`, case, and unique
+  prefixes; ambiguous or unknown names are forwarded as-is so the inner script
+  reports them properly). If the metadata can't be read it falls back to the old
+  positional splat — a boot wrapper degrades, it does not refuse to launch.
+
+  Caught by the `full-install` teardown, which this release routes through
+  `uninstall.bat` for the first time; `wrapper-arg-forwarding` previously tested
+  only the zero-argument case, which is exactly how it went unnoticed.
+
 - **The uninstaller removed any junction at `%USERPROFILE%\TeXLib`, not just
   its own.** It checked that the path was a reparse point — so a real folder was
   always safe, and the target's contents were never at risk — but not that the
@@ -101,9 +139,14 @@ All notable changes to TeXLib-Installer are recorded here. Format follows [Keep 
   The job fails loudly if the function is renamed or re-inlined. A second step
   covers `uninstall.ps1`'s `Test-InstallerOwnsJunction` the same way — there the
   isolation is the point, since the alternative is creating a real junction at
-  `%USERPROFILE%\TeXLib`. `reuse-existing-library` also plants an *unclaimed*
-  junction before teardown and asserts the uninstaller leaves it, and its
-  target's contents, alone.
+  `%USERPROFILE%\TeXLib`. A third covers `boot_wrapper.ps1`'s
+  `ConvertTo-InnerArgumentBinding` across 19 token forms.
+  `reuse-existing-library` also plants an *unclaimed* junction before teardown
+  and asserts the uninstaller leaves it, and its target's contents, alone, and
+  `wrapper-arg-forwarding` grew from a single zero-argument case into a
+  ten-form matrix that drives the real wrapper against stubs shaped like the
+  real scripts and checks **where each token actually lands** — the assertion
+  the previous version was missing.
 
 - **`tools\dev-install-test.ps1`** — seeds a returning machine in a temp
   sandbox and drives a real full install through it twice (silent, then
@@ -127,7 +170,10 @@ All notable changes to TeXLib-Installer are recorded here. Format follows [Keep 
   that invoking `uninstall.ps1` directly can never reproduce. `full-install`'s
   teardown now goes through `uninstall.bat` too.
 
-## [0.6.1] — 2026-07-04
+## [0.6.1] — 2026-07-04 (never published)
+
+> Prepared but never tagged or released; there is no `v0.6.1` tag. These changes
+> reached users in [0.6.2](#062--2026-07-23).
 
 A Sublime-integration point release. Fixes the headline bug on a clean install — **Ctrl+B doing nothing** — by installing LaTeXTools' missing `regex` dependency and pinning Ctrl+B to the TeXLib build system. Also makes the installer **reuse a TeXLib library that's already synced** (OneDrive), so a source checkout or a copy without its `dist\` installs instead of hard-failing at pre-flight. Same bundled TeXLib library as v0.6.0 (`v0.3.0`); no library changes.
 
@@ -350,7 +396,8 @@ Initial release. Reorganized and hardened port of the OneTeX installer (now arch
 - Final `Pause` at end of install (anti-pattern; replaced with conditional Read-Host on failure only).
 - Legacy `SublimeUser` folder references (TeXLib now uses `Sublime/` as the canonical sync location).
 
-[Unreleased]: https://github.com/landonfox00/TeXLib-Installer/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/landonfox00/TeXLib-Installer/compare/v0.6.2...HEAD
+[0.6.2]: https://github.com/landonfox00/TeXLib-Installer/compare/v0.6.0...v0.6.2
 [0.6.0]: https://github.com/landonfox00/TeXLib-Installer/compare/v0.5.1...v0.6.0
 [0.5.1]: https://github.com/landonfox00/TeXLib-Installer/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/landonfox00/TeXLib-Installer/compare/v0.2.1...v0.5.0

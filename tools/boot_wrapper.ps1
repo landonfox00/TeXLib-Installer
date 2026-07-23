@@ -68,6 +68,91 @@ Write-Host ""
 Write-Host "Boot log: $BootLog" -ForegroundColor Gray
 Write-Host ""
 
+# -----------------------------------------------------------------------------
+# Argument forwarding
+# -----------------------------------------------------------------------------
+# ValueFromRemainingArguments hands us a flat ARRAY of tokens, and `& $script
+# @array` splats them POSITIONALLY -- array splatting never re-interprets
+# "-Silent" as a parameter name. Only a HASHTABLE splat binds named parameters.
+# So every documented `install.bat -Flag` form was broken: `-Doctor` landed in
+# install.ps1's positional [string]$InstallPath (running a full install into a
+# folder named "-Doctor"), and uninstall.ps1, having no positional parameter to
+# absorb it, aborted outright.
+#
+# Rebuild the tokens into a named hashtable + positional array, using the inner
+# script's OWN parameter metadata to know which names are switches (and so do
+# not consume the next token). Kept as a named function, with the metadata
+# passed in rather than looked up, so unit-helpers can lift it out by AST and
+# test the binding without executing anything.
+function ConvertTo-InnerArgumentBinding {
+    param(
+        [object[]]$Tokens,
+        [hashtable]$IsSwitch   # parameter name -> [bool] "is a switch"
+    )
+
+    $named = @{}
+    $positional = @()
+    if (-not $Tokens) { return @{ Named = $named; Positional = $positional } }
+    if (-not $IsSwitch) { $IsSwitch = @{} }
+
+    for ($i = 0; $i -lt $Tokens.Count; $i++) {
+        $tok = $Tokens[$i]
+
+        # Anything that isn't a "-name" token is positional.
+        if ($tok -isnot [string] -or $tok.Length -lt 2 -or -not $tok.StartsWith('-')) {
+            $positional += $tok
+            continue
+        }
+
+        $name = $tok.Substring(1)
+        # PowerShell's -Name:Value form.
+        $inline = $null
+        $colon = $name.IndexOf(':')
+        if ($colon -ge 0) {
+            $inline = $name.Substring($colon + 1)
+            $name   = $name.Substring(0, $colon)
+        }
+        if (-not $name) { $positional += $tok; continue }
+
+        # Resolve against the real parameter names: exact (case-insensitive)
+        # first, then a UNIQUE prefix, matching how PowerShell itself binds.
+        # An unresolved name is still forwarded as named, so the inner script
+        # produces its own clear "parameter cannot be found" error rather than
+        # silently swallowing the token as a positional value.
+        $key = @($IsSwitch.Keys | Where-Object { $_ -ieq $name }) | Select-Object -First 1
+        if (-not $key) {
+            $prefix = @($IsSwitch.Keys | Where-Object { $_ -ilike "$name*" })
+            if ($prefix.Count -eq 1) { $key = $prefix[0] }
+        }
+        $bindAs = if ($key) { $key } else { $name }
+
+        if ($null -ne $inline) {
+            # -Switch:$false is a real idiom; coerce so the hashtable splat gets
+            # a boolean rather than a non-empty (hence always-true) string.
+            if ($key -and $IsSwitch[$key]) {
+                $named[$bindAs] = @('false', '$false', '0') -notcontains $inline.Trim().ToLowerInvariant()
+            } else {
+                $named[$bindAs] = $inline
+            }
+            continue
+        }
+
+        if ($key -and $IsSwitch[$key]) { $named[$bindAs] = $true; continue }
+
+        # Value-taking (or unknown): consume the next token unless it is itself
+        # a flag or we are at the end.
+        $next = if ($i + 1 -lt $Tokens.Count) { $Tokens[$i + 1] } else { $null }
+        if ($null -ne $next -and -not ($next -is [string] -and $next.Length -ge 2 -and $next.StartsWith('-'))) {
+            $named[$bindAs] = $next
+            $i++
+        } else {
+            $named[$bindAs] = $true
+        }
+    }
+
+    return @{ Named = $named; Positional = $positional }
+}
+
 $RC = 0
 try {
     $InnerScript = Join-Path $ScriptDir "$Kind.ps1"
@@ -85,10 +170,31 @@ try {
     # Coerce to an empty array so the splat forwards zero args, as intended.
     if ($null -eq $InnerArgs) { $InnerArgs = @() }
 
+    # Ask the inner script which of its parameters are switches. If this fails
+    # for any reason, fall back to the old positional splat: a boot wrapper must
+    # degrade rather than refuse to launch.
+    $IsSwitch = @{}
+    try {
+        $InnerCmd = Get-Command -Name $InnerScript -CommandType ExternalScript -ErrorAction Stop
+        foreach ($kv in $InnerCmd.Parameters.GetEnumerator()) {
+            $IsSwitch[$kv.Key] = [bool]$kv.Value.SwitchParameter
+        }
+    } catch {
+        Write-Host "  [warn] Could not read $Kind.ps1 parameters ($($_.Exception.Message));" -ForegroundColor Yellow
+        Write-Host "         forwarding arguments positionally." -ForegroundColor Yellow
+    }
+
     # *>&1 merges every output stream into the success stream so Tee-Object
     # captures host writes, warnings, verbose, AND error records to the boot
     # log without losing colors on the live console.
-    & $InnerScript @InnerArgs *>&1 | Tee-Object -FilePath $BootLog
+    if ($IsSwitch.Count -gt 0) {
+        $Binding    = ConvertTo-InnerArgumentBinding -Tokens $InnerArgs -IsSwitch $IsSwitch
+        $NamedArgs  = $Binding.Named
+        $PositionalArgs = @($Binding.Positional)
+        & $InnerScript @NamedArgs @PositionalArgs *>&1 | Tee-Object -FilePath $BootLog
+    } else {
+        & $InnerScript @InnerArgs *>&1 | Tee-Object -FilePath $BootLog
+    }
     $RC = $LASTEXITCODE
     if ($null -eq $RC) { $RC = 0 }
 
