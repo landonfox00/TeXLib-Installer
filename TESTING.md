@@ -31,6 +31,31 @@ Get-ChildItem -Recurse -Include *.ps1 | ForEach-Object {
 > If editing on a OneDrive path, verify parsing on a copy under `$env:TEMP` —
 > OneDrive can briefly desync a file mid-write and produce phantom errors.
 
+## 1b. Contained local install (fast, safe to run on your own machine)
+
+▶ From the repo root in PowerShell:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools\dev-install-test.ps1
+```
+
+✓ `ALL ASSERTIONS PASSED` (exit 0).
+
+Builds a *returning machine* in a temp sandbox — an already-synced library, no
+`texlib\` bundle, and empty component directories — then runs a real full
+install through it twice: once `-Silent`, once interactively with the
+Skip answers on stdin. Seeded component dirs make the installer skip all four
+large downloads, so the whole thing takes about a minute.
+
+Containment is by flag (`-InstallPath` / `-TeXLibPath` / `-Sandbox`), so there
+is nothing to clean up but the sandbox directory; add `-Keep` to inspect it.
+This is the fastest way to exercise the paths CI's clean-VM jobs cannot reach.
+
+> **Never** run `uninstall.ps1` / `uninstall.bat` to clean up after a local
+> test. It removes `%USERPROFILE%\TeXLib` whenever that is a junction — on a
+> developer machine that is the live junction to your real TeXLib library.
+> Uninstall is covered by CI, where the VM is disposable.
+
 ## 2. Pre-flight (no changes made)
 
 ▶ `install.bat -DryRun`
