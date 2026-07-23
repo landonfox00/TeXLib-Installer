@@ -302,6 +302,187 @@ jobs:
           Write-Host "OK: %USERPROFILE%\TeXLib is a junction at the comma/space OneDrive path; bundle deployed through it." -ForegroundColor Green
 
   # ---------------------------------------------------------------------------
+  # 4b. reuse-existing-library — FAST. Covers the RETURNING machine, which every
+  #     other job misses: they all stage a texlib\ bundle and install once onto a
+  #     clean VM, so $UseExistingTeXLib is never true and the Skip/Reinstall
+  #     prompts are never reached. Both v0.6.1 install bugs lived in exactly that
+  #     gap:
+  #
+  #       * section 16 deployed the Sublime builder files from $TeXLibDir\Sublime
+  #         into $SublimeUserSync -- the SAME directory once Packages\User is
+  #         junctioned to it -- so Copy-Item threw "Cannot overwrite the item ...
+  #         with itself" and killed the install at exit 10, with every file
+  #         already correctly in place.
+  #       * the interactive [S]kip/[R]einstall path is dead code under -Silent.
+  #
+  #     Seeding the install root with empty component dirs makes the installer
+  #     skip all four big downloads (TeX Live, Sublime, Sumatra, LaTeXTools), so
+  #     this runs a REAL full (non--OnlyTeXLib) install in about a minute. The
+  #     end-of-install pdflatex verification only WARNs when the stub bin dir has
+  #     no pdflatex.exe, so a stubbed toolchain still exits 0.
+  # ---------------------------------------------------------------------------
+  reuse-existing-library:
+    if: github.event_name != 'schedule'
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Seed a returning machine (existing library + installed components)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # NOTE: deliberately NO texlib\ bundle here. Bundle absent + library
+          # already present is what sets $UseExistingTeXLib.
+          $installRoot = Join-Path $env:RUNNER_TEMP 'TeXLibRoot'
+          "INSTALL_ROOT=$installRoot" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+          # With OneDrive nulled below, $TeXLibDir is %USERPROFILE%\Documents\
+          # TeXLib and no user-root junction is needed. Pre-flight accepts the
+          # library once the three core .sty files exist.
+          $lib = Join-Path $env:USERPROFILE 'Documents\TeXLib'
+          New-Item -ItemType Directory -Force -Path (Join-Path $lib 'Sublime') | Out-Null
+          Set-Content -Encoding UTF8 -Path (Join-Path $lib 'CHANGELOG.md') -Value "# Changelog`r`n`r`n## [Unreleased]`r`n- CI stub library (not a real release)."
+          foreach ($p in 'course-metadata','texlib-build','basic-utilities') {
+            $sty = "\NeedsTeXFormat{LaTeX2e}`r`n\ProvidesPackage{$p}[2026/01/01 CI stub]`r`n\endinput"
+            Set-Content -Encoding UTF8 -Path (Join-Path $lib "$p.sty") -Value $sty
+          }
+          # The builder files section 16 deploys. Their presence HERE is what
+          # makes source and destination the same path once Packages\User is
+          # junctioned to $lib\Sublime.
+          Set-Content -Encoding UTF8 -Path (Join-Path $lib 'Sublime\texlib_builder.py') -Value '# CI stub builder.'
+          Set-Content -Encoding UTF8 -Path (Join-Path $lib 'Sublime\TeXLib.sublime-build') -Value '{ "//": "CI stub build." }'
+          Set-Content -Encoding UTF8 -Path (Join-Path $lib 'Sublime\Default.sublime-commands') -Value '[]'
+          Set-Content -Encoding UTF8 -Path (Join-Path $lib 'Sublime\LaTeX.sublime-settings') -Value '{ "//": "CI stub settings." }'
+
+          # Empty component dirs are all the installer's Test-Path detection
+          # needs to offer Skip -- no multi-GB downloads. TexLive\2025\bin\
+          # windows must exist by that exact name ($TexLiveYear).
+          New-Item -ItemType Directory -Force -Path `
+            (Join-Path $installRoot 'Sublime Text\Data\Packages\LaTeXTools'), `
+            (Join-Path $installRoot 'Sublime Text\Data\Lib\python38\regex'), `
+            (Join-Path $installRoot 'Sumatra'), `
+            (Join-Path $installRoot 'TexLive\2025\bin\windows') | Out-Null
+          # Skips the regex wheel download (section 16a-2 is gated on this file).
+          Set-Content -Encoding UTF8 -Path (Join-Path $installRoot 'Sublime Text\Data\Lib\python38\regex\__init__.py') -Value '# CI stub regex.'
+
+      - name: Full install onto the seeded machine (-Silent)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $env:TEXLIB_INSTALLER_WRAPPED = '1'
+          $env:OneDrive = ''; $env:OneDriveCommercial = ''; $env:OneDriveConsumer = ''
+          $out = & powershell.exe -NoProfile -ExecutionPolicy Bypass `
+            -File .\install.ps1 -Silent -InstallPath $env:INSTALL_ROOT 2>&1 | Out-String
+          $rc = $LASTEXITCODE
+          Write-Host $out
+          Write-Host "install.ps1 exit code: $rc"
+
+          # Assert on the message as well as the code: a future refactor could
+          # swallow the self-copy into a warning and still "pass" on exit 0.
+          if ($out -match 'with itself') {
+            Write-Host "FAIL: section 16 tried to copy the builder files onto themselves." -ForegroundColor Red; exit 1
+          }
+          if ($out -notmatch 'Existing TeXLib library detected') {
+            Write-Host "FAIL: seed did not put the installer on the `$UseExistingTeXLib path; this job is no longer testing what it claims." -ForegroundColor Red; exit 1
+          }
+          if ($rc -ne 0) { Write-Host "FAIL: install exited $rc on a returning machine." -ForegroundColor Red; exit $rc }
+          Write-Host "OK: full install succeeded reusing an already-synced library." -ForegroundColor Green
+
+      - name: Assert the builder files survived and Packages\User is junctioned
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $lib  = Join-Path $env:USERPROFILE 'Documents\TeXLib'
+          $user = Join-Path $env:INSTALL_ROOT 'Sublime Text\Data\Packages\User'
+          if (-not (Test-Path $user)) { Write-Host "FAIL: $user missing" -ForegroundColor Red; exit 1 }
+          $item = Get-Item $user -Force
+          if ($item.Attributes -notmatch 'ReparsePoint') {
+            Write-Host "FAIL: Packages\User is not a junction" -ForegroundColor Red; exit 1
+          }
+          # Skipping the copy must not mean skipping the outcome: the builder has
+          # to be reachable through the junction.
+          if (-not (Test-Path (Join-Path $user 'texlib_builder.py'))) {
+            Write-Host "FAIL: texlib_builder.py not visible through Packages\User" -ForegroundColor Red; exit 1
+          }
+          if ((Get-Content (Join-Path $lib 'Sublime\texlib_builder.py') -Raw) -notmatch 'CI stub builder') {
+            Write-Host "FAIL: the library's builder file was clobbered" -ForegroundColor Red; exit 1
+          }
+          Write-Host "OK: builder reachable through the junction; library intact." -ForegroundColor Green
+
+      - name: Re-run interactively, answering the Skip prompts on stdin
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # Everything is installed now, so a NON-silent re-run hits all three
+          # [S]kip or [R]einstall prompts -- the path a coworker actually walks
+          # and the one -Silent can never reach.
+          #
+          # Answers come from a FILE redirect, not `(echo s&echo s&echo s) |`:
+          # cmd's `echo s&` emits a trailing space, so Read-Host would return
+          # "s " -- harmless for Skip (anything but R/r skips) but silently
+          # wrong the day someone extends this to test the "r" reinstall answer.
+          # Redirected stdin is also closed at EOF, so the job cannot hang.
+          $env:TEXLIB_INSTALLER_WRAPPED = '1'
+          $env:OneDrive = ''; $env:OneDriveCommercial = ''; $env:OneDriveConsumer = ''
+          Set-Content -Encoding ascii -Path answers.txt -Value "s`r`ns`r`ns"
+          $cmd = "powershell.exe -NoProfile -ExecutionPolicy Bypass -File install.ps1 -InstallPath `"$env:INSTALL_ROOT`" < answers.txt"
+          $out = & cmd /c $cmd 2>&1 | Out-String
+          $rc = $LASTEXITCODE
+          Write-Host $out
+          Write-Host "interactive re-run exit code: $rc"
+
+          if ($out -match 'with itself') {
+            Write-Host "FAIL: self-copy regressed on the interactive path." -ForegroundColor Red; exit 1
+          }
+          # Assert on the Write-Host lines around the prompt, NOT on the prompt
+          # text itself: with stdin redirected, Read-Host's prompt goes to the
+          # console but never reaches the captured stdout (it shows up only in
+          # the Start-Transcript log), so matching it would fail spuriously.
+          $seen = ([regex]::Matches($out, 'is already installed\.')).Count
+          if ($seen -lt 3) {
+            Write-Host "FAIL: expected 3 already-installed prompts (Sublime, Sumatra, TeX Live), saw $seen." -ForegroundColor Red; exit 1
+          }
+          foreach ($c in 'Skipping Sublime Text','Skipping SumatraPDF','Skipping TeX Live') {
+            if ($out -notmatch [regex]::Escape($c)) {
+              Write-Host "FAIL: '$c' not reached -- the stdin answer did not take." -ForegroundColor Red; exit 1
+            }
+          }
+          if ($rc -ne 0) { Write-Host "FAIL: interactive re-run exited $rc." -ForegroundColor Red; exit $rc }
+          Write-Host "OK: interactive re-run skipped all three components and completed." -ForegroundColor Green
+
+      - name: Teardown through uninstall.bat (zero args, wrapper path)
+        if: always()
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # Deliberately the .bat with NO arguments -- the double-click path, and
+          # the exact shape that crashed v0.6.1 ($InnerArgs = $null splatted as a
+          # positional into uninstall.ps1's switch-only param block). The other
+          # jobs invoke uninstall.ps1 directly and cannot catch this.
+          #
+          # 'Y' answers the confirmation prompt, again via file redirect: piping
+          # `echo Y |` would deliver "Y " and uninstall.ps1 compares -ne "Y", so
+          # the run would quietly print "Aborted." and exit 0 -- a green step
+          # that uninstalled nothing.
+          Set-Content -Encoding ascii -Path confirm.txt -Value "Y"
+          $out = & cmd /c "uninstall.bat < confirm.txt" 2>&1 | Out-String
+          $rc = $LASTEXITCODE
+          Write-Host $out
+          Write-Host "uninstall.bat exit code: $rc"
+          if ($out -match 'positional parameter cannot be found') {
+            Write-Host "FAIL: the wrapper's stray-`$null splat regressed." -ForegroundColor Red; exit 1
+          }
+          if ($out -notmatch 'TeXLib-Uninstaller v') {
+            Write-Host "FAIL: uninstall.ps1 never got far enough to print its banner." -ForegroundColor Red; exit 1
+          }
+          if ($out -match 'Aborted\.') {
+            Write-Host "FAIL: the confirmation answer did not take; nothing was uninstalled." -ForegroundColor Red; exit 1
+          }
+          if ($rc -ne 0) { Write-Host "FAIL: uninstall.bat exited $rc." -ForegroundColor Red; exit $rc }
+          Write-Host "OK: uninstall.bat ran cleanly through the wrapper." -ForegroundColor Green
+
+  # ---------------------------------------------------------------------------
   # 5. package-integrity — FAST. Builds an actual release bundle with
   #    make-release.ps1 and asserts it contains every file install.bat /
   #    uninstall.bat invoke, catching packaging gaps the other jobs miss because
@@ -454,18 +635,26 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
-      - name: Teardown (uninstall.ps1 -Silent)
+      - name: Teardown (uninstall.bat -Silent)
         # Always run so the VM is left clean even if install/Doctor failed.
         # uninstall.ps1 -Silent is fully non-interactive and always exits 0, so
         # it never masks an earlier failure (install/Doctor own pass/fail).
         # uninstall.ps1 has NO -InstallPath param and hardcodes %LOCALAPPDATA%\
         # TeXLib, so it mainly clears the HKCU/PATH/shortcut artifacts here; the
         # $RUNNER_TEMP install root is reclaimed when the VM is discarded.
+        #
+        # Routed through the .bat (not uninstall.ps1 directly) so the ONE job
+        # that performs a real install also tears it down through the entry
+        # point a user actually double-clicks, wrapper and all. The zero-arg
+        # form of this path is covered by reuse-existing-library.
         if: always()
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           $env:TEXLIB_INSTALLER_WRAPPED = '1'
-          powershell.exe -NoProfile -ExecutionPolicy Bypass `
-            -File .\uninstall.ps1 -Silent
+          $out = & cmd /c "uninstall.bat -Silent" 2>&1 | Out-String
+          Write-Host $out
+          if ($out -match 'positional parameter cannot be found') {
+            Write-Host "FAIL: wrapper arg forwarding regressed." -ForegroundColor Red; exit 1
+          }
           Write-Host "uninstall.ps1 -Silent exit code: $LASTEXITCODE"

@@ -40,6 +40,38 @@ All notable changes to TeXLib-Installer are recorded here. Format follows [Keep 
   `boot_wrapper.ps1`. New `wrapper-arg-forwarding` CI job drives the real wrapper
   against a switch-only stub inner script to lock the fix in.
 
+- **Install died at exit 10 with `Cannot overwrite the item ...
+  texlib_builder.py with itself`** when reusing an already-synced TeXLib library.
+  In that mode section 16 deployed the Sublime builder files from
+  `<TeXLib>\Sublime`, which is also `$SublimeUserSync` — and `Packages\User` is
+  junctioned to it, so every `Copy-Item` was a file-onto-itself copy. The
+  installer aborted on the very last step with all four files already exactly
+  where they belonged. It now skips the deploy when source and destination
+  resolve to the same directory.
+
+- **Update check told you to "update" to an older release.** `Test-LatestVersion`
+  compared tags with `-ne`, so any build ahead of the newest published tag —
+  the normal state while cutting a release — reported an update to the version
+  behind it. Now compares parsed `[Version]` objects and warns only when the
+  published tag is strictly newer (this also fixes `0.6.10` vs `0.6.9`, which
+  string comparison got backwards). Falls back to string inequality for tags
+  that don't parse.
+
+### Added
+
+- **`reuse-existing-library` CI job** — covers the *returning* machine, which no
+  other job did: every one of them staged a `texlib\` bundle and installed once
+  onto a clean VM, so `$UseExistingTeXLib` was never true and the interactive
+  `[S]kip or [R]einstall` prompts were dead code. Both install bugs above lived
+  in exactly that gap. Seeding empty component directories makes the installer
+  skip all four large downloads, so a real full (non-`-OnlyTeXLib`) install runs
+  in about a minute. Covers, in one job: install with a library but no bundle,
+  the junctioned-`Packages\User` self-copy, a non-silent re-run answering the
+  Skip prompts on stdin, and teardown through `uninstall.bat` **with no
+  arguments** — the double-click shape that produced the `$null`-splat crash and
+  that invoking `uninstall.ps1` directly can never reproduce. `full-install`'s
+  teardown now goes through `uninstall.bat` too.
+
 ## [0.6.1] — 2026-07-04
 
 A Sublime-integration point release. Fixes the headline bug on a clean install — **Ctrl+B doing nothing** — by installing LaTeXTools' missing `regex` dependency and pinning Ctrl+B to the TeXLib build system. Also makes the installer **reuse a TeXLib library that's already synced** (OneDrive), so a source checkout or a copy without its `dist\` installs instead of hard-failing at pre-flight. Same bundled TeXLib library as v0.6.0 (`v0.3.0`); no library changes.

@@ -328,7 +328,15 @@ function Test-LatestVersion {
     try {
         $resp = Invoke-RestMethod -Uri $ReleasesApi -TimeoutSec 5 -ErrorAction Stop
         $latest = $resp.tag_name -replace '^v', ''
-        if ($latest -and ($latest -ne $InstallerVersion)) {
+        # Compare numerically, not with -ne: a local build that is AHEAD of the
+        # newest published tag (the normal state while cutting a release) would
+        # otherwise be told to "update" to an older version. Fall back to string
+        # inequality if either side isn't a parseable dotted version.
+        $lv = $null; $cv = $null
+        $Parsed = [Version]::TryParse($latest, [ref]$lv) -and
+                  [Version]::TryParse($InstallerVersion, [ref]$cv)
+        $Newer = if ($Parsed) { $lv -gt $cv } else { $latest -ne $InstallerVersion }
+        if ($latest -and $Newer) {
             Write-Host "Update available: v$latest is the latest release (you are on v$InstallerVersion)" -ForegroundColor Yellow
             Write-Host "  Download: $($resp.html_url)" -ForegroundColor Yellow
             Write-Host ""
@@ -1349,8 +1357,18 @@ try {
     # / ignored_words; it stacks on top of the user's global
     # Preferences.sublime-settings so personal proper nouns (collaborators, lab
     # jargon) still apply.
+    # When reusing an already-synced library, the source IS the destination:
+    # $SublimeUserSync is "$TeXLibDir\Sublime" and Packages\User is junctioned to
+    # it, so Copy-Item would be asked to overwrite each file with itself and
+    # throws "Cannot overwrite the item ... with itself" -- fatal (exit 10) even
+    # though the files are already exactly where they belong. Skip the deploy
+    # when both sides resolve to the same directory.
     $BundledSublimeDir = if ($UseExistingTeXLib) { Join-Path $TeXLibDir "Sublime" } else { Join-Path $TexLibBundle "Sublime" }
-    if (Test-Path $BundledSublimeDir) {
+    $SameSublimeDir = [IO.Path]::GetFullPath($BundledSublimeDir).TrimEnd('\') -ieq
+                      [IO.Path]::GetFullPath($UserDir).TrimEnd('\')
+    if ($SameSublimeDir) {
+        Write-Host "  Builder files already live in $UserDir (settings sync folder); nothing to copy" -ForegroundColor Gray
+    } elseif (Test-Path $BundledSublimeDir) {
         foreach ($f in @("texlib_builder.py", "TeXLib.sublime-build", "Default.sublime-commands", "LaTeX.sublime-settings")) {
             $src = Join-Path $BundledSublimeDir $f
             if (Test-Path $src) { Copy-Item $src $UserDir -Force }
