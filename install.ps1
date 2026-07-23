@@ -356,20 +356,34 @@ Start-Transcript -Path $LogFile -IncludeInvocationHeader | Out-Null
 # =============================================================================
 # 3. UPDATE CHECKER
 # =============================================================================
+# Pure, side-effect-free, and deliberately kept as a NAMED function rather than
+# inlined: the unit-helpers CI job lifts it out of this file by AST and runs a
+# case table against it. Keeping it here (instead of a dot-sourced tools\ lib)
+# means install.ps1 gains no runtime dependency that could go missing from a
+# release bundle -- the 2026-06-15 flash-and-die was exactly that failure mode.
+function Test-IsNewerVersion {
+    param([string]$Candidate, [string]$Current)
+
+    if (-not $Candidate) { return $false }
+    # Compare numerically, not with -ne: a local build AHEAD of the newest
+    # published tag (the normal state while cutting a release) would otherwise
+    # be told to "update" to an older version. String comparison also orders
+    # 0.6.10 before 0.6.9. Fall back to string inequality only when a side is
+    # not a parseable dotted version (e.g. a "1.0.0-beta" tag).
+    $cand = $null; $cur = $null
+    if ([Version]::TryParse($Candidate, [ref]$cand) -and
+        [Version]::TryParse($Current,   [ref]$cur)) {
+        return ($cand -gt $cur)
+    }
+    return ($Candidate -ne $Current)
+}
+
 function Test-LatestVersion {
     # Best-effort GitHub API check. Never fatal -- print the result and move on.
     try {
         $resp = Invoke-RestMethod -Uri $ReleasesApi -TimeoutSec 5 -ErrorAction Stop
         $latest = $resp.tag_name -replace '^v', ''
-        # Compare numerically, not with -ne: a local build that is AHEAD of the
-        # newest published tag (the normal state while cutting a release) would
-        # otherwise be told to "update" to an older version. Fall back to string
-        # inequality if either side isn't a parseable dotted version.
-        $lv = $null; $cv = $null
-        $Parsed = [Version]::TryParse($latest, [ref]$lv) -and
-                  [Version]::TryParse($InstallerVersion, [ref]$cv)
-        $Newer = if ($Parsed) { $lv -gt $cv } else { $latest -ne $InstallerVersion }
-        if ($latest -and $Newer) {
+        if (Test-IsNewerVersion -Candidate $latest -Current $InstallerVersion) {
             Write-Host "Update available: v$latest is the latest release (you are on v$InstallerVersion)" -ForegroundColor Yellow
             Write-Host "  Download: $($resp.html_url)" -ForegroundColor Yellow
             Write-Host ""

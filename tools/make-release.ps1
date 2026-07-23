@@ -82,10 +82,11 @@ foreach ($f in $InstallerFiles) {
 }
 Copy-Item (Join-Path $RepoRoot "templates") $StageRoot -Recurse -Force
 
-# install.bat / uninstall.bat invoke toolsoot_wrapper.ps1, so it MUST ship
+# install.bat / uninstall.bat invoke tools/boot_wrapper.ps1, so it MUST ship
 # -- without it the .bat just flashes open and dies (PowerShell -File on a
-# missing script). make-
-# release.ps1 itself is the build tool and is deliberately NOT shipped.
+# missing script). make-release.ps1 itself is the build tool, and
+# dev-install-test.ps1 is a local test harness; neither ships.
+# package-integrity asserts both stay out of the bundle.
 $ToolsStage = Join-Path $StageRoot "tools"
 New-Item -ItemType Directory -Force -Path $ToolsStage | Out-Null
 foreach ($w in @("boot_wrapper.ps1")) {

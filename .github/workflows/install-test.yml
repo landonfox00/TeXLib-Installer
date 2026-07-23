@@ -124,6 +124,68 @@ jobs:
           Write-Host "OK: boot_wrapper forwards zero inner args cleanly." -ForegroundColor Green
 
   # ---------------------------------------------------------------------------
+  # 1c. unit-helpers — FASTEST. Pure-logic coverage for install.ps1's decision
+  #     helpers, with no VM install and no network.
+  #
+  #     install.ps1 is one long straight-line script, so historically the only
+  #     way to test ANY decision it makes was to boot a runner and install. That
+  #     is why the update-check comparison shipped broken: it told you to
+  #     "update" from v0.6.1 to v0.6.0, and nothing asserted otherwise.
+  #
+  #     Rather than move the helper into a dot-sourced tools\ library — which
+  #     install.ps1 would then DEPEND on at runtime, and a release bundle could
+  #     omit (the 2026-06-15 flash-and-die) — this job lifts the function out of
+  #     install.ps1 by AST and runs a case table against it. The shipped
+  #     artifact stays a single self-contained script; the test still exercises
+  #     the real source, and fails loudly if the function is renamed or inlined.
+  # ---------------------------------------------------------------------------
+  unit-helpers:
+    if: github.event_name != 'schedule'
+    runs-on: windows-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+      - name: Test-IsNewerVersion case table (extracted from install.ps1)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $ast = [System.Management.Automation.Language.Parser]::ParseFile(
+                   (Resolve-Path .\install.ps1), [ref]$null, [ref]$null)
+          $fn = $ast.FindAll({
+                  param($n)
+                  $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+                  $n.Name -eq 'Test-IsNewerVersion' }, $true)
+          if ($fn.Count -ne 1) {
+            Write-Host "FAIL: expected exactly 1 Test-IsNewerVersion definition in install.ps1, found $($fn.Count)." -ForegroundColor Red
+            Write-Host "      If it was renamed or inlined, update this job -- do not delete it." -ForegroundColor Red
+            exit 1
+          }
+          . ([scriptblock]::Create($fn[0].Extent.Text))
+
+          # candidate, current, expected-"an update is available"
+          $cases = @(
+            @('0.6.0',      '0.6.1',  $false),   # the shipped bug: never offer a DOWNGRADE
+            @('0.7.0',      '0.6.1',  $true ),
+            @('0.6.1',      '0.6.1',  $false),
+            @('0.6.10',     '0.6.9',  $true ),   # string compare orders these backwards
+            @('0.6.9',      '0.6.10', $false),
+            @('1.0',        '0.9.9',  $true ),   # ragged component counts
+            @('1.0.0-beta', '0.6.1',  $true ),   # unparseable -> string inequality
+            @('',           '0.6.1',  $false),   # empty/absent tag -> never nag
+            @($null,        '0.6.1',  $false)
+          )
+          $bad = 0
+          foreach ($c in $cases) {
+            $got = Test-IsNewerVersion -Candidate $c[0] -Current $c[1]
+            $ok  = ($got -eq $c[2])
+            if (-not $ok) { $bad++ }
+            "{0}  candidate='{1}' current='{2}' -> {3} (expected {4})" -f `
+              $(if ($ok) {'PASS'} else {'FAIL'}), $c[0], $c[1], $got, $c[2]
+          }
+          if ($bad) { Write-Host "$bad case(s) failed." -ForegroundColor Red; exit 1 }
+          Write-Host "OK: all $($cases.Count) version-comparison cases passed." -ForegroundColor Green
+
+  # ---------------------------------------------------------------------------
   # 2. verify-downloads — FAST hash-rot canary. Runs install.ps1 -VerifyDownloads
   #    (early-exit: downloads each pinned component, checks its SHA256/512, exits
   #    0 all-good / 20 drift) on a clean VM. Catches a vendor silently

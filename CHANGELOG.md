@@ -80,6 +80,15 @@ All notable changes to TeXLib-Installer are recorded here. Format follows [Keep 
   the skipped steps; `-Sandbox` without a redirect flag warns that components
   still install to their default locations.
 
+- **`unit-helpers` CI job** — pure-logic coverage with no VM install and no
+  network, the tier `install.ps1` had none of. The update-check comparison is
+  now the named `Test-IsNewerVersion`, and the job lifts that function out of
+  `install.ps1` **by AST** and runs a nine-case table against it (including the
+  shipped downgrade bug and `0.6.10` vs `0.6.9`). Extracting rather than
+  dot-sourcing a `tools\` library is deliberate: `install.ps1` stays a single
+  self-contained script with no runtime dependency a release bundle could omit.
+  The job fails loudly if the function is renamed or re-inlined.
+
 - **`tools\dev-install-test.ps1`** — seeds a returning machine in a temp
   sandbox and drives a real full install through it twice (silent, then
   interactive with Skip answers on stdin), asserting 22 conditions including
