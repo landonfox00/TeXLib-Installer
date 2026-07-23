@@ -57,6 +57,17 @@ All notable changes to TeXLib-Installer are recorded here. Format follows [Keep 
   string comparison got backwards). Falls back to string inequality for tags
   that don't parse.
 
+- **The uninstaller removed any junction at `%USERPROFILE%\TeXLib`, not just
+  its own.** It checked that the path was a reparse point — so a real folder was
+  always safe, and the target's contents were never at risk — but not that the
+  *installer* had created the link. On a developer machine that path is
+  routinely a hand-made junction to a real library, and unlinking it silently
+  breaks every TeX build resolving through it. `uninstall.ps1` now reads
+  `texlib_root` from `<BaseDir>\VERSION` **before** removing the install
+  directory (the file lives inside it) and removes the junction only when the
+  installer claimed it. An unclaimed junction is left in place with its target
+  printed; `-RemoveJunction` overrides deliberately.
+
 - **Shortcut creation could write to the drive root.**
   `[Environment]::GetFolderPath("Desktop")` returns an empty string when the
   shell folder can't be resolved (redirected/roaming profiles, some service
@@ -87,7 +98,12 @@ All notable changes to TeXLib-Installer are recorded here. Format follows [Keep 
   shipped downgrade bug and `0.6.10` vs `0.6.9`). Extracting rather than
   dot-sourcing a `tools\` library is deliberate: `install.ps1` stays a single
   self-contained script with no runtime dependency a release bundle could omit.
-  The job fails loudly if the function is renamed or re-inlined.
+  The job fails loudly if the function is renamed or re-inlined. A second step
+  covers `uninstall.ps1`'s `Test-InstallerOwnsJunction` the same way — there the
+  isolation is the point, since the alternative is creating a real junction at
+  `%USERPROFILE%\TeXLib`. `reuse-existing-library` also plants an *unclaimed*
+  junction before teardown and asserts the uninstaller leaves it, and its
+  target's contents, alone.
 
 - **`tools\dev-install-test.ps1`** — seeds a returning machine in a temp
   sandbox and drives a real full install through it twice (silent, then

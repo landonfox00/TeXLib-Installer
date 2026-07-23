@@ -185,6 +185,60 @@ jobs:
           if ($bad) { Write-Host "$bad case(s) failed." -ForegroundColor Red; exit 1 }
           Write-Host "OK: all $($cases.Count) version-comparison cases passed." -ForegroundColor Green
 
+      - name: Test-InstallerOwnsJunction case table (extracted from uninstall.ps1)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # Same AST-extraction trick, and here it is not just convenient: the
+          # alternative is creating a real junction at %USERPROFILE%\TeXLib,
+          # which on a developer machine is the live link to their library.
+          # Testing the decision in isolation keeps that path untouched.
+          $ast = [System.Management.Automation.Language.Parser]::ParseFile(
+                   (Resolve-Path .\uninstall.ps1), [ref]$null, [ref]$null)
+          $fn = $ast.FindAll({
+                  param($n)
+                  $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+                  $n.Name -eq 'Test-InstallerOwnsJunction' }, $true)
+          if ($fn.Count -ne 1) {
+            Write-Host "FAIL: expected exactly 1 Test-InstallerOwnsJunction in uninstall.ps1, found $($fn.Count)." -ForegroundColor Red
+            exit 1
+          }
+          . ([scriptblock]::Create($fn[0].Extent.Text))
+
+          $t = Join-Path $env:RUNNER_TEMP 'junction-cases'
+          New-Item -ItemType Directory -Force -Path $t | Out-Null
+          $J = 'C:\Users\bob\TeXLib'
+          function New-VersionFile($name, $content) {
+            $f = Join-Path $t $name
+            Set-Content -Path $f -Value $content -Encoding UTF8
+            return $f
+          }
+
+          # description, VERSION file, expected "installer owns this junction"
+          $cases = @(
+            @('claims the junction',   (New-VersionFile 'claim.txt' "installer_version=0.6.1`ntexlib_root=C:\Users\bob\TeXLib"), $true ),
+            @('trailing backslash',    (New-VersionFile 'slash.txt' "texlib_root=C:\Users\bob\TeXLib\"),                          $true ),
+            @('different case',        (New-VersionFile 'case.txt'  "texlib_root=c:\users\bob\texlib"),                           $true ),
+            @('surrounding whitespace',(New-VersionFile 'ws.txt'    "texlib_root =  C:\Users\bob\TeXLib  "),                      $true ),
+            @('claims another path',   (New-VersionFile 'other.txt' "texlib_root=C:\Users\bob\OneDrive - X, Y\Documents\TeXLib"), $false),
+            @('no texlib_root key',    (New-VersionFile 'nokey.txt' "installer_version=0.6.1"),                                   $false),
+            @('empty texlib_root',     (New-VersionFile 'empty.txt' "texlib_root="),                                             $false),
+            @('VERSION missing',       (Join-Path $t 'nope.txt'),                                                                 $false),
+            @('null VersionFile',      $null,                                                                                     $false)
+          )
+          $bad = 0
+          foreach ($c in $cases) {
+            $got = Test-InstallerOwnsJunction -JunctionPath $J -VersionFile $c[1]
+            $ok  = ($got -eq $c[2])
+            if (-not $ok) { $bad++ }
+            "{0}  {1,-24} -> {2} (expected {3})" -f $(if ($ok) {'PASS'} else {'FAIL'}), $c[0], $got, $c[2]
+          }
+          $got = Test-InstallerOwnsJunction -JunctionPath '' -VersionFile $cases[0][1]
+          if ($got -ne $false) { Write-Host "FAIL: empty JunctionPath returned $got" -ForegroundColor Red; $bad++ }
+
+          if ($bad) { Write-Host "$bad case(s) failed." -ForegroundColor Red; exit 1 }
+          Write-Host "OK: junction-ownership decision holds." -ForegroundColor Green
+
   # ---------------------------------------------------------------------------
   # 2. verify-downloads — FAST hash-rot canary. Runs install.ps1 -VerifyDownloads
   #    (early-exit: downloads each pinned component, checks its SHA256/512, exits
@@ -527,6 +581,16 @@ jobs:
           # `echo Y |` would deliver "Y " and uninstall.ps1 compares -ne "Y", so
           # the run would quietly print "Aborted." and exit 0 -- a green step
           # that uninstalled nothing.
+          # Plant an UNCLAIMED junction at %USERPROFILE%\TeXLib first: nothing in
+          # VERSION points at it, so it stands in for a developer's own link to
+          # their real library. The uninstaller must leave it alone.
+          $junction = Join-Path $env:USERPROFILE 'TeXLib'
+          $target   = Join-Path $env:RUNNER_TEMP 'not-ours'
+          New-Item -ItemType Directory -Force -Path $target | Out-Null
+          Set-Content -Encoding UTF8 -Path (Join-Path $target 'canary.txt') -Value 'must survive'
+          if (Test-Path $junction) { [System.IO.Directory]::Delete($junction, $false) }
+          New-Item -ItemType Junction -Path $junction -Target $target | Out-Null
+
           Set-Content -Encoding ascii -Path confirm.txt -Value "Y"
           $out = & cmd /c "uninstall.bat < confirm.txt" 2>&1 | Out-String
           $rc = $LASTEXITCODE
@@ -542,7 +606,20 @@ jobs:
             Write-Host "FAIL: the confirmation answer did not take; nothing was uninstalled." -ForegroundColor Red; exit 1
           }
           if ($rc -ne 0) { Write-Host "FAIL: uninstall.bat exited $rc." -ForegroundColor Red; exit $rc }
-          Write-Host "OK: uninstall.bat ran cleanly through the wrapper." -ForegroundColor Green
+
+          # The junction guard: an unclaimed junction must survive, and its
+          # target must be untouched (Directory::Delete(path,$false) never
+          # follows the link, but assert it rather than trust it).
+          if (-not (Test-Path $junction)) {
+            Write-Host "FAIL: the uninstaller removed a junction it did not create." -ForegroundColor Red; exit 1
+          }
+          if (-not (Test-Path (Join-Path $target 'canary.txt'))) {
+            Write-Host "FAIL: the junction target's contents were deleted." -ForegroundColor Red; exit 1
+          }
+          if ($out -notmatch 'Leaving .*TeXLib in place') {
+            Write-Host "FAIL: no explanation printed for the preserved junction." -ForegroundColor Red; exit 1
+          }
+          Write-Host "OK: uninstall.bat ran cleanly and preserved the unclaimed junction." -ForegroundColor Green
 
   # ---------------------------------------------------------------------------
   # 5. package-integrity — FAST. Builds an actual release bundle with
