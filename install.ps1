@@ -47,6 +47,24 @@
     junction is easier to discover and diagnose. Has no effect when no
     junction is needed.
 
+.PARAMETER TeXLibPath
+    Override where the TeXLib library lives. Defaults to <OneDrive>\Documents\
+    TeXLib, or %USERPROFILE%\Documents\TeXLib when OneDrive isn't detected --
+    neither of which -InstallPath affects. Setting this also suppresses the
+    %USERPROFILE%\TeXLib junction: an explicit path is taken as deliberate, so
+    the installer does not second-guess it for commas or spaces. Pair with
+    -Sandbox for a throwaway run on a machine you care about.
+
+.PARAMETER Sandbox
+    Skip every write that lands outside -InstallPath / -TeXLibPath: the user
+    PATH entry, the HKCU file associations, and the Desktop / Start Menu
+    shortcuts. Everything else runs for real, so the component install, the
+    library deploy, the Packages\User junction, and the builder config are all
+    still exercised. Intended for developing ON the installer -- a full run
+    against a seeded state with nothing left to clean up afterwards. Warns if
+    used without -InstallPath or -TeXLibPath, since those are what keep the
+    remaining writes inside the sandbox.
+
 .PARAMETER VerifyDownloads
     Hash-rot canary. Download each pinned component and verify its SHA256/512
     against $Downloads, then exit -- without installing anything, touching the
@@ -75,6 +93,8 @@ param(
     [switch]$DryRun,
     [switch]$OnlyTeXLib,
     [string]$InstallPath = "",
+    [string]$TeXLibPath = "",
+    [switch]$Sandbox,
     [switch]$HideJunction,
     [switch]$VerifyDownloads
 )
@@ -169,13 +189,26 @@ $OneDrivePath = $env:OneDrive
 if (-not $OneDrivePath) { $OneDrivePath = $env:OneDriveCommercial }
 if (-not $OneDrivePath) { $OneDrivePath = $env:OneDriveConsumer }
 
-if ($OneDrivePath -and (Test-Path "$OneDrivePath\Documents")) {
+if ($TeXLibPath) {
+    # Explicit override wins over detection. $UsingOneDrive stays false so the
+    # junction block below is skipped entirely -- a caller who names the path
+    # has already decided, and silently rehoming it through
+    # %USERPROFILE%\TeXLib would defeat the point (notably for -Sandbox runs,
+    # where that junction is the one artifact left outside the sandbox).
+    $TeXLibDir = $TeXLibPath
+    $UsingOneDrive = $false
+} elseif ($OneDrivePath -and (Test-Path "$OneDrivePath\Documents")) {
     $TeXLibDir = "$OneDrivePath\Documents\TeXLib"
     $UsingOneDrive = $true
 } else {
     $TeXLibDir = "$env:USERPROFILE\Documents\TeXLib"
     $UsingOneDrive = $false
 }
+
+# Writes that land outside -InstallPath / -TeXLibPath: user PATH (14), HKCU
+# file associations (17), Desktop + Start Menu shortcuts (18). -Sandbox skips
+# exactly those three and nothing else.
+$WriteMachineState = (-not $OnlyTeXLib) -and (-not $Sandbox)
 
 # --- User-root junction (TEXINPUTS-safe path) --------------------------------
 # kpathsea (TeX Live's file resolver) splits TEXINPUTS on commas and chokes
@@ -671,6 +704,18 @@ if ($DryRun)     { Write-Host "DRY RUN (no changes will be made)" -ForegroundCol
 elseif ($OnlyTeXLib) { Write-Host "ONLY TEXLIB (skip Sublime/Sumatra/TeX Live)" -ForegroundColor Yellow }
 elseif ($Silent) { Write-Host "Silent" -ForegroundColor Gray }
 else             { Write-Host "Interactive" -ForegroundColor Gray }
+Write-Host "TeXLib library: $TeXLibDir" -ForegroundColor Gray
+if ($Sandbox) {
+    Write-Host "Sandbox:      ON -- no user PATH entry, no HKCU file associations, no shortcuts" -ForegroundColor Yellow
+    if (-not $InstallPath -and -not $TeXLibPath) {
+        # Sandbox only suppresses the three machine-state writes; the component
+        # install and the library deploy still go to their real default
+        # locations unless redirected. Say so rather than implying full
+        # isolation.
+        Write-Host "  [warn] -Sandbox without -InstallPath or -TeXLibPath: components still install to" -ForegroundColor Yellow
+        Write-Host "         $BaseDir and the library to $TeXLibDir." -ForegroundColor Yellow
+    }
+}
 Write-Host ""
 
 
@@ -878,11 +923,20 @@ if ($DryRun) {
         Write-Host "  * Install SumatraPDF to $SumatraDir"   -ForegroundColor Gray
         Write-Host "  * Install TeX Live to $TexLiveDir (30-60 min)" -ForegroundColor Gray
         Write-Host "  * $TeXLibPlan" -ForegroundColor Gray
-        Write-Host "  * Add $TexBinPath to user PATH" -ForegroundColor Gray
+        if ($Sandbox) {
+            Write-Host "  * SKIP (sandbox): user PATH entry" -ForegroundColor DarkGray
+        } else {
+            Write-Host "  * Add $TexBinPath to user PATH" -ForegroundColor Gray
+        }
         Write-Host "  * Junction $SublimeDir\Data\Packages\User -> $SublimeUserSync" -ForegroundColor Gray
         Write-Host "  * Write LaTeXTools / Preferences / SumatraPDF settings" -ForegroundColor Gray
-        Write-Host "  * Register .tex .cls .sty .bib .pdf file associations (HKCU)" -ForegroundColor Gray
-        Write-Host "  * Create Desktop + Start Menu shortcuts" -ForegroundColor Gray
+        if ($Sandbox) {
+            Write-Host "  * SKIP (sandbox): .tex .cls .sty .bib .pdf file associations (HKCU)" -ForegroundColor DarkGray
+            Write-Host "  * SKIP (sandbox): Desktop + Start Menu shortcuts" -ForegroundColor DarkGray
+        } else {
+            Write-Host "  * Register .tex .cls .sty .bib .pdf file associations (HKCU)" -ForegroundColor Gray
+            Write-Host "  * Create Desktop + Start Menu shortcuts" -ForegroundColor Gray
+        }
         Write-Host "  * Compile a verification document" -ForegroundColor Gray
     }
     Write-Host ""
@@ -1232,9 +1286,9 @@ if ($UseExistingTeXLib) {
 
 
 # =============================================================================
-# 14. CONFIGURE ENVIRONMENT (skipped in -OnlyTeXLib)
+# 14. CONFIGURE ENVIRONMENT (skipped in -OnlyTeXLib / -Sandbox)
 # =============================================================================
-if (-not $OnlyTeXLib) {
+if ($WriteMachineState) {
     Write-Host ""
     Write-Host "Configuring environment..." -ForegroundColor Cyan
 
@@ -1415,9 +1469,9 @@ try {
 
 
 # =============================================================================
-# 17. REGISTER FILE ASSOCIATIONS (skipped in -OnlyTeXLib)
+# 17. REGISTER FILE ASSOCIATIONS (skipped in -OnlyTeXLib / -Sandbox)
 # =============================================================================
-if (-not $OnlyTeXLib) {
+if ($WriteMachineState) {
     Write-Host ""
     Write-Host "Registering file associations..." -ForegroundColor Cyan
 
@@ -1453,9 +1507,9 @@ if (-not $OnlyTeXLib) {
 }
 
 # =============================================================================
-# 18. SHORTCUTS (skipped in -OnlyTeXLib)
+# 18. SHORTCUTS (skipped in -OnlyTeXLib / -Sandbox)
 # =============================================================================
-if (-not $OnlyTeXLib) {
+if ($WriteMachineState) {
     Write-Host ""
     Write-Host "Creating shortcuts..." -ForegroundColor Cyan
 
@@ -1463,9 +1517,23 @@ if (-not $OnlyTeXLib) {
         param ($SourceExe, $ShortcutName)
         try {
             $WS = New-Object -ComObject WScript.Shell
+            # GetFolderPath returns "" when the shell folder can't be resolved
+            # (redirected/roaming profiles, some service contexts). Unguarded,
+            # "$DesktopPath\$ShortcutName.lnk" collapses to "\Sublime.lnk",
+            # which resolves to the DRIVE ROOT -- C:\Sublime.lnk. That fails
+            # noisily where the root isn't writable and succeeds silently where
+            # it is, littering C:\ instead of creating shortcuts. Skip the
+            # folder we couldn't resolve rather than guessing.
+            $Targets = @()
             $DesktopPath = [Environment]::GetFolderPath("Desktop")
-            $StartMenuPath = [Environment]::GetFolderPath("StartMenu") + "\Programs"
-            foreach ($Target in @("$DesktopPath\$ShortcutName.lnk", "$StartMenuPath\$ShortcutName.lnk")) {
+            if ($DesktopPath) { $Targets += "$DesktopPath\$ShortcutName.lnk" }
+            else { Write-Host "  [warn] Desktop folder unresolvable; skipping Desktop shortcut for '$ShortcutName'" -ForegroundColor Yellow }
+
+            $StartMenuRoot = [Environment]::GetFolderPath("StartMenu")
+            if ($StartMenuRoot) { $Targets += "$StartMenuRoot\Programs\$ShortcutName.lnk" }
+            else { Write-Host "  [warn] Start Menu folder unresolvable; skipping Start Menu shortcut for '$ShortcutName'" -ForegroundColor Yellow }
+
+            foreach ($Target in $Targets) {
                 $Sc = $WS.CreateShortcut($Target)
                 $Sc.TargetPath = $SourceExe
                 $Sc.Save()

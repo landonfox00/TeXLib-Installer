@@ -519,8 +519,14 @@ jobs:
                         'texlib','templates')
           $missing = $required | Where-Object { -not (Test-Path (Join-Path $stage $_)) }
           if ($missing) { Write-Host "FAIL: bundle missing: $($missing -join ', ')" -ForegroundColor Red; exit 1 }
-          # make-release.ps1 itself must NOT ship (build tool only).
-          if (Test-Path (Join-Path $stage 'tools\make-release.ps1')) { Write-Host "FAIL: make-release.ps1 should not be in the bundle" -ForegroundColor Red; exit 1 }
+          # Build/dev-only tools must NOT ship. make-release.ps1 builds the
+          # bundle; dev-install-test.ps1 drives install.ps1 against a seeded
+          # sandbox and is useless (and confusing) to an end user.
+          foreach ($t in 'make-release.ps1','dev-install-test.ps1') {
+            if (Test-Path (Join-Path $stage "tools\$t")) {
+              Write-Host "FAIL: $t should not be in the bundle" -ForegroundColor Red; exit 1
+            }
+          }
 
           # The wrapper install.bat invokes must be a real, parseable script
           # (a missing/corrupt wrapper is exactly what makes install.bat flash

@@ -57,7 +57,37 @@ All notable changes to TeXLib-Installer are recorded here. Format follows [Keep 
   string comparison got backwards). Falls back to string inequality for tags
   that don't parse.
 
+- **Shortcut creation could write to the drive root.**
+  `[Environment]::GetFolderPath("Desktop")` returns an empty string when the
+  shell folder can't be resolved (redirected/roaming profiles, some service
+  contexts); unguarded, `"$DesktopPath\$ShortcutName.lnk"` collapsed to
+  `\Sublime.lnk`, which resolves to `C:\Sublime.lnk`. That fails noisily where
+  the root isn't writable and succeeds *silently* where it is, littering `C:\`
+  instead of creating shortcuts. Each folder is now skipped individually, with a
+  warning, when it can't be resolved. Found by the first contained local run.
+
 ### Added
+
+- **`-TeXLibPath` and `-Sandbox`.** `-InstallPath` only ever redirected
+  `$BaseDir`; the library location, the user PATH entry, the HKCU file
+  associations, and the Desktop / Start Menu shortcuts all still landed on the
+  real machine, which made running the installer on a development box a
+  snapshot-and-restore exercise. `-TeXLibPath` overrides where the library goes
+  (and suppresses the `%USERPROFILE%\TeXLib` junction, since an explicit path is
+  deliberate); `-Sandbox` skips exactly the three machine-state writes and
+  nothing else, so the component install, library deploy, `Packages\User`
+  junction, and builder config are all still exercised for real. `-DryRun` shows
+  the skipped steps; `-Sandbox` without a redirect flag warns that components
+  still install to their default locations.
+
+- **`tools\dev-install-test.ps1`** — seeds a returning machine in a temp
+  sandbox and drives a real full install through it twice (silent, then
+  interactive with Skip answers on stdin), asserting 22 conditions including
+  that nothing was written outside the sandbox. Runs in about a minute because
+  the seeded component directories make the installer skip all four large
+  downloads. Contained entirely by the new flags, so cleanup is deleting one
+  directory. Documented in TESTING.md §1b; deliberately not shipped in the
+  release bundle (asserted by `package-integrity`).
 
 - **`reuse-existing-library` CI job** — covers the *returning* machine, which no
   other job did: every one of them staged a `texlib\` bundle and installed once
