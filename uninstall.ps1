@@ -12,13 +12,21 @@
 .PARAMETER Silent
     Skip all interactive prompts.
 
+.PARAMETER RemoveJunction
+    Remove the %USERPROFILE%\TeXLib junction even when this uninstaller cannot
+    prove the installer created it. By default an unclaimed junction is left in
+    place: a developer machine typically has one pointing at a real library, and
+    silently unlinking it breaks every TeX build that resolves through that
+    path. Use this only after checking where the junction actually points.
+
 .NOTES
     Logs to %LOCALAPPDATA%\TeXLib\Logs\uninstall-<timestamp>.log if the install
     directory still exists, otherwise to $env:TEMP.
 #>
 [CmdletBinding()]
 param(
-    [switch]$Silent
+    [switch]$Silent,
+    [switch]$RemoveJunction
 )
 
 $UninstallerVersion = "0.6.1"   # keep in lockstep with install.ps1 $InstallerVersion
@@ -75,6 +83,35 @@ if (-not $Silent) {
     }
 }
 
+# 0. Decide junction ownership BEFORE step 1 deletes the evidence.
+# install.ps1 stamps <BaseDir>\VERSION with `texlib_root=<path>`, and when it
+# creates the user-root junction it reassigns $TeXLibDir to that junction --
+# so texlib_root pointing AT the junction is the installer saying "I made this".
+# The file lives inside $BaseDir, which step 1 removes, hence reading it here.
+#
+# Kept as a named function so the unit-helpers CI job can lift it out by AST and
+# test the decision without a real junction anywhere near a developer's machine.
+function Test-InstallerOwnsJunction {
+    param([string]$JunctionPath, [string]$VersionFile)
+
+    if (-not $JunctionPath) { return $false }
+    if (-not $VersionFile -or -not (Test-Path $VersionFile)) { return $false }
+
+    $line = Get-Content $VersionFile -ErrorAction SilentlyContinue |
+            Where-Object { $_ -match '^\s*texlib_root\s*=' } |
+            Select-Object -First 1
+    if (-not $line) { return $false }
+
+    $claimed = ($line -split '=', 2)[1]
+    if (-not $claimed) { return $false }
+    # Compare as paths, not strings: tolerate a trailing slash and case.
+    return ($claimed.Trim().TrimEnd('\') -ieq $JunctionPath.Trim().TrimEnd('\'))
+}
+
+$UserRootJunction = "$env:USERPROFILE\TeXLib"
+$InstallerOwnsJunction = Test-InstallerOwnsJunction `
+    -JunctionPath $UserRootJunction -VersionFile "$BaseDir\VERSION"
+
 # 1. Remove install directory.
 if (Test-Path $BaseDir) {
     Write-Host "Removing $BaseDir..." -ForegroundColor Yellow
@@ -88,14 +125,25 @@ if (Test-Path $BaseDir) {
 
 # 2. Remove user-root TeXLib junction (the TEXINPUTS-safe path created by
 # install.ps1 when the OneDrive folder contains a space or comma).
-# Critical safety check: only remove if it's actually a reparse point. If the
-# user has a real folder at %USERPROFILE%\TeXLib (e.g. they built one before
-# this installer existed), we must not touch it -- that would destroy their
-# library.
-$UserRootJunction = "$env:USERPROFILE\TeXLib"
+# Two safety checks, both required:
+#   a) it must actually be a reparse point -- a real folder at
+#      %USERPROFILE%\TeXLib (someone's hand-built library) must never be touched;
+#   b) the installer must have CLAIMED it via VERSION's texlib_root. A junction
+#      we did not create is very often a developer's own link to their real
+#      library, and unlinking it silently breaks every TeX build that resolves
+#      through that path. -RemoveJunction overrides (b) deliberately.
 if (Test-Path $UserRootJunction) {
     $Item = Get-Item $UserRootJunction -Force
-    if ($Item.Attributes -match 'ReparsePoint') {
+    if ($Item.Attributes -notmatch 'ReparsePoint') {
+        Write-Host "$UserRootJunction is a real folder, not a junction; leaving it alone." -ForegroundColor Gray
+    } elseif (-not $InstallerOwnsJunction -and -not $RemoveJunction) {
+        $Target = $Item.Target; if (-not $Target) { $Target = $Item.LinkTarget }
+        Write-Host "Leaving $UserRootJunction in place." -ForegroundColor Gray
+        Write-Host "  This uninstaller could not confirm it created that junction" -ForegroundColor Gray
+        Write-Host "  (no matching texlib_root in $BaseDir\VERSION), and it may be your own" -ForegroundColor Gray
+        Write-Host "  link to a real library. Target: $($Target -join '; ')" -ForegroundColor Gray
+        Write-Host "  Re-run with -RemoveJunction if you are sure you want it gone." -ForegroundColor Gray
+    } else {
         Write-Host "Removing user-root junction $UserRootJunction..." -ForegroundColor Yellow
         try {
             # [System.IO.Directory]::Delete with recursive=$false unambiguously
@@ -106,8 +154,6 @@ if (Test-Path $UserRootJunction) {
         } catch {
             Write-Host "  [WARN] Could not remove $UserRootJunction : $_" -ForegroundColor Yellow
         }
-    } else {
-        Write-Host "$UserRootJunction is a real folder, not a junction; leaving it alone." -ForegroundColor Gray
     }
 }
 
