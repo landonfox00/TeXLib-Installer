@@ -4,11 +4,13 @@ All notable changes to TeXLib-Installer are recorded here. Format follows [Keep 
 
 ## [Unreleased]
 
-## [0.6.2] — 2026-07-23
+## [0.6.2] — 2026-07-30
 
 A reliability release for the **returning machine** — a computer that already has TeXLib. Every path unique to that state was broken or untested: reusing an already-synced library aborted the install at the very last step, the uninstaller crashed on a plain double-click before removing anything, the update check offered to "update" you to an older release, and the uninstaller would unlink a `%USERPROFILE%\TeXLib` junction it had never created. None of it was visible to CI, which only ever installed once onto a clean VM.
 
 Also adds `-TeXLibPath` / `-Sandbox`, which make the installer runnable on a development machine without writing outside a throwaway directory, and the test tiers that keep the above from regressing.
+
+This release refreshes the bundled TeXLib library to **v0.5.0** (v0.6.0 shipped v0.4.0, a 2026-07-13 snapshot). That brings the accessible (tagged PDF/UA) build mode, multiple-choice problems with more than one correct option, worked-response gating in `{challenge}` across both theorem stacks, and a `coursemeta.tex` search that reaches five levels up. One breaking change rides along: the Problem-Set `{hint}` environment is now a `\hint` command — see the library's own changelog.
 
 > **v0.6.1 was prepared but never tagged or published** — no `v0.6.1` tag exists in this repository. Its changes (LaTeXTools' missing `regex` dependency, Ctrl+B pinned to the TeXLib build system, and reuse of an already-synced library) ship to users for the first time here. Anyone who ran a "0.6.1" build took it from the source tree, which is how the reuse path above got exercised before it was fixed.
 
