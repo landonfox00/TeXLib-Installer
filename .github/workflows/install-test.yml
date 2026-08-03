@@ -1082,6 +1082,9 @@ jobs:
             Write-Host "FAIL: no explanation of why -Repair refused." -ForegroundColor Red; exit 1
           }
           Write-Host "OK: -Repair refused with a clear reason." -ForegroundColor Green
+          # The child was SUPPOSED to exit non-zero. Without this, `shell: pwsh`
+          # propagates its $LASTEXITCODE and the step fails for passing.
+          exit 0
 
   # ---------------------------------------------------------------------------
   # 4f. self-update-noop — FAST. -Update reaches the GitHub releases API, so the

@@ -1266,23 +1266,29 @@ if ($Repair) {
     }
 }
 
-# 7e. Detect existing TeX Live (or our own prior install).
-$OurTex = Get-Command pdflatex -ErrorAction SilentlyContinue
-if ($OurTex -and ($OurTex.Source -like "$BaseDir*")) {
-    Add-PreflightOK "Existing TeXLib install detected at $($OurTex.Source) (Skip/Reinstall prompt below)"
-} else {
-    Add-PreflightOK "Will install an isolated TeX Live 2025 (scheme-$TexLiveScheme) under $BaseDir"
-}
-if ($TexLiveScheme -ne 'full' -and $InstallComponents) {
-    Add-PreflightWarning "scheme-$TexLiveScheme is smaller and much faster than scheme-full, but TeXLib is tested against full. A package it needs may be absent."
-    Add-PreflightNote "(install.bat -Doctor checks every package TeXLib requires, so a gap shows up as a named missing package rather than a cryptic build error)"
-}
+# 7e-7g. Components. Only meaningful when we are actually going to install them:
+# -Repair and -OnlyTeXLib touch no component, and saying "will install TeX Live"
+# in those modes is a plain untruth in the middle of a report people read to
+# decide whether to continue.
+if ($InstallComponents) {
+    # 7e. Detect existing TeX Live (or our own prior install).
+    $OurTex = Get-Command pdflatex -ErrorAction SilentlyContinue
+    if ($OurTex -and ($OurTex.Source -like "$BaseDir*")) {
+        Add-PreflightOK "Existing TeXLib install detected at $($OurTex.Source) (Skip/Reinstall prompt below)"
+    } else {
+        Add-PreflightOK "Will install an isolated TeX Live 2025 (scheme-$TexLiveScheme) under $BaseDir"
+    }
+    if ($TexLiveScheme -ne 'full') {
+        Add-PreflightWarning "scheme-$TexLiveScheme is smaller and much faster than scheme-full, but TeXLib is tested against full. A package it needs may be absent."
+        Add-PreflightNote "(install.bat -Doctor checks every package TeXLib requires, so a gap shows up as a named missing package rather than a cryptic build error)"
+    }
 
-# 7f. Sublime Text: always an isolated portable copy.
-Add-PreflightOK "Installing an isolated portable Sublime Text under $SublimeDir (any existing Sublime is left untouched; our texlib_builder plugin is scoped to it)"
+    # 7f. Sublime Text: always an isolated portable copy.
+    Add-PreflightOK "Installing an isolated portable Sublime Text under $SublimeDir (any existing Sublime is left untouched; our texlib_builder plugin is scoped to it)"
 
-# 7g. SumatraPDF: always a portable copy.
-Add-PreflightOK "Installing a portable SumatraPDF (any existing install is left untouched)"
+    # 7g. SumatraPDF: always a portable copy.
+    Add-PreflightOK "Installing a portable SumatraPDF (any existing install is left untouched)"
+}
 
 # 7h. Library location.
 if ($ExplicitTeXLibPath) {
