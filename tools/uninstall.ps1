@@ -82,7 +82,7 @@ param(
     [switch]$RemoveJunction
 )
 
-$UninstallerVersion = "0.6.4"   # keep in lockstep with install.ps1 $InstallerVersion
+$UninstallerVersion = "0.7.0"   # keep in lockstep with install.ps1 $InstallerVersion
 $InstallerRepo      = "https://github.com/landonfox00/TeXLib-Installer"
 
 $BaseDir = if ($InstallPath) { $InstallPath } else { "$env:LOCALAPPDATA\TeXLib" }
@@ -543,7 +543,11 @@ if (Test-Path $UserRootJunction) {
 # -----------------------------------------------------------------------------
 Write-Host "Removing shortcuts..." -ForegroundColor Yellow
 $DesktopPath   = [Environment]::GetFolderPath("Desktop")
-$StartMenuPath = [Environment]::GetFolderPath("StartMenu") + "\Programs"
+$StartMenuRoot = [Environment]::GetFolderPath("StartMenu")
+$StartMenuPath = if ($StartMenuRoot) { "$StartMenuRoot\Programs" } else { $null }
+
+# Loose .lnk files: what installs before 0.7.0 created, plus the Desktop pair
+# 0.7.0+ still creates.
 $ShortcutNames = @("Sublime.lnk", "Sumatra.lnk", "Sublime Text.lnk", "SumatraPDF.lnk")
 foreach ($n in $ShortcutNames) {
     foreach ($dir in @($DesktopPath, $StartMenuPath)) {
@@ -552,6 +556,27 @@ foreach ($n in $ShortcutNames) {
         if (Test-Path $p) {
             Remove-Item $p -Force -ErrorAction SilentlyContinue
             Write-Host "  Removed $p" -ForegroundColor Gray
+        }
+    }
+}
+
+# The 0.7.0+ Start Menu group. Only remove it once nothing but our own entries
+# are left in it -- a user who dropped their own shortcut in there keeps it,
+# and keeps the folder.
+if ($StartMenuPath) {
+    $Group = "$StartMenuPath\TeXLib"
+    if (Test-Path $Group) {
+        $Ours = @("Sublime Text (TeXLib).lnk", "SumatraPDF (TeXLib).lnk", "TeXLib Doctor.lnk")
+        foreach ($n in $Ours) {
+            $p = Join-Path $Group $n
+            if (Test-Path $p) { Remove-Item $p -Force -ErrorAction SilentlyContinue }
+        }
+        $Leftover = @(Get-ChildItem -LiteralPath $Group -Force -ErrorAction SilentlyContinue)
+        if ($Leftover.Count -eq 0) {
+            Remove-Item -LiteralPath $Group -Recurse -Force -ErrorAction SilentlyContinue
+            Write-Host "  Removed the Start Menu group $Group" -ForegroundColor Gray
+        } else {
+            Write-Host "  Left $Group in place: it still holds $($Leftover.Count) item(s) that aren't ours" -ForegroundColor Gray
         }
     }
 }

@@ -4,6 +4,78 @@ All notable changes to TeXLib-Installer are recorded here. Format follows [Keep 
 
 ## [Unreleased]
 
+## [0.7.0] — 2026-08-03
+
+Convenience release. One of these is a gap rather than a nicety: the installer was shipping a Sublime plugin it never installed.
+
+### Fixed
+
+- **The TeXLib Sublime package was bundled but never deployed.** The library
+  carries a real Sublime package in `Sublime\texlib\` — 16 `texlib_*` Python
+  modules (doctor, scaffold, bank, texam, complete, locate, …) plus
+  `Main.sublime-menu`, the command palette entries, snippets, and the
+  `TeXLib Build Output` syntax. It rides in every release ZIP, and through 0.6.4
+  the installer copied only the four flat builder files into `Packages\User`.
+  Anyone who installed got working Ctrl+B builds and none of the rest, while a
+  developer running the library's own `deploy-plugin.ps1` got everything — so
+  the difference was invisible from the one machine most likely to notice it.
+  - It could not simply stay where it was: `Packages\User` is junctioned to
+    `<library>\Sublime`, so the package was already *visible* at
+    `Packages\User\texlib\`, but Sublime only loads `.py` at the **top level** of
+    a package directory, which makes a nested folder inert. It now gets its own
+    `Packages\TeXLib`, junctioned to the library copy exactly as
+    `deploy-plugin.ps1` does — so an `-OnlyTeXLib` refresh updates the plugin
+    with no extra step. `-Doctor` reports it, and a real folder already sitting
+    at that path is left alone rather than clobbered.
+
+### Added
+
+- **`install.bat -Repair`** — re-applies configuration to an existing install
+  and nothing else: the settings junction, the builder files, the Sublime
+  package, the LaTeXTools / Preferences / SumatraPDF settings, the file
+  associations (with the stale "Open with" purge), and the shortcuts. Downloads
+  nothing, installs no components, leaves the library alone, and works offline.
+  This is the answer to "my file associations went weird" or "Sublime stopped
+  seeing the builder", which until now meant a full re-run. Refuses, with a
+  reason, when there is no install to repair.
+- **`install.bat -Update`** — fetches the newest release, verifies it against
+  that release's `SHA256SUMS`, and hands off to it, forwarding every other
+  argument you passed. The installer has told you about new versions since
+  0.4.0; you still had to go find the ZIP, download it, extract it and re-run.
+  Note the hash check is served by the same release over TLS, so it is a
+  corruption check rather than an independent signature — worth knowing, not a
+  reason to skip it.
+- **`-TexLiveScheme full|medium|basic`** — `full` stays the default and the
+  tested configuration, but it is ~6 GB and 30-60 minutes, which is essentially
+  the entire install. `medium` (~2.5 GB, 5-15 min) and `basic` (~0.6 GB, 2-5
+  min) trade coverage for time. The pre-flight disk requirement follows the
+  scheme.
+  - Paired with a new `-Doctor` check that resolves, via `kpsewhich`, all 50
+    LaTeX packages TeXLib's `.sty`/`.cls` files actually `\RequirePackage` —
+    derived by reading the library rather than guessed. A thin scheme therefore
+    shows up as a named list plus a ready-to-paste `tlmgr install` line, instead
+    of surfacing months later as `File 'tabularray.sty' not found` mid-build.
+- **A "TeXLib" Start Menu folder** holding Sublime Text, SumatraPDF, and a
+  **TeXLib Doctor** entry, replacing two loose shortcuts scattered among every
+  other installed program. Doctor runs from the copy stashed in
+  `<InstallPath>\Scripts`, so it still works after the extracted installer
+  folder is long gone — which is exactly when someone needs it. The Desktop
+  keeps the two apps only. Pre-0.7.0 loose entries are cleaned up on install,
+  and the uninstaller removes the group unless the user has put something of
+  their own in it.
+
+### Testing
+
+- New CI jobs `repair-mode` (rebuilds what you break, offline, library
+  untouched; and refuses when there is nothing to repair) and `self-update-noop`
+  (reaches the API and correctly decides to do nothing — guarded so a branch
+  behind the latest release skips rather than kicking off a real install).
+- `reuse-existing-library` now asserts the Sublime package is deployed as a
+  junction at `Packages\TeXLib`.
+- `dev-install-test.ps1` seeds a stub plugin, asserts the junction, and adds a
+  `-Repair` pass that deletes the junction and a settings file and checks both
+  come back without a download.
+
 ## [0.6.4] — 2026-08-03
 
 Follow-up to 0.6.3, from watching a real uninstall run on a pre-0.6.3 machine.
