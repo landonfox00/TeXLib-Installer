@@ -83,7 +83,7 @@ If everything goes well, you'll see:
 A few things to know:
 
 - **Open a NEW terminal** before running `pdflatex` or `lualatex` from the command line. The PATH update doesn't apply to terminals that were already open.
-- **Sublime Text** may show a "Package Control" loading message the very first time you open it. Close Sublime and re-open it once — the message goes away.
+- **Package Control is not installed**, deliberately. Everything Sublime needs here — LaTeXTools, its `regex` library, the TeXLib plugin — is already installed from pinned, hash-verified copies. If you want Package Control for packages of your own, install it yourself the usual way; nothing here interferes with it.
 - **File defaults** — if double-clicking a `.tex` doesn't open it in Sublime (or `.pdf` doesn't open in SumatraPDF), Windows sometimes ignores the registry settings on first install. Fix:
   - Right-click the file → **Open with → Choose another app**.
   - Pick **Sublime Text (TeXLib)** / **SumatraPDF (TeXLib)** — the `(TeXLib)` suffix tells them apart from any copy you installed yourself.

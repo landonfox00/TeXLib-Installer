@@ -11,7 +11,6 @@ One-click portable Windows installer for the [TeXLib](https://github.com/landonf
 | Sublime Text 4 (portable) | https://download.sublimetext.com | `%LOCALAPPDATA%\TeXLib\Sublime Text` |
 | SumatraPDF (portable) | https://www.sumatrapdfreader.org | `%LOCALAPPDATA%\TeXLib\Sumatra` |
 | TeX Live (full, portable) | https://mirror.ctan.org/systems/texlive/tlnet | `%LOCALAPPDATA%\TeXLib\TexLive\2025` |
-| Package Control | https://packagecontrol.io | Sublime user packages |
 | LaTeXTools | https://github.com/SublimeText/LaTeXTools | Sublime packages |
 | TeXLib library (bundled snapshot) | This repo's release ZIP | `%LOCALAPPDATA%\TeXLib\Library` |
 

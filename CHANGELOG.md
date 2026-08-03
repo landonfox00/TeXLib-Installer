@@ -4,6 +4,54 @@ All notable changes to TeXLib-Installer are recorded here. Format follows [Keep 
 
 ## [Unreleased]
 
+## [0.8.0] — 2026-08-03
+
+Diagnoses and fixes `plugin_host-3.8 has exited unexpectedly`, seen on a coworker's machine right after a clean install.
+
+### Removed
+
+- **Package Control is no longer installed.** It was the cause. The chain,
+  established by inspecting the pinned artifacts rather than guessing:
+  - The library ships `Sublime/Package Control.sublime-settings` — a snapshot of
+    the *author's* setup, listing `LaTeXTools`, `Package Control`, `PowerShell`
+    and `UnitTesting` — and that folder becomes `Packages\User` through the
+    settings junction, so it is live on every machine.
+  - LaTeXTools declares `.python-version = 3.8`, so it runs in the 3.8 host, and
+    `latextools\utils\analysis.py:4` does a bare, unguarded `import regex` that
+    8+ startup modules pull in. `regex` is a native extension — the only thing
+    in that host that can kill the process rather than raise.
+  - LaTeXTools' `dependencies.json` declares `mdpopups` **and** `regex`. On first
+    launch Package Control read the shipped list, found those libraries
+    unaccounted for, and installed its own — writing over
+    `_regex.cp38-win_amd64.pyd` while the host had it loaded and mapped.
+  - Our copy was invisible to it because the installer extracted the wheel and
+    kept only `regex\`, discarding `regex-2024.11.6.dist-info\` — the record
+    Package Control identifies installed libraries by.
+
+  Running two package managers over one `Packages` tree was never redundancy, it
+  was a race. This installer already does that job with pinned, hash-verified
+  artifacts, so the second manager goes. Anyone who wants Package Control for
+  packages of their own can install it themselves; nothing here interferes, and
+  an existing copy is left strictly alone on re-install.
+  - Ruled out along the way, so they don't get blamed later: the `regex` wheel is
+    correctly built (cp38 / win_amd64, links `python38.dll` + `VCRUNTIME140.dll`),
+    and `mdpopups` really is guarded (`try: import mdpopups`), so its absence was
+    never the problem.
+
+### Fixed
+
+- **The `regex` install keeps the wheel's `.dist-info`.** Beyond defusing the
+  above, it is simply the correct way to place a Python package — so a user who
+  installs Package Control later finds a registered library instead of an
+  unmarked folder to trample.
+- **The author's `Package Control.sublime-settings` no longer ships**, and an
+  install removes a stale one left by an earlier release — unless Package
+  Control is actually present, in which case the file is its own live state and
+  is left alone. `package-integrity` asserts the bundle never carries it again.
+- **The first-launch note that said "Sublime may show a Package Control loading
+  message; just restart once and it goes away"** is gone. It was documenting the
+  symptom of this bug as normal behaviour.
+
 ## [0.7.2] — 2026-08-03
 
 From reading a real install log on a returning work machine.
