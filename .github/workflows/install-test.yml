@@ -877,6 +877,88 @@ jobs:
           Write-Host "OK: -All removed the install and left the pre-0.6.3 folder alone." -ForegroundColor Green
 
   # ---------------------------------------------------------------------------
+  # 4d. junctioned-library-uninstall — FAST. The shape 0.6.4 fixed: a machine
+  #     upgraded from <=0.6.2 whose OneDrive path had a comma, so texlib_root is
+  #     the %USERPROFILE%\TeXLib JUNCTION and the library is on the far side of
+  #     it. Two things have to hold, and 0.6.3 got both wrong in one place:
+  #     declining must leave the real library untouched, and accepting must
+  #     delete the folder the prompt actually named rather than just the link.
+  #     Nothing else covers it -- every other job's library is a real directory.
+  # ---------------------------------------------------------------------------
+  junctioned-library-uninstall:
+    if: github.event_name != 'schedule'
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Decline the library -- the junction target must survive
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $sand = Join-Path $env:RUNNER_TEMP 'jlib-decline'
+          $root = Join-Path $sand 'root'
+          $real = Join-Path $sand 'OneDrive - Fake University, Org\Documents\TeXLib'
+          $link = Join-Path $sand 'UserProfile\TeXLib'
+          New-Item -ItemType Directory -Force -Path $root, $real, (Split-Path $link -Parent) | Out-Null
+          Set-Content -Encoding UTF8 -Path (Join-Path $real 'canary.txt') -Value 'must survive'
+          New-Item -ItemType Junction -Path $link -Target $real | Out-Null
+          $stamp = @("installer_version=0.6.2", "texlib_root=$link") -join "`r`n"
+          Set-Content -Encoding UTF8 -Path (Join-Path $root 'VERSION') -Value $stamp
+
+          $env:TEXLIB_INSTALLER_WRAPPED = '1'
+          Set-Content -Encoding ascii -Path answers.txt -Value "Y`r`nn"
+          $out = & cmd /c "powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools\uninstall.ps1 -InstallPath `"$root`" < answers.txt" 2>&1 | Out-String
+          Write-Host $out
+
+          if ($out -match 'PRESERVES') {
+            Write-Host "FAIL: the PRESERVES block came back." -ForegroundColor Red; exit 1
+          }
+          # The prompt must name the TARGET. Naming only the link is how a user
+          # says yes to "remove C:\Users\me\TeXLib" and means something else.
+          if ($out -notmatch [regex]::Escape($real)) {
+            Write-Host "FAIL: the prompt never named the junction target." -ForegroundColor Red; exit 1
+          }
+          if (-not (Test-Path (Join-Path $real 'canary.txt'))) {
+            Write-Host "FAIL: declining the library still destroyed it." -ForegroundColor Red; exit 1
+          }
+          if (-not (Test-Path $link)) {
+            Write-Host "FAIL: declining the library still removed the junction." -ForegroundColor Red; exit 1
+          }
+          Write-Host "OK: declined, and both the junction and the real library survive." -ForegroundColor Green
+
+      - name: Accept the library -- the junction TARGET must go, not just the link
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $sand = Join-Path $env:RUNNER_TEMP 'jlib-accept'
+          $root = Join-Path $sand 'root'
+          $real = Join-Path $sand 'OneDrive - Fake University, Org\Documents\TeXLib'
+          $link = Join-Path $sand 'UserProfile\TeXLib'
+          New-Item -ItemType Directory -Force -Path $root, $real, (Split-Path $link -Parent) | Out-Null
+          Set-Content -Encoding UTF8 -Path (Join-Path $real 'canary.txt') -Value 'should go'
+          New-Item -ItemType Junction -Path $link -Target $real | Out-Null
+          $stamp = @("installer_version=0.6.2", "texlib_root=$link") -join "`r`n"
+          Set-Content -Encoding UTF8 -Path (Join-Path $root 'VERSION') -Value $stamp
+
+          $env:TEXLIB_INSTALLER_WRAPPED = '1'
+          Set-Content -Encoding ascii -Path answers2.txt -Value "Y`r`ny"
+          $out = & cmd /c "powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools\uninstall.ps1 -InstallPath `"$root`" < answers2.txt" 2>&1 | Out-String
+          Write-Host $out
+
+          if (Test-Path $real) {
+            Write-Host "FAIL: yes removed only the link; the real library is still there." -ForegroundColor Red; exit 1
+          }
+          if (Test-Path $link) {
+            Write-Host "FAIL: the junction was left dangling." -ForegroundColor Red; exit 1
+          }
+          # Deleting the library must not take its parent with it.
+          if (-not (Test-Path (Split-Path $real -Parent))) {
+            Write-Host "FAIL: the library's parent directory was removed too." -ForegroundColor Red; exit 1
+          }
+          Write-Host "OK: accepted, and exactly the named folder plus the link went." -ForegroundColor Green
+
+  # ---------------------------------------------------------------------------
   # 5. package-integrity — FAST. Builds an actual release bundle with
   #    make-release.ps1 and asserts it contains every file install.bat /
   #    uninstall.bat invoke, catching packaging gaps the other jobs miss because

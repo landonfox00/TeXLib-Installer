@@ -4,6 +4,49 @@ All notable changes to TeXLib-Installer are recorded here. Format follows [Keep 
 
 ## [Unreleased]
 
+## [0.6.4] — 2026-08-03
+
+Follow-up to 0.6.3, from watching a real uninstall run on a pre-0.6.3 machine.
+
+### Fixed
+
+- **"Remove the TeXLib library" named the junction, not the library.** On a
+  machine upgraded from ≤0.6.2 with a comma/space OneDrive path, `texlib_root`
+  is the `%USERPROFILE%\TeXLib` *junction*, so the prompt read
+  `Remove the TeXLib library (C:\Users\you\TeXLib)?` while the library itself
+  was on the far side of that link. Answering yes removed the link and reported
+  `Removed`; the library was still in OneDrive. The prompt now names the folder
+  whose contents actually go, and yes deletes that folder and then drops the
+  link.
+  - The same path was one PowerShell build away from being much worse. WinPS
+    5.1's `Remove-Item -Recurse` on a junction removes only the link *here*, but
+    the behaviour has never been dependable, and on a build that follows the
+    link it would have emptied the OneDrive folder without ever having named it.
+    `Uninstall-Component` now refuses to hand a reparse point to `Remove-Item`
+    at all: it unlinks with `Directory.Delete(path, recursive: false)`, and any
+    caller that means to delete the far side resolves the target first.
+
+### Changed
+
+- **Dropped the `PRESERVES (unless you say otherwise below)` block.** Every
+  component is asked about and kept on request, so singling the library out as
+  the preserved one was inconsistent -- and it read as a promise while the
+  prompt three lines later offered to delete it. The confirmation screen is now
+  two honest lists: what goes regardless (shortcuts, PATH, registry entries, the
+  installer's own bookkeeping) and what you get asked about (Sublime Text,
+  SumatraPDF, TeX Live, the library), with each component's real path.
+- **The library is always prompted for, including inside the install root.**
+  0.6.3 removed an in-root library silently on the grounds that it is a deployed
+  artifact. It still defaults to going, but the question is now asked like every
+  other component's. The only asymmetry left is the default answer, and it turns
+  on location rather than on the component: inside the install root defaults to
+  yes, a pre-0.6.3 library out in Documents defaults to no. `-Silent` takes
+  exactly those defaults.
+- **`UserChoice` entries Windows refuses to clear are reported once at the end**
+  instead of a four-line `[WARN]` block per extension, and the note says what
+  actually happens (the ProgID is gone, so Windows asks which app to use next
+  time) rather than just that the delete failed.
+
 ## [0.6.3] — 2026-08-03
 
 An uninstall-and-layout release. The uninstaller genuinely removes what it says it removes, the library stops living in `Documents`, Windows stops accumulating dead "Open with" entries, and the release folder no longer offers four things to double-click when only two of them work.

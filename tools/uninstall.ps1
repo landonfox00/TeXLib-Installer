@@ -7,18 +7,24 @@
     SumatraPDF, TeX Live and, as of 0.6.3, the TeXLib library itself, which now
     lives inside that same root. Also removes Desktop and Start Menu shortcuts,
     the PATH entry, and the file-association / "Open with" registry entries.
+    A pre-0.6.3 library elsewhere (Documents / OneDrive) is offered too.
 
-    Interactive runs confirm each component separately, so you can drop the
-    editor and keep the 6 GB TeX Live tree (or the other way round). Every
-    choice also has a switch, for unattended runs.
+    Interactive runs confirm each component separately -- Sublime Text,
+    SumatraPDF, TeX Live, and the library -- so you can drop the editor and keep
+    the 6 GB TeX Live tree, or any other combination. Nothing is exempt from
+    being asked; every choice also has a switch, for unattended runs.
 
-    A pre-0.6.3 library in Documents / OneDrive is NOT removed by default: at
-    that location it sits among the user's own files. Pass -RemoveLibrary (or
-    answer Y at the prompt) to delete it too.
+    The only asymmetry is the DEFAULT answer, and it turns on location rather
+    than on which component it is: a library inside the install root is a
+    deployed artifact and defaults to going, while a pre-0.6.3 library out in
+    Documents / OneDrive may have the user's own materials next to it and
+    defaults to staying.
 
 .PARAMETER Silent
-    Skip all interactive prompts. Removes the programs and leaves the library,
-    the user-root junction, and any component named by a -Keep switch.
+    Skip all interactive prompts, taking the same answers they default to:
+    remove the programs, remove a library inside the install root, keep one
+    outside it, keep an unclaimed user-root junction, and honour any -Keep
+    switch.
 
 .PARAMETER InstallPath
     Uninstall an install rooted somewhere other than %LOCALAPPDATA%\TeXLib --
@@ -30,11 +36,11 @@
     -RemoveLibrary and -RemoveJunction.
 
 .PARAMETER RemoveLibrary
-    Also delete a TeXLib library that lives OUTSIDE the install root -- i.e. a
-    pre-0.6.3 Documents\TeXLib, which is preserved by default because it may
-    hold course materials the user parked alongside the library. A 0.6.3+
-    library lives inside the install root and always goes with it; this switch
-    is a no-op there.
+    Answer yes to the library question without being asked. Only changes
+    anything for a library OUTSIDE the install root (a pre-0.6.3
+    Documents\TeXLib), which is the one case that defaults to staying. If that
+    path is the user-root junction, the junction's TARGET is what gets deleted
+    -- the folder the prompt names -- and the link is then dropped.
 
 .PARAMETER KeepSublime
     Leave the Sublime Text install in place.
@@ -76,7 +82,7 @@ param(
     [switch]$RemoveJunction
 )
 
-$UninstallerVersion = "0.6.3"   # keep in lockstep with install.ps1 $InstallerVersion
+$UninstallerVersion = "0.6.4"   # keep in lockstep with install.ps1 $InstallerVersion
 $InstallerRepo      = "https://github.com/landonfox00/TeXLib-Installer"
 
 $BaseDir = if ($InstallPath) { $InstallPath } else { "$env:LOCALAPPDATA\TeXLib" }
@@ -191,14 +197,41 @@ if (-not $SumatraDir) { $SumatraDir = "$BaseDir\Sumatra" }
 if (-not $TexLiveDir) { $TexLiveDir = "$BaseDir\TexLive\$TexLiveYear" }
 if (-not $TeXLibDir)  { $TeXLibDir  = "$BaseDir\Library" }
 
-# 0.6.3+ puts the library inside the install root, where it is a deployed
-# artifact of the install rather than anything the user put there: it goes with
-# the root, no prompt and no switch needed. A library OUTSIDE the root is a
-# pre-0.6.3 layout in Documents / OneDrive, where the user may well have parked
-# course materials alongside it -- that one is preserved unless asked for.
 $LibraryInsideRoot = $TeXLibDir.TrimEnd('\').ToLowerInvariant().StartsWith(
                         $BaseDir.TrimEnd('\').ToLowerInvariant() + '\')
-if ($LibraryInsideRoot) { $RemoveLibrary = $true }
+
+# The library gets asked about exactly like every other component -- nothing is
+# exempt from the question. Only the DEFAULT answer differs, and on location
+# rather than on the library being special: inside the install root it is a
+# deployed artifact that goes with everything else, while outside it (a
+# pre-0.6.3 Documents\TeXLib) the user may have parked course materials next to
+# it, so a bare Enter keeps it.
+$RemoveLibraryDefault = $LibraryInsideRoot
+
+# A pre-0.6.3 install on a machine whose OneDrive path has a comma or space
+# rehomed the library through %USERPROFILE%\TeXLib and stamped THAT as
+# texlib_root. So $TeXLibDir can be a junction, and the real library is on the
+# far side of it. Resolve the target now, because two things depend on it:
+# the prompt has to name the folder whose contents actually get deleted (an
+# answer of "yes" to "remove C:\Users\you\TeXLib" must not silently mean "empty
+# my OneDrive"), and the removal has to delete the target explicitly rather than
+# letting Remove-Item -Recurse walk through the link to get there.
+$TeXLibTarget = $TeXLibDir
+$TeXLibIsJunction = $false
+if (Test-Path $TeXLibDir) {
+    $LibItem = Get-Item -LiteralPath $TeXLibDir -Force
+    if ($LibItem.Attributes -match 'ReparsePoint') {
+        $TeXLibIsJunction = $true
+        $Resolved = $LibItem.Target; if (-not $Resolved) { $Resolved = $LibItem.LinkTarget }
+        if ($Resolved) { $TeXLibTarget = @($Resolved)[0] }
+    }
+}
+# What the prompt and the summary call the library.
+$TeXLibLabel = if ($TeXLibIsJunction -and ($TeXLibTarget -ne $TeXLibDir)) {
+    "$TeXLibTarget  (reached through the junction $TeXLibDir)"
+} else {
+    $TeXLibDir
+}
 
 # Quick check: anything to uninstall?
 if (-not (Test-Path $BaseDir)) {
@@ -211,23 +244,24 @@ if (-not (Test-Path $BaseDir)) {
 # 1. Confirm, then decide each component.
 # -----------------------------------------------------------------------------
 if (-not $Silent -and -not $All) {
-    Write-Host "About to remove:" -ForegroundColor Yellow
-    $RootContents = if ($LibraryInsideRoot) {
-        "Sublime, Sumatra, TeX Live, the TeXLib library, scripts, logs"
-    } else {
-        "Sublime, Sumatra, TeX Live, scripts, logs"
-    }
-    Write-Host "  - $BaseDir ($RootContents)" -ForegroundColor Gray
+    # Two lists, and the split is the honest one: what goes no matter what, and
+    # what you get a say in. Every component is in the second list -- none is
+    # singled out as preserved or as doomed.
+    Write-Host "Always removed:" -ForegroundColor Yellow
     Write-Host "  - Desktop and Start Menu shortcuts" -ForegroundColor Gray
     Write-Host "  - PATH entries pointing at TeX Live" -ForegroundColor Gray
-    Write-Host "  - File-association and 'Open with' registry entries" -ForegroundColor Gray
-    Write-Host "  - $env:USERPROFILE\TeXLib  (only if it is a junction -- see notes)" -ForegroundColor Gray
-    Write-Host ""
-    if (-not $LibraryInsideRoot) {
-        Write-Host "PRESERVES (unless you say otherwise below):" -ForegroundColor Green
-        Write-Host "  - $TeXLibDir  (the TeXLib library)" -ForegroundColor Gray
-        Write-Host ""
+    Write-Host "  - File associations and 'Open with' registry entries" -ForegroundColor Gray
+    Write-Host "  - The installer's own bookkeeping under $BaseDir (scripts, logs, VERSION)" -ForegroundColor Gray
+    if (-not $TeXLibIsJunction) {
+        Write-Host "  - $UserRootJunction  (only if this installer created that junction)" -ForegroundColor Gray
     }
+    Write-Host ""
+    Write-Host "You'll be asked about each of these:" -ForegroundColor Yellow
+    if (Test-Path $SublimeDir) { Write-Host "  - Sublime Text     $SublimeDir" -ForegroundColor Gray }
+    if (Test-Path $SumatraDir) { Write-Host "  - SumatraPDF       $SumatraDir" -ForegroundColor Gray }
+    if (Test-Path $TexLiveDir) { Write-Host "  - TeX Live         $TexLiveDir" -ForegroundColor Gray }
+    if (Test-Path $TeXLibDir)  { Write-Host "  - TeXLib library   $TeXLibLabel" -ForegroundColor Gray }
+    Write-Host ""
     $Confirm = Read-Host "Proceed? (Y/N)"
     if ($Confirm -ne "Y" -and $Confirm -ne "y") {
         Write-Host "Aborted." -ForegroundColor Yellow
@@ -248,16 +282,24 @@ if (-not $Silent -and -not $All) {
         Write-Host "  (TeX Live is ~6 GB and takes 30-60 minutes to reinstall.)" -ForegroundColor Gray
         $KeepTeXLive = -not (Read-YesNo "Remove TeX Live ($TexLiveDir)?" $true)
     }
-    if (-not $RemoveLibrary -and -not $LibraryInsideRoot -and (Test-Path $TeXLibDir)) {
-        Write-Host "  (This is the pre-0.6.3 location; anything you saved alongside the" -ForegroundColor Gray
-        Write-Host "   library goes with it.)" -ForegroundColor Gray
-        $RemoveLibrary = Read-YesNo "Remove the TeXLib library ($TeXLibDir)?" $false
+    if (-not $RemoveLibrary -and (Test-Path $TeXLibDir)) {
+        if ($TeXLibIsJunction -and ($TeXLibTarget -ne $TeXLibDir)) {
+            Write-Host "  ($TeXLibDir is a junction. Answering yes deletes the contents of" -ForegroundColor Yellow
+            Write-Host "   $TeXLibTarget, which is where the library really lives.)" -ForegroundColor Yellow
+        } elseif (-not $LibraryInsideRoot) {
+            Write-Host "  (Pre-0.6.3 location -- anything you saved next to the library goes too.)" -ForegroundColor Gray
+        }
+        $RemoveLibrary = Read-YesNo "Remove the TeXLib library ($TeXLibTarget)?" $RemoveLibraryDefault
     }
     Write-Host ""
 }
 
+# -Silent asks nothing, so it takes exactly the answers the prompts default to.
+if ($Silent -and -not $RemoveLibrary) { $RemoveLibrary = $RemoveLibraryDefault }
+
 # Keeping any component means the install root has to survive to hold it.
-$KeepAnyComponent = $KeepSublime -or $KeepSumatra -or $KeepTeXLive
+$KeepAnyComponent = $KeepSublime -or $KeepSumatra -or $KeepTeXLive -or
+                    ($LibraryInsideRoot -and -not $RemoveLibrary)
 
 # -----------------------------------------------------------------------------
 # 2. Close anything holding a lock.
@@ -371,6 +413,22 @@ function Uninstall-Component {
     # second thing to keep in sync.
     param([string]$Label, [string]$Path)
     if (-not $Path -or -not (Test-Path $Path)) { return }
+    # NEVER hand a reparse point to Remove-Item -Recurse. Windows PowerShell 5.1
+    # walks THROUGH a junction and deletes the contents on the far side of it,
+    # so "remove the library at %USERPROFILE%\TeXLib" would quietly empty the
+    # OneDrive folder that junction points at. Callers that mean to delete the
+    # far side resolve the target themselves and pass that; here we only ever
+    # drop the link entry, which Directory.Delete(path, $false) does exactly.
+    if ((Get-Item -LiteralPath $Path -Force).Attributes -match 'ReparsePoint') {
+        Write-Host "Unlinking $Label ($Path)..." -ForegroundColor Yellow
+        try {
+            [System.IO.Directory]::Delete($Path, $false)
+            Write-Host "  Unlinked (whatever it pointed at was not touched)" -ForegroundColor Green
+        } catch {
+            Write-Host "  [WARN] Could not unlink $Path : $_" -ForegroundColor Yellow
+        }
+        return
+    }
     Write-Host "Removing $Label ($Path)..." -ForegroundColor Yellow
     try {
         Remove-Item -Path $Path -Recurse -Force -ErrorAction Stop
@@ -396,6 +454,24 @@ function Uninstall-Component {
     }
 }
 
+function Remove-TeXLibLibrary {
+    # The library, wherever it really is. When $TeXLibDir is the pre-0.6.3
+    # user-root junction, the files live on the far side of it: delete the
+    # TARGET explicitly, then drop the link. Passing the junction itself to
+    # Uninstall-Component would only unlink it (by design) and leave the real
+    # library sitting there -- and passing it to a bare Remove-Item -Recurse,
+    # which is what 0.6.3.0 did, would delete the target's contents without ever
+    # having named that folder in the prompt.
+    if (-not (Test-Path $TeXLibDir)) { return }
+    if ($TeXLibIsJunction -and ($TeXLibTarget -ne $TeXLibDir)) {
+        Write-Host "The library lives at $TeXLibTarget (via the junction $TeXLibDir)." -ForegroundColor Yellow
+        Uninstall-Component -Label "TeXLib library" -Path $TeXLibTarget
+        Uninstall-Component -Label "the library junction" -Path $TeXLibDir
+    } else {
+        Uninstall-Component -Label "TeXLib library" -Path $TeXLibDir
+    }
+}
+
 if ($KeepAnyComponent) {
     # Something is staying, so the root has to stay too: remove only what was
     # actually selected, then tidy up the installer's own bookkeeping.
@@ -408,8 +484,8 @@ if ($KeepAnyComponent) {
     if (-not $KeepTeXLive) { Uninstall-Component -Label "TeX Live" -Path $TexLiveDir }
     else { Write-Host "Keeping TeX Live at $TexLiveDir" -ForegroundColor Gray }
 
-    if ($RemoveLibrary) { Uninstall-Component -Label "TeXLib library" -Path $TeXLibDir }
-    elseif (Test-Path $TeXLibDir) { Write-Host "Keeping the TeXLib library at $TeXLibDir" -ForegroundColor Gray }
+    if ($RemoveLibrary) { Remove-TeXLibLibrary }
+    elseif (Test-Path $TeXLibDir) { Write-Host "Keeping the TeXLib library at $TeXLibLabel" -ForegroundColor Gray }
 
     # $BaseDir\Scripts and $BaseDir\VERSION stay deliberately. The install is now
     # partial, and those two are exactly what a later re-install or a follow-up
@@ -422,7 +498,7 @@ if ($KeepAnyComponent) {
     # (0.6.3+ layout), the scripts, and the logs with it.
     Uninstall-Component -Label "the TeXLib install" -Path $BaseDir
     if ($RemoveLibrary -and -not $LibraryInsideRoot) {
-        Uninstall-Component -Label "TeXLib library" -Path $TeXLibDir
+        Remove-TeXLibLibrary
     }
 }
 
@@ -521,6 +597,8 @@ $ManagedExts = @(".txt", ".tex", ".cls", ".sty", ".bib",
                  ".sublime-project", ".sublime-workspace", ".pdf")
 $ExePatterns = @("sublime_text.exe", "SumatraPDF*.exe")
 $ProviderProps = @('PSPath', 'PSParentPath', 'PSChildName', 'PSDrive', 'PSProvider')
+# Extensions whose UserChoice Windows would not let us clear; reported at the end.
+$script:StillPinned = @()
 
 foreach ($ID in $TexlibProgIDs) {
     $full = "$RegPath\$ID"
@@ -653,8 +731,11 @@ foreach ($Ext in $ManagedExts) {
                 Remove-Item -Path $UserChoice -Recurse -Force -ErrorAction Stop
                 Write-Host "  Cleared the pinned default for $Ext ($Pinned)" -ForegroundColor Gray
             } catch {
-                Write-Host "  [WARN] $Ext is still pinned to $Pinned and Windows would not let us clear it." -ForegroundColor Yellow
-                Write-Host "         Right Click -> Open With -> Choose Another App to reset it." -ForegroundColor Yellow
+                # Windows guards UserChoice, and on some builds it refuses the
+                # delete outright. Not a failure: the ProgID it names is gone, so
+                # Windows falls back to asking. Collected for the summary rather
+                # than shouted about here.
+                $script:StillPinned += $Ext
             }
         }
     }
@@ -682,7 +763,7 @@ $Kept = @()
 if ($KeepSublime) { $Kept += "Sublime Text ($SublimeDir)" }
 if ($KeepSumatra) { $Kept += "SumatraPDF ($SumatraDir)" }
 if ($KeepTeXLive) { $Kept += "TeX Live ($TexLiveDir)" }
-if (-not $RemoveLibrary -and (Test-Path $TeXLibDir)) { $Kept += "TeXLib library ($TeXLibDir)" }
+if (-not $RemoveLibrary -and (Test-Path $TeXLibDir)) { $Kept += "TeXLib library ($TeXLibLabel)" }
 if ($Kept.Count -gt 0) {
     Write-Host "Kept at your request:" -ForegroundColor Gray
     foreach ($k in $Kept) { Write-Host "  - $k" -ForegroundColor Gray }
@@ -690,6 +771,14 @@ if ($Kept.Count -gt 0) {
     Write-Host "Re-run with -All to remove everything, or delete those by hand." -ForegroundColor Gray
 } else {
     Write-Host "Everything this installer created has been removed." -ForegroundColor Gray
+}
+if ($script:StillPinned.Count -gt 0) {
+    Write-Host ""
+    Write-Host "One loose end: Windows would not let us clear the pinned default app for" -ForegroundColor Yellow
+    Write-Host "  $($script:StillPinned -join ', ')" -ForegroundColor Yellow
+    Write-Host "It points at a TeXLib entry that no longer exists, so Windows will simply ask" -ForegroundColor Gray
+    Write-Host "which app to use the next time you open one. To settle it now: Right Click ->" -ForegroundColor Gray
+    Write-Host "Open With -> Choose Another App -> tick 'Always use this app'." -ForegroundColor Gray
 }
 Write-Host ""
 Write-Host "Issues: $InstallerRepo/issues" -ForegroundColor Cyan
