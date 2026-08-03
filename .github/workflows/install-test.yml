@@ -602,6 +602,12 @@ jobs:
           Set-Content -Encoding UTF8 -Path (Join-Path $lib 'Sublime\TeXLib.sublime-build') -Value '{ "//": "CI stub build." }'
           Set-Content -Encoding UTF8 -Path (Join-Path $lib 'Sublime\Default.sublime-commands') -Value '[]'
           Set-Content -Encoding UTF8 -Path (Join-Path $lib 'Sublime\LaTeX.sublime-settings') -Value '{ "//": "CI stub settings." }'
+          # The native Sublime package. Sublime only loads .py at the TOP level
+          # of a package dir, so this must become its own Packages\TeXLib entry;
+          # sitting at Packages\User\texlib\ (which the settings junction makes
+          # true for free) loads nothing, which is what 0.6.4 and earlier did.
+          New-Item -ItemType Directory -Force -Path (Join-Path $lib 'Sublime\texlib') | Out-Null
+          Set-Content -Encoding UTF8 -Path (Join-Path $lib 'Sublime\texlib\texlib.py') -Value '# CI stub plugin.'
 
           # Empty component dirs are all the installer's Test-Path detection
           # needs to offer Skip -- no multi-GB downloads. TexLive\2025\bin\
@@ -656,7 +662,15 @@ jobs:
           if ((Get-Content (Join-Path $lib 'Sublime\texlib_builder.py') -Raw) -notmatch 'CI stub builder') {
             Write-Host "FAIL: the library's builder file was clobbered" -ForegroundColor Red; exit 1
           }
-          Write-Host "OK: builder reachable through the junction; library intact." -ForegroundColor Green
+          # The native package needs its own Packages\TeXLib entry to load at all.
+          $plugin = Join-Path $env:INSTALL_ROOT 'Sublime Text\Data\Packages\TeXLib'
+          if (-not (Test-Path (Join-Path $plugin 'texlib.py'))) {
+            Write-Host "FAIL: the TeXLib Sublime package was not deployed to $plugin" -ForegroundColor Red; exit 1
+          }
+          if ((Get-Item $plugin -Force).Attributes -notmatch 'ReparsePoint') {
+            Write-Host "FAIL: Packages\TeXLib is not a junction, so it will not track library updates" -ForegroundColor Red; exit 1
+          }
+          Write-Host "OK: builder reachable through the junction; plugin deployed; library intact." -ForegroundColor Green
 
       - name: Re-run interactively, answering the Skip prompts on stdin
         shell: pwsh
@@ -957,6 +971,172 @@ jobs:
             Write-Host "FAIL: the library's parent directory was removed too." -ForegroundColor Red; exit 1
           }
           Write-Host "OK: accepted, and exactly the named folder plus the link went." -ForegroundColor Green
+
+  # ---------------------------------------------------------------------------
+  # 4e. repair-mode — FAST. -Repair re-applies configuration to an install that
+  #     already exists: no downloads, no components, library untouched. Its whole
+  #     value is being the cheap answer to "my associations went weird" or
+  #     "Sublime lost the builder", so the things worth asserting are that it
+  #     rebuilds what you break, that it stays offline, and that it does not
+  #     wander into the library.
+  # ---------------------------------------------------------------------------
+  repair-mode:
+    if: github.event_name != 'schedule'
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Seed an installed-but-broken machine
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $installRoot = Join-Path $env:RUNNER_TEMP 'TeXLibRoot'
+          "INSTALL_ROOT=$installRoot" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          $lib = Join-Path $installRoot 'Library'
+          "LIB_ROOT=$lib" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+          # A 0.6.3+ layout: library inside the install root, components present.
+          New-Item -ItemType Directory -Force -Path `
+            (Join-Path $lib 'Sublime\texlib'), `
+            (Join-Path $installRoot 'Sublime Text\Data\Packages\LaTeXTools'), `
+            (Join-Path $installRoot 'Sublime Text\Data\Lib\python38\regex'), `
+            (Join-Path $installRoot 'Sumatra'), `
+            (Join-Path $installRoot 'TexLive\2025\bin\windows') | Out-Null
+          foreach ($p in 'course-metadata','texlib-build','basic-utilities') {
+            $sty = "\NeedsTeXFormat{LaTeX2e}`r`n\ProvidesPackage{$p}[2026/01/01 CI stub]`r`n\endinput"
+            Set-Content -Encoding UTF8 -Path (Join-Path $lib "$p.sty") -Value $sty
+          }
+          Set-Content -Encoding UTF8 -Path (Join-Path $lib 'Sublime\texlib_builder.py') -Value '# CI stub builder.'
+          Set-Content -Encoding UTF8 -Path (Join-Path $lib 'Sublime\texlib\texlib.py')  -Value '# CI stub plugin.'
+          Set-Content -Encoding UTF8 -Path (Join-Path $installRoot 'Sublime Text\Data\Lib\python38\regex\__init__.py') -Value '# CI stub regex.'
+          Set-Content -Encoding UTF8 -Path (Join-Path $installRoot 'Sublime Text\sublime_text.exe') -Value 'stub'
+          # Anything of the user's in the library must come through untouched.
+          Set-Content -Encoding UTF8 -Path (Join-Path $lib 'CANARY.txt') -Value 'library must not be touched'
+          # And the VERSION stamp that tells -Repair there is something to repair.
+          $stamp = @("installer_version=0.6.4", "texlib_root=$lib", "sublime_dir=$installRoot\Sublime Text") -join "`r`n"
+          Set-Content -Encoding UTF8 -Path (Join-Path $installRoot 'VERSION') -Value $stamp
+
+      - name: install.ps1 -Repair
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $env:TEXLIB_INSTALLER_WRAPPED = '1'
+          $env:OneDrive = ''; $env:OneDriveCommercial = ''; $env:OneDriveConsumer = ''
+          $out = & powershell.exe -NoProfile -ExecutionPolicy Bypass `
+            -File .\tools\install.ps1 -Silent -Repair -InstallPath $env:INSTALL_ROOT 2>&1 | Out-String
+          $rc = $LASTEXITCODE
+          Write-Host $out
+          if ($rc -ne 0) { Write-Host "FAIL: -Repair exited $rc." -ForegroundColor Red; exit $rc }
+
+          # Offline by contract. A -Repair that downloads is just a slow install.
+          if ($out -match 'Downloading ') {
+            Write-Host "FAIL: -Repair downloaded something." -ForegroundColor Red; exit 1
+          }
+          if ($out -notmatch 'REPAIR') {
+            Write-Host "FAIL: the run did not identify itself as REPAIR mode." -ForegroundColor Red; exit 1
+          }
+          if ($out -notmatch 'Leaving the TeXLib library') {
+            Write-Host "FAIL: -Repair did not say it was leaving the library alone." -ForegroundColor Red; exit 1
+          }
+          # It has to actually rebuild the configuration.
+          $plugin = Join-Path $env:INSTALL_ROOT 'Sublime Text\Data\Packages\TeXLib'
+          if (-not (Test-Path (Join-Path $plugin 'texlib.py'))) {
+            Write-Host "FAIL: -Repair did not deploy the TeXLib Sublime package." -ForegroundColor Red; exit 1
+          }
+          $user = Join-Path $env:INSTALL_ROOT 'Sublime Text\Data\Packages\User'
+          if ((Get-Item $user -Force).Attributes -notmatch 'ReparsePoint') {
+            Write-Host "FAIL: -Repair did not junction Packages\User." -ForegroundColor Red; exit 1
+          }
+          # Settings land in the library's Sublime\ folder -- the one Packages\User
+          # is junctioned to -- not at the library root.
+          $ltSettings = Join-Path $env:LIB_ROOT 'Sublime\LaTeXTools.sublime-settings'
+          if (-not (Test-Path $ltSettings)) {
+            Write-Host "FAIL: -Repair did not write $ltSettings." -ForegroundColor Red; exit 1
+          }
+          if ((Get-Content $ltSettings -Raw) -notmatch '"builder"\s*:\s*"texlib"') {
+            Write-Host "FAIL: the rewritten LaTeXTools settings do not select the texlib builder." -ForegroundColor Red; exit 1
+          }
+          # And it must not have touched the library it was told to leave alone.
+          if (-not (Test-Path (Join-Path $env:LIB_ROOT 'CANARY.txt'))) {
+            Write-Host "FAIL: -Repair modified the library." -ForegroundColor Red; exit 1
+          }
+          Write-Host "OK: -Repair rebuilt the config offline, library untouched." -ForegroundColor Green
+
+      - name: -Repair refuses when there is nothing to repair
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $env:TEXLIB_INSTALLER_WRAPPED = '1'
+          $empty = Join-Path $env:RUNNER_TEMP 'NoInstallHere'
+          $out = & powershell.exe -NoProfile -ExecutionPolicy Bypass `
+            -File .\tools\install.ps1 -Silent -Repair -InstallPath $empty 2>&1 | Out-String
+          $rc = $LASTEXITCODE
+          Write-Host $out
+          # Silently "repairing" a non-existent install would junction
+          # Packages\User into a Sublime directory that isn't there.
+          if ($rc -eq 0) {
+            Write-Host "FAIL: -Repair succeeded against an install that does not exist." -ForegroundColor Red; exit 1
+          }
+          if ($out -notmatch 'needs an existing install') {
+            Write-Host "FAIL: no explanation of why -Repair refused." -ForegroundColor Red; exit 1
+          }
+          Write-Host "OK: -Repair refused with a clear reason." -ForegroundColor Green
+          # The child was SUPPOSED to exit non-zero. Without this, `shell: pwsh`
+          # propagates its $LASTEXITCODE and the step fails for passing.
+          exit 0
+
+  # ---------------------------------------------------------------------------
+  # 4f. self-update-noop — FAST. -Update reaches the GitHub releases API, so the
+  #     one thing CI can check cheaply is that the reach-and-compare half works
+  #     and correctly decides to do nothing. Guarded on the version comparison:
+  #     if this branch is BEHIND the latest release, -Update would legitimately
+  #     download and run a real install, which is not something to do in a
+  #     10-minute job -- so that case reports and skips rather than failing.
+  # ---------------------------------------------------------------------------
+  self-update-noop:
+    if: github.event_name != 'schedule'
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: install.ps1 -Update decides correctly
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $env:TEXLIB_INSTALLER_WRAPPED = '1'
+
+          $ver = (Select-String -Path .\tools\install.ps1 -Pattern '^\$InstallerVersion\s*=\s*"([^"]+)"' |
+                  Select-Object -First 1).Matches[0].Groups[1].Value
+          Write-Host "script version: $ver"
+          $latest = ''
+          try {
+            $rel = Invoke-RestMethod -Uri 'https://api.github.com/repos/landonfox00/TeXLib-Installer/releases/latest' `
+                                     -Headers @{ 'User-Agent' = 'TeXLib-Installer-CI' } -TimeoutSec 30
+            $latest = "$($rel.tag_name)" -replace '^v', ''
+          } catch {
+            Write-Host "releases API unreachable; skipping (network, not a regression)." -ForegroundColor Yellow; exit 0
+          }
+          Write-Host "latest release: $latest"
+
+          if ([version]$ver -lt [version]$latest) {
+            Write-Host "This branch is behind v$latest, so -Update would run a real install. Skipping." -ForegroundColor Yellow
+            exit 0
+          }
+
+          $out = & powershell.exe -NoProfile -ExecutionPolicy Bypass `
+            -File .\tools\install.ps1 -Silent -Update 2>&1 | Out-String
+          $rc = $LASTEXITCODE
+          Write-Host $out
+          if ($rc -ne 0) { Write-Host "FAIL: -Update exited $rc on the no-op path." -ForegroundColor Red; exit $rc }
+          if ($out -notmatch 'Already on the latest release') {
+            Write-Host "FAIL: -Update did not take the no-op path." -ForegroundColor Red; exit 1
+          }
+          if ($out -match 'Downloading ') {
+            Write-Host "FAIL: -Update downloaded despite being current." -ForegroundColor Red; exit 1
+          }
+          Write-Host "OK: -Update reached the API, compared versions, and did nothing." -ForegroundColor Green
 
   # ---------------------------------------------------------------------------
   # 5. package-integrity — FAST. Builds an actual release bundle with

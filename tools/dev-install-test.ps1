@@ -76,6 +76,14 @@ Set-Content -Encoding UTF8 -Path (Join-Path $Lib 'Sublime\TeXLib.sublime-build')
 Set-Content -Encoding UTF8 -Path (Join-Path $Lib 'Sublime\Default.sublime-commands') -Value '[]'
 Set-Content -Encoding UTF8 -Path (Join-Path $Lib 'Sublime\LaTeX.sublime-settings')   -Value '{ "//": "stub" }'
 
+# The native Sublime package the library carries. Sublime only loads .py at the
+# TOP level of a package directory, so this has to end up as its own
+# Packages\TeXLib entry -- being visible at Packages\User\texlib\ through the
+# settings junction does nothing at all.
+New-Item -ItemType Directory -Force -Path (Join-Path $Lib 'Sublime\texlib') | Out-Null
+Set-Content -Encoding UTF8 -Path (Join-Path $Lib 'Sublime\texlib\texlib.py')          -Value '# dev-install-test stub plugin.'
+Set-Content -Encoding UTF8 -Path (Join-Path $Lib 'Sublime\texlib\Main.sublime-menu')  -Value '[]'
+
 # Empty dirs are all the installer's detection needs to offer Skip. The TexLive
 # path must match $TexLiveYear exactly.
 New-Item -ItemType Directory -Force -Path `
@@ -92,17 +100,21 @@ Write-Host "  root:    $Root"
 
 # --- run --------------------------------------------------------------------
 function Invoke-Install {
-    param([switch]$Interactive)
-    Write-Head $(if ($Interactive) { 'INTERACTIVE re-run (Skip answers on stdin)' } else { 'SILENT full install' })
+    param([switch]$Interactive, [switch]$Repair)
+    Write-Head $(if ($Repair) { 'REPAIR run' } elseif ($Interactive) { 'INTERACTIVE re-run (Skip answers on stdin)' } else { 'SILENT full install' })
 
     # The wrapper owns the pause-on-failure prompt; set this so a failing run
     # cannot block on "Press Enter" here.
     $env:TEXLIB_INSTALLER_WRAPPED = '1'
-    $log = Join-Path $SandboxRoot "out-$(if($Interactive){'interactive'}else{'silent'}).txt"
+    $log = Join-Path $SandboxRoot "out-$(if($Repair){'repair'}elseif($Interactive){'interactive'}else{'silent'}).txt"
 
     Push-Location $RepoRoot
     try {
-        if ($Interactive) {
+        if ($Repair) {
+            $out = & powershell.exe -NoProfile -ExecutionPolicy Bypass `
+                -File $Installer -Silent -Repair -InstallPath $Root -TeXLibPath $Lib -Sandbox |
+                   Tee-Object -FilePath $log | Out-String
+        } elseif ($Interactive) {
             # Answers via file redirect, not `echo s | ...`: cmd's echo appends a
             # trailing space, so Read-Host would see "s " -- harmless for Skip
             # today, silently wrong the day this is extended to test "r".
@@ -141,6 +153,15 @@ try {
     Assert-That ((Get-Content (Join-Path $Lib 'Sublime\texlib_builder.py') -Raw) -match 'stub builder') `
                                                                      "library builder file not clobbered"
 
+    # The native package has to become its own Packages\TeXLib entry, or Sublime
+    # never loads it -- the gap that existed through 0.6.4.
+    $plugin = Join-Path $Root 'Sublime Text\Data\Packages\TeXLib'
+    Assert-That (Test-Path $plugin) "Packages\TeXLib created for the native plugin"
+    if (Test-Path $plugin) {
+        Assert-That ((Get-Item $plugin -Force).Attributes -match 'ReparsePoint') "Packages\TeXLib is a junction"
+        Assert-That (Test-Path (Join-Path $plugin 'texlib.py'))                  "texlib.py reachable through it"
+    }
+
     $r2 = Invoke-Install -Interactive
     Write-Head "ASSERT interactive re-run"
     Assert-That ($r2.Out -notmatch 'with itself')                    "no self-copy on the interactive path"
@@ -149,6 +170,24 @@ try {
         Assert-That ($r2.Out -match [regex]::Escape($c))             "'$c' reached (stdin answer took)"
     }
     Assert-That ($r2.Rc -eq 0)                                        "interactive re-run exit 0"
+
+    # -Repair: re-apply config to what is already there. The test is that it
+    # rebuilds what you break without downloading anything or touching the
+    # library, which is the whole reason to reach for it over a full re-run.
+    $plugin = Join-Path $Root 'Sublime Text\Data\Packages\TeXLib'
+    if (Test-Path $plugin) { [System.IO.Directory]::Delete($plugin, $false) }
+    Remove-Item (Join-Path $Lib 'Sublime\LaTeXTools.sublime-settings') -Force -ErrorAction SilentlyContinue
+    Set-Content -Encoding UTF8 -Path (Join-Path $Lib 'CANARY.txt') -Value 'library must not be touched'
+
+    $r3 = Invoke-Install -Repair
+    Write-Head "ASSERT repair"
+    Assert-That ($r3.Rc -eq 0)                                        "repair exit 0"
+    Assert-That ($r3.Out -match 'REPAIR')                             "announced itself as REPAIR mode"
+    Assert-That ($r3.Out -notmatch 'Downloading')                     "downloaded nothing"
+    Assert-That ($r3.Out -match 'Leaving the TeXLib library')         "left the library alone"
+    Assert-That (Test-Path $plugin)                                   "rebuilt the deleted Packages\TeXLib junction"
+    Assert-That (Test-Path (Join-Path $Lib 'Sublime\LaTeXTools.sublime-settings')) "rewrote the deleted LaTeXTools settings"
+    Assert-That (Test-Path (Join-Path $Lib 'CANARY.txt'))             "library contents untouched"
 
     # -Sandbox's whole promise: nothing outside the sandbox was written.
     Write-Head "ASSERT sandbox containment"

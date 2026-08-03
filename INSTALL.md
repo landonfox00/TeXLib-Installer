@@ -112,9 +112,25 @@ Why the move? The library is a snapshot the installer overwrites on every re-ins
 
 ## Updating
 
-Re-running the installer with a newer release ZIP **does not** wipe your settings — they live in `%LOCALAPPDATA%\TeXLib\Library\Sublime` and are preserved across re-installs via a junction.
+The simplest way:
 
-The installer prints an "Update available: v0.X is the latest release (you are on v0.Y)" notice at the top of every run if a newer release is published, so you'll know when it's time to download a fresh ZIP.
+```
+install.bat -Update
+```
+
+That fetches the newest release, checks it against the release's `SHA256SUMS`, and runs it — no browser, no ZIP to find, no folder to extract. Anything else you pass is forwarded, so `install.bat -Update -Silent` updates unattended.
+
+Re-running the installer **does not** wipe your settings — they live in `%LOCALAPPDATA%\TeXLib\Library\Sublime` and are preserved across re-installs via a junction.
+
+The installer also prints an "Update available" notice at the top of every run when a newer release exists, so you'll know when it's worth running.
+
+### If something is misbehaving rather than out of date
+
+```
+install.bat -Repair
+```
+
+Re-applies the configuration — the Sublime settings junction, the builder and the TeXLib plugin, the LaTeXTools/Preferences/SumatraPDF settings, the file associations (clearing stale "Open with" entries), and the shortcuts — without reinstalling anything. It downloads nothing, works offline, takes seconds, and leaves your library alone. Try this before a full re-run.
 
 To get the latest TeXLib library **only** (no need to touch Sublime/Sumatra/TeX Live), use:
 
@@ -149,8 +165,11 @@ A few details worth knowing:
 
 | Flag | What it does |
 |---|---|
+| `install.bat -Update` | Get the newest release and install it, in one step. No hunting for a ZIP. |
+| `install.bat -Repair` | Re-apply configuration without reinstalling anything — the fix for weird file associations or a Sublime that lost the builder. Takes seconds, works offline. |
 | `install.bat -Doctor` | Diagnose an existing install (see Troubleshooting). |
 | `install.bat -Version` | Print installer version + bundled TeXLib version. |
+| `install.bat -TexLiveScheme medium` | Install a smaller TeX Live (~2.5 GB, 5-15 min instead of ~6 GB, 30-60 min). Faster, but less coverage — run `-Doctor` afterwards, which checks every package TeXLib needs. |
 | `install.bat -DryRun` | Run pre-flight checks and print what would happen, without installing anything. Safe to run on a fresh machine to confirm prerequisites. |
 | `install.bat -OnlyTeXLib` | Refresh just the TeXLib library. |
 | `install.bat -InstallPath C:\Tools\TeXLib` | Install to a non-default location (e.g. if `%LOCALAPPDATA%` is on a small SSD). The library follows it, to `C:\Tools\TeXLib\Library`. |
@@ -220,7 +239,11 @@ The installer aborts on hash mismatch as a security precaution. Most often this 
 
 TeX Live's install is genuinely slow — 30 to 60 minutes is normal. There's typically no progress indicator for long stretches. If it's been >90 minutes with zero console activity, kill the console window and re-run the installer with TeX Live's "Reinstall" option.
 
-### Sublime can't find the builder
+### Sublime can't find the builder, or the TeXLib menu is missing
+
+First thing to try: `install.bat -Repair`. It rebuilds the settings junction, the builder files, and the TeXLib plugin in seconds, without downloading anything.
+
+The TeXLib command palette entries, the **TeXLib** menu, the snippets, and the `texlib_*` tools come from a Sublime package the installer deploys to `<Sublime Data>\Packages\TeXLib`. Installers **before v0.7.0 never deployed it** — if you installed with an older version, re-run `install.bat` (or `-Repair`) once and it appears. `install.bat -Doctor` says which state you're in.
 
 If `Ctrl+B` says "Cannot find builder texlib", verify:
 

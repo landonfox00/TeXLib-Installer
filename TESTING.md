@@ -84,8 +84,35 @@ This is the fastest way to exercise the paths CI's clean-VM jobs cannot reach.
 
 ▶ `install.bat -Doctor`
 ✓ All sections `[OK]`: components found, PATH set, junction state correct,
-  `texlib_builder.py` deployed, LaTeXTools builder set to `texlib`,
-  file associations registered, no stale "Open with" registrations.
+  `texlib_builder.py` deployed, the TeXLib Sublime package junctioned at
+  `Packages\TeXLib`, every LaTeX package TeXLib requires resolvable,
+  LaTeXTools builder set to `texlib`, file associations registered, no stale
+  "Open with" registrations.
+
+## 4a. Sublime package
+
+▶ In Sublime, open the command palette (**Ctrl+Shift+P**) and type "TeXLib".
+✓ TeXLib commands are listed, and a **TeXLib** menu is present in the menu bar.
+✓ `<Sublime Data>\Packages\TeXLib` exists and is a junction to
+  `<InstallPath>\Library\Sublime\texlib`.
+
+## 4c. Repair
+
+▶ Delete `<Sublime Data>\Packages\TeXLib` and
+  `<InstallPath>\Library\Sublime\LaTeXTools.sublime-settings`, then run
+  `install.bat -Repair`.
+✓ Finishes in seconds, downloads nothing, and both come back.
+✓ Says it is leaving the library alone; nothing in `Library\` changes.
+▶ `install.bat -Repair -InstallPath C:\nowhere`
+✓ Refuses with "needs an existing install to repair" and exits non-zero.
+
+## 4d. Update
+
+▶ `install.bat -Update` on an up-to-date install.
+✓ Reports both versions and does nothing.
+▶ On an out-of-date install (or a copy with `$InstallerVersion` edited down).
+✓ Downloads the newest release, reports `[OK] SHA256 verified`, and hands off to
+  it; the handed-off run behaves like a normal install.
 
 ## 4b. Open With hygiene
 

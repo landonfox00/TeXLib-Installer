@@ -36,6 +36,31 @@
     re-installing Sublime / SumatraPDF / TeX Live entirely. Use after pulling
     a newer installer release whose only change is the library.
 
+.PARAMETER Repair
+    Re-apply configuration to an existing install and nothing else: the Sublime
+    settings junction, the builder files, the TeXLib Sublime package, the
+    LaTeXTools / Preferences / SumatraPDF settings, the file associations (with
+    the stale "Open with" purge), and the shortcuts. Downloads nothing, installs
+    no components, and does not touch the library -- so it takes seconds and
+    works offline. This is the answer to "my file associations went weird" or
+    "Sublime stopped seeing the builder", which would otherwise need a full
+    re-run. Needs an existing install to repair.
+
+.PARAMETER Update
+    Fetch the latest release from GitHub, verify it against the release's
+    SHA256SUMS, and re-run the newer installer in place of this one. Every other
+    argument you pass is forwarded to it, so `install.bat -Update -Silent` does
+    an unattended update. Without this, a newer release means downloading and
+    extracting a ZIP by hand.
+
+.PARAMETER TexLiveScheme
+    Which TeX Live scheme to install: full (default, ~6 GB, 30-60 min),
+    medium (~2.5 GB), or basic (~0.6 GB). full is what TeXLib is tested against
+    and what avoids "missing package" surprises months later; the smaller
+    schemes trade that safety for a much shorter install. `-Doctor` checks the
+    packages TeXLib actually requires whichever you pick, so a too-thin scheme
+    is a diagnosable state rather than a mystery build error.
+
 .PARAMETER InstallPath
     Override the install root. Defaults to %LOCALAPPDATA%\TeXLib. Use this if
     %LOCALAPPDATA% lives on a small SSD or is locked down by Group Policy.
@@ -92,8 +117,12 @@ param(
     [switch]$Version,
     [switch]$DryRun,
     [switch]$OnlyTeXLib,
+    [switch]$Repair,
+    [switch]$Update,
     [string]$InstallPath = "",
     [string]$TeXLibPath = "",
+    [ValidateSet('full', 'medium', 'basic')]
+    [string]$TexLiveScheme = 'full',
     [switch]$Sandbox,
     [switch]$HideJunction,
     [switch]$VerifyDownloads
@@ -102,9 +131,14 @@ param(
 # =============================================================================
 # 0. INSTALLER METADATA
 # =============================================================================
-$InstallerVersion = "0.6.4"
+$InstallerVersion = "0.7.0"
 $InstallerRepo    = "https://github.com/landonfox00/TeXLib-Installer"
 $ReleasesApi      = "https://api.github.com/repos/landonfox00/TeXLib-Installer/releases/latest"
+
+# Captured at script scope because $PSBoundParameters inside a function refers to
+# THAT function's parameters -- so -Update, which forwards the caller's own
+# arguments to the newer installer, cannot read it from in there.
+$ScriptBoundParameters = $PSBoundParameters
 
 # Fail fast: a non-terminating error in a download/extract/copy step must abort
 # the install rather than silently barrel on into a half-built state.
@@ -222,8 +256,25 @@ $UsingOneDrive = [bool]($OneDrivePath -and ($TeXLibDir -like "$OneDrivePath*"))
 
 # Writes that land outside -InstallPath / -TeXLibPath: user PATH (14), HKCU
 # file associations (17), Desktop + Start Menu shortcuts (18). -Sandbox skips
-# exactly those three and nothing else.
+# exactly those three and nothing else. -Repair very much wants them: fixing the
+# associations is most of the point of it.
 $WriteMachineState = (-not $OnlyTeXLib) -and (-not $Sandbox)
+
+# --- Mode flags --------------------------------------------------------------
+# -Repair re-applies configuration to an install that already exists. It differs
+# from -OnlyTeXLib in both directions: it does NOT touch the library (that is
+# -OnlyTeXLib's whole job), and it DOES rewrite the associations and shortcuts
+# (which -OnlyTeXLib deliberately leaves alone). The two are not combinable.
+if ($Repair -and $OnlyTeXLib) {
+    Write-Host ""
+    Write-Host "FATAL: -Repair and -OnlyTeXLib do opposite things (-Repair re-applies config" -ForegroundColor Red
+    Write-Host "       and leaves the library alone; -OnlyTeXLib refreshes the library and" -ForegroundColor Red
+    Write-Host "       leaves config alone). Pick one." -ForegroundColor Red
+    Write-Host ""
+    Stop-Installer 14
+}
+$InstallComponents = (-not $OnlyTeXLib) -and (-not $Repair)   # section 12
+$DeployLibrary     = (-not $Repair)                           # section 13
 
 function Test-TeXLibLibraryDir {
     # A directory counts as a TeXLib library only when the core .sty files are
@@ -619,6 +670,46 @@ function Invoke-Doctor {
     # is the authority: on a pre-0.6.3 install it still points into Documents,
     # and reporting the 0.6.3 default missing would be a false alarm.
     $DoctorTeXLibDir = if ($PriorTeXLibRoot) { $PriorTeXLibRoot } else { $TeXLibDir }
+    # Every LaTeX package TeXLib's .sty/.cls files \RequirePackage, minus TeXLib's
+    # own. Derived by grepping the library, so it tracks what documents actually
+    # need rather than what a scheme happens to ship. This is what makes
+    # -TexLiveScheme medium/basic a diagnosable choice instead of a gamble: a
+    # thin scheme shows up here by name, months before it would surface as
+    # "! LaTeX Error: File `tabularray.sty' not found" in the middle of a build.
+    $RequiredTexPackages = @(
+        "adjustbox", "amsfonts", "amsmath", "amssymb", "amsthm", "array", "atbegshi",
+        "biblatex", "booktabs", "calc", "cancel", "caption", "changepage", "cleveref",
+        "colortbl", "enumitem", "environ", "etoolbox", "expl3", "fancyhdr", "fontenc",
+        "fontspec", "geometry", "graphicx", "hyperref", "ifthen", "keyval", "lastpage",
+        "lmodern", "luacode", "makecell", "mathrsfs", "mathtools", "multicol", "multirow",
+        "needspace", "pdfpages", "pgfplots", "qrcode", "siunitx", "subfigure",
+        "tabularray", "tasks", "tcolorbox", "tikz", "tikz-cd", "tocloft", "xcolor",
+        "xparse", "xstring"
+    )
+    $Kpsewhich = "$TexBinPath\kpsewhich.exe"
+    if (Test-Path $Kpsewhich) {
+        # One kpsewhich call, not fifty: it prints a path per file it FINDS and
+        # stays silent for the rest, so compare the basenames it echoed back
+        # against what we asked for.
+        $Wanted = $RequiredTexPackages | ForEach-Object { "$_.sty" }
+        $Found = @()
+        try {
+            $Found = @(& $Kpsewhich @Wanted 2>$null | ForEach-Object { Split-Path $_ -Leaf })
+        } catch { $Found = @() }
+        $MissingPkgs = @($Wanted | Where-Object { $Found -notcontains $_ } | ForEach-Object { $_ -replace '\.sty$', '' })
+        if ($MissingPkgs.Count -eq 0) {
+            _Pass "All $($RequiredTexPackages.Count) LaTeX packages TeXLib requires are installed"
+        } else {
+            $InstalledScheme = Get-StampedValue -VersionFile $VersionFile -Key "texlive_scheme"
+            $SchemeNote = if ($InstalledScheme -and $InstalledScheme -ne 'full') { " (this install used scheme-$InstalledScheme)" } else { "" }
+            _Fail "$($MissingPkgs.Count) LaTeX package(s) TeXLib requires are missing$($SchemeNote): $($MissingPkgs -join ', ')"
+            Write-Host "         Install them with:  tlmgr install $($MissingPkgs -join ' ')" -ForegroundColor Yellow
+            Write-Host "         Or re-run the installer with the default -TexLiveScheme full." -ForegroundColor Yellow
+        }
+    } else {
+        _Warn "kpsewhich not found at $Kpsewhich; cannot check TeXLib's LaTeX package requirements"
+    }
+
     if (Test-Path $DoctorTeXLibDir) {
         $CoreFiles = @("course-metadata.sty", "texlib-build.sty", "basic-utilities.sty")
         $MissingCore = $CoreFiles | Where-Object { -not (Test-Path (Join-Path $DoctorTeXLibDir $_)) }
@@ -668,6 +759,25 @@ function Invoke-Doctor {
     $BuilderPath = "$UserPackagesLocal\texlib_builder.py"
     if (Test-Path $BuilderPath) { _Pass "texlib_builder.py deployed" }
     else { _Fail "texlib_builder.py missing from $UserPackagesLocal" }
+
+    # The native TeXLib package (command palette, menu, snippets, texlib_*
+    # modules). Sublime only loads .py at the top level of a package directory,
+    # so this has to be its own Packages\TeXLib entry -- being visible at
+    # Packages\User\texlib\ through the settings junction does nothing.
+    $PluginLinkPath = "$SublimeDir\Data\Packages\TeXLib"
+    $PluginLibrary  = "$TeXLibDir\Sublime\texlib"
+    if (Test-Path "$PluginLinkPath\texlib.py") {
+        $PluginItem = Get-Item $PluginLinkPath -Force
+        if ($PluginItem.Attributes -match 'ReparsePoint') {
+            _Pass "TeXLib Sublime package deployed (junction to the library's Sublime\texlib)"
+        } else {
+            _Warn "TeXLib Sublime package at $PluginLinkPath is a real folder, not a junction; it will not track library updates"
+        }
+    } elseif (Test-Path $PluginLibrary) {
+        _Fail "TeXLib Sublime package not deployed. The library has it at $PluginLibrary but Sublime cannot load it from there; re-run the installer (or install.bat -Repair) to create $PluginLinkPath"
+    } else {
+        _Warn "This library ships no Sublime\texlib package; only the LaTeXTools builder is available (upgrade the library to get the command palette, snippets, and texlib_* tools)"
+    }
 
     $LTSettings = "$UserPackagesLocal\LaTeXTools.sublime-settings"
     if (Test-Path $LTSettings) {
@@ -858,17 +968,189 @@ function Invoke-VerifyDownloads {
 
 
 # =============================================================================
-# 6. EARLY-DISPATCH (-VerifyDownloads, -Version, -Doctor)
+# 5c. SELF-UPDATE MODE (-Update)
+# =============================================================================
+function Invoke-DownloadWithRetry {
+    # Download $Uri to $OutFile, retrying transient failures with backoff.
+    # University Wi-Fi blips on a multi-hundred-MB TeX Live download otherwise
+    # hard-fail the whole install with no recourse but a from-scratch re-run.
+    # Defined HERE rather than with the other install-mode helpers in section 10
+    # because -Update dispatches in section 6, before section 10 has run.
+    param([string]$Uri, [string]$OutFile, [int]$Retries = 3)
+    for ($attempt = 1; $attempt -le $Retries; $attempt++) {
+        try {
+            Invoke-WebRequest -Uri $Uri -OutFile $OutFile -UseBasicParsing -TimeoutSec 120
+            return
+        } catch {
+            if ($attempt -ge $Retries) {
+                throw "Download failed after $Retries attempt(s): $Uri`n$_"
+            }
+            $wait = 5 * $attempt
+            Write-Host "  [retry] download attempt $attempt failed; retrying in $wait s..." -ForegroundColor Yellow
+            Start-Sleep -Seconds $wait
+        }
+    }
+}
+
+function Invoke-SelfUpdate {
+    # Fetch the newest release, verify it, and hand off to its installer.
+    #
+    # The pieces were all here already -- the releases API call the update
+    # notice uses, Invoke-WebRequest with retry, and hash verification -- but a
+    # user who saw "Update available" still had to open a browser, find the
+    # asset, download, extract, and re-run. This closes that loop.
+    #
+    # The downloaded ZIP is verified against the release's own SHA256SUMS before
+    # a single line of it executes. That file is served by the same GitHub
+    # release over TLS, so it is not an independent trust root -- it is a
+    # corruption and truncation check, not a signature. Say so rather than
+    # implying more.
+    Show-Banner
+    Write-Host "Checking for a newer release..." -ForegroundColor Cyan
+
+    try {
+        $Release = Invoke-RestMethod -Uri $ReleasesApi -UseBasicParsing -TimeoutSec 30 `
+                                     -Headers @{ "User-Agent" = "TeXLib-Installer" }
+    } catch {
+        Write-Host "Could not reach the GitHub releases API: $_" -ForegroundColor Red
+        Write-Host "Check your connection, or download the ZIP yourself from" -ForegroundColor Yellow
+        Write-Host "  $InstallerRepo/releases" -ForegroundColor Yellow
+        Stop-Installer 21
+    }
+
+    $Latest = "$($Release.tag_name)" -replace '^v', ''
+    if (-not $Latest) {
+        Write-Host "The releases API returned no tag; nothing to update to." -ForegroundColor Red
+        Stop-Installer 21
+    }
+    Write-Host "  Installed: v$InstallerVersion" -ForegroundColor Gray
+    Write-Host "  Latest:    v$Latest" -ForegroundColor Gray
+    if (-not (Test-IsNewerVersion -Latest $Latest -Current $InstallerVersion)) {
+        Write-Host ""
+        Write-Host "Already on the latest release. Nothing to do." -ForegroundColor Green
+        Write-Host "(Re-run without -Update to re-install or repair this version.)" -ForegroundColor Gray
+        Write-Host ""
+        Stop-Installer 0
+    }
+
+    $ZipAsset  = $Release.assets | Where-Object { $_.name -like 'TeXLib-Installer-v*.zip' } | Select-Object -First 1
+    $SumsAsset = $Release.assets | Where-Object { $_.name -eq 'SHA256SUMS' } | Select-Object -First 1
+    if (-not $ZipAsset) {
+        Write-Host "Release v$Latest has no TeXLib-Installer-v*.zip asset to download." -ForegroundColor Red
+        Write-Host "Grab it manually from $InstallerRepo/releases" -ForegroundColor Yellow
+        Stop-Installer 21
+    }
+
+    $UpdateDir = Join-Path $env:TEMP "TeXLib_Update"
+    if (Test-Path $UpdateDir) { Remove-Item $UpdateDir -Recurse -Force -ErrorAction SilentlyContinue }
+    New-Item -ItemType Directory -Force -Path $UpdateDir | Out-Null
+    $ZipPath = Join-Path $UpdateDir $ZipAsset.name
+
+    try {
+        Write-Host ""
+        Write-Host "Downloading $($ZipAsset.name)..." -ForegroundColor Yellow
+        Invoke-DownloadWithRetry -Uri $ZipAsset.browser_download_url -OutFile $ZipPath
+    } catch {
+        Write-Host "Download failed: $_" -ForegroundColor Red
+        Stop-Installer 21
+    }
+
+    if ($SumsAsset) {
+        try {
+            $SumsText = (Invoke-WebRequest -Uri $SumsAsset.browser_download_url -UseBasicParsing -TimeoutSec 30).Content
+            if ($SumsText -is [byte[]]) { $SumsText = [System.Text.Encoding]::ASCII.GetString($SumsText) }
+            $Expected = ($SumsText -split "`n" |
+                         Where-Object { $_ -match [regex]::Escape($ZipAsset.name) } |
+                         Select-Object -First 1) -split '\s+' | Select-Object -First 1
+            $Actual = (Get-FileHash $ZipPath -Algorithm SHA256).Hash
+            if (-not $Expected) {
+                Write-Host "  [WARN] SHA256SUMS has no line for $($ZipAsset.name); cannot verify." -ForegroundColor Yellow
+            } elseif ($Actual -ne $Expected.Trim().ToUpperInvariant() -and $Actual -ne $Expected.Trim()) {
+                Write-Host "  [FAIL] Hash mismatch on the downloaded release." -ForegroundColor Red
+                Write-Host "         expected: $Expected" -ForegroundColor Red
+                Write-Host "         actual:   $Actual"   -ForegroundColor Red
+                Write-Host "Refusing to run unverified bytes. Try again, or download manually." -ForegroundColor Red
+                Stop-Installer 21
+            } else {
+                Write-Host "  [OK] SHA256 verified against the release's SHA256SUMS" -ForegroundColor Green
+            }
+        } catch {
+            Write-Host "  [WARN] Could not fetch SHA256SUMS ($_); continuing unverified." -ForegroundColor Yellow
+        }
+    } else {
+        Write-Host "  [WARN] Release v$Latest ships no SHA256SUMS; cannot verify the download." -ForegroundColor Yellow
+    }
+
+    Write-Host "Extracting..." -ForegroundColor Yellow
+    $ExtractDir = Join-Path $UpdateDir "extracted"
+    try {
+        Expand-Archive -Path $ZipPath -DestinationPath $ExtractDir -Force
+    } catch {
+        Write-Host "Could not extract the release ZIP: $_" -ForegroundColor Red
+        Stop-Installer 21
+    }
+
+    # Release ZIPs put everything at the archive root; tolerate a single
+    # wrapping folder in case that ever changes.
+    $NewInstaller = Join-Path $ExtractDir "tools\install.ps1"
+    if (-not (Test-Path $NewInstaller)) {
+        $Inner = Get-ChildItem $ExtractDir -Directory | Select-Object -First 1
+        if ($Inner) { $NewInstaller = Join-Path $Inner.FullName "tools\install.ps1" }
+    }
+    if (-not (Test-Path $NewInstaller)) {
+        Write-Host "The downloaded release has no tools\install.ps1; not running it." -ForegroundColor Red
+        Write-Host "Extracted to $ExtractDir if you want to look." -ForegroundColor Yellow
+        Stop-Installer 21
+    }
+
+    # Forward everything the caller gave us EXCEPT -Update, so the newer
+    # installer runs the install they actually asked for and cannot loop.
+    $Forward = @{}
+    foreach ($p in $ScriptBoundParameters.GetEnumerator()) {
+        if ($p.Key -eq 'Update') { continue }
+        $Forward[$p.Key] = $p.Value
+    }
+    $ArgLine = @()
+    foreach ($p in $Forward.GetEnumerator()) {
+        if ($p.Value -is [switch] -or $p.Value -is [bool]) {
+            if ($p.Value) { $ArgLine += "-$($p.Key)" }
+        } else {
+            $ArgLine += "-$($p.Key)"; $ArgLine += "$($p.Value)"
+        }
+    }
+
+    Write-Host ""
+    Write-Host "Handing off to the v$Latest installer..." -ForegroundColor Cyan
+    Write-Host "  $NewInstaller $($ArgLine -join ' ')" -ForegroundColor Gray
+    Write-Host ""
+    try { Stop-Transcript | Out-Null } catch { $null = $_ }
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $NewInstaller @ArgLine
+    $Rc = $LASTEXITCODE
+    if ($null -eq $Rc) { $Rc = 0 }
+
+    Write-Host ""
+    Write-Host "The v$Latest installer exited with code $Rc." -ForegroundColor Gray
+    Write-Host "Its files are at $ExtractDir" -ForegroundColor Gray
+    Write-Host "Copy that folder somewhere permanent if you want to keep using it --" -ForegroundColor Gray
+    Write-Host "otherwise just run -Update again next time; %TEMP% is cleared eventually." -ForegroundColor Gray
+    exit $Rc
+}
+
+
+# =============================================================================
+# 6. EARLY-DISPATCH (-VerifyDownloads, -Version, -Doctor, -Update)
 # =============================================================================
 if ($VerifyDownloads) { Invoke-VerifyDownloads }
 if ($Version) { Show-VersionInfo }
 if ($Doctor)  { Invoke-Doctor }
+if ($Update)  { Invoke-SelfUpdate }
 
 Show-Banner
 Write-Host "Log file:     $LogFile" -ForegroundColor Gray
 Write-Host "Install path: $BaseDir" -ForegroundColor Gray
 Write-Host "Mode:         " -NoNewline -ForegroundColor Gray
 if ($DryRun)     { Write-Host "DRY RUN (no changes will be made)" -ForegroundColor Yellow }
+elseif ($Repair) { Write-Host "REPAIR (re-apply config only; no downloads, library untouched)" -ForegroundColor Yellow }
 elseif ($OnlyTeXLib) { Write-Host "ONLY TEXLIB (skip Sublime/Sumatra/TeX Live)" -ForegroundColor Yellow }
 elseif ($Silent) { Write-Host "Silent" -ForegroundColor Gray }
 else             { Write-Host "Interactive" -ForegroundColor Gray }
@@ -929,11 +1211,13 @@ if ($PSMajor -gt 5 -or ($PSMajor -eq 5 -and $PSMinor -ge 1)) {
     Add-PreflightFailure "PowerShell $($PSVersionTable.PSVersion) detected; need 5.1 or newer"
 }
 
-# 7c. Disk space -- skip the 6GB check in -OnlyTeXLib mode (bundle is tiny).
+# 7c. Disk space. -OnlyTeXLib and -Repair need almost none (no downloads), and
+# the requirement otherwise tracks the TeX Live scheme being installed.
 try {
     $Drive = (Get-Item (Split-Path $BaseDir -Qualifier)).PSDrive
     $FreeGB = [math]::Round($Drive.Free / 1GB, 1)
-    $Need = if ($OnlyTeXLib) { 0.2 } else { 6 }
+    $SchemeNeed = @{ 'full' = 6; 'medium' = 2.5; 'basic' = 0.6 }[$TexLiveScheme]
+    $Need = if ($OnlyTeXLib -or $Repair) { 0.2 } else { $SchemeNeed }
     if ($FreeGB -ge $Need) {
         Add-PreflightOK "Free space on $($Drive.Name): ${FreeGB} GB (>= ${Need} GB required)"
     } else {
@@ -948,7 +1232,7 @@ try {
 # pulling any payload. Test-NetConnection would also work but trips
 # PSScriptAnalyzer's "hardcoded ComputerName" rule (false positive for a
 # public mirror).
-if (-not $OnlyTeXLib) {
+if (-not ($OnlyTeXLib -or $Repair)) {
     # Retry with a longer timeout: mirror.ctan.org is a redirector to regional
     # mirrors and can be briefly slow even when the connection is fine, so a
     # single 5s HEAD was flaky and would hard-fail the whole pre-flight.
@@ -966,22 +1250,45 @@ if (-not $OnlyTeXLib) {
         Add-PreflightFailure "Cannot reach https://mirror.ctan.org/ after 3 tries ($($netErr.Exception.Message)); check your internet connection / firewall / VPN"
     }
 } else {
-    Add-PreflightOK "Skipping internet check (-OnlyTeXLib doesn't download anything)"
+    $NoNetMode = if ($Repair) { "-Repair" } else { "-OnlyTeXLib" }
+    Add-PreflightOK "Skipping internet check ($NoNetMode doesn't download anything)"
 }
 
-# 7e. Detect existing TeX Live (or our own prior install).
-$OurTex = Get-Command pdflatex -ErrorAction SilentlyContinue
-if ($OurTex -and ($OurTex.Source -like "$BaseDir*")) {
-    Add-PreflightOK "Existing TeXLib install detected at $($OurTex.Source) (Skip/Reinstall prompt below)"
-} else {
-    Add-PreflightOK "Will install an isolated TeX Live 2025 under $BaseDir"
+# 7d-2. -Repair needs something to repair. Without this it would sail through
+# and "configure" an install that isn't there, junctioning Packages\User into a
+# Sublime directory that doesn't exist.
+if ($Repair) {
+    if ((Test-Path "$BaseDir\VERSION") -or (Test-Path "$SublimeDir\sublime_text.exe")) {
+        Add-PreflightOK "Existing install found at $BaseDir to repair"
+        Add-PreflightNote "(re-applies config only: settings junction, builder + plugin, app settings, associations, shortcuts)"
+    } else {
+        Add-PreflightFailure "-Repair needs an existing install to repair, and none was found at $BaseDir. Run install.bat without -Repair first (or pass -InstallPath if you installed elsewhere)."
+    }
 }
 
-# 7f. Sublime Text: always an isolated portable copy.
-Add-PreflightOK "Installing an isolated portable Sublime Text under $SublimeDir (any existing Sublime is left untouched; our texlib_builder plugin is scoped to it)"
+# 7e-7g. Components. Only meaningful when we are actually going to install them:
+# -Repair and -OnlyTeXLib touch no component, and saying "will install TeX Live"
+# in those modes is a plain untruth in the middle of a report people read to
+# decide whether to continue.
+if ($InstallComponents) {
+    # 7e. Detect existing TeX Live (or our own prior install).
+    $OurTex = Get-Command pdflatex -ErrorAction SilentlyContinue
+    if ($OurTex -and ($OurTex.Source -like "$BaseDir*")) {
+        Add-PreflightOK "Existing TeXLib install detected at $($OurTex.Source) (Skip/Reinstall prompt below)"
+    } else {
+        Add-PreflightOK "Will install an isolated TeX Live 2025 (scheme-$TexLiveScheme) under $BaseDir"
+    }
+    if ($TexLiveScheme -ne 'full') {
+        Add-PreflightWarning "scheme-$TexLiveScheme is smaller and much faster than scheme-full, but TeXLib is tested against full. A package it needs may be absent."
+        Add-PreflightNote "(install.bat -Doctor checks every package TeXLib requires, so a gap shows up as a named missing package rather than a cryptic build error)"
+    }
 
-# 7g. SumatraPDF: always a portable copy.
-Add-PreflightOK "Installing a portable SumatraPDF (any existing install is left untouched)"
+    # 7f. Sublime Text: always an isolated portable copy.
+    Add-PreflightOK "Installing an isolated portable Sublime Text under $SublimeDir (any existing Sublime is left untouched; our texlib_builder plugin is scoped to it)"
+
+    # 7g. SumatraPDF: always a portable copy.
+    Add-PreflightOK "Installing a portable SumatraPDF (any existing install is left untouched)"
+}
 
 # 7h. Library location.
 if ($ExplicitTeXLibPath) {
@@ -1020,7 +1327,15 @@ $HaveExistingLibrary = Test-TeXLibLibraryDir $UserRootJunctionTarget
 $UseExistingTeXLib = $false
 $MigrateFromLegacy = $false
 
-if ($HaveBundle) {
+if ($Repair) {
+    # -Repair never touches the library, so it needs no bundle and no source --
+    # only somewhere for Packages\User to point at.
+    if ($HaveExistingLibrary) {
+        Add-PreflightOK "TeXLib library present at $UserRootJunctionTarget (left untouched by -Repair)"
+    } else {
+        Add-PreflightWarning "No TeXLib library at $UserRootJunctionTarget. -Repair will re-apply config, but builds will fail until you run a normal install to deploy the library."
+    }
+} elseif ($HaveBundle) {
     Add-PreflightOK "TeXLib bundle found at $TexLibBundle"
 } elseif ($HaveExistingLibrary -and -not $OnlyTeXLib) {
     # No bundle in this installer copy (e.g. running from a source checkout, or
@@ -1104,14 +1419,23 @@ if ($DryRun) {
     if ($StaleUserRootJunction) {
         Write-Host "  * Retire the leftover user-root junction $StaleUserRootJunction (target preserved)" -ForegroundColor Gray
     }
-    if ($OnlyTeXLib) {
+    if ($Repair) {
+        Write-Host "  * Re-junction $SublimeDir\Data\Packages\User -> $SublimeUserSync" -ForegroundColor Gray
+        Write-Host "  * Refresh the builder files and the TeXLib Sublime package junction" -ForegroundColor Gray
+        Write-Host "  * Rewrite LaTeXTools / Preferences / SumatraPDF settings" -ForegroundColor Gray
+        Write-Host "  * Purge stale 'Open with' entries and re-register file associations" -ForegroundColor Gray
+        Write-Host "  * Recreate Desktop + Start Menu shortcuts" -ForegroundColor Gray
+        Write-Host "  * Write $BaseDir\VERSION" -ForegroundColor Gray
+        Write-Host "  * NOT touched: the library, and every component already installed" -ForegroundColor DarkGray
+    } elseif ($OnlyTeXLib) {
         Write-Host "  * $TeXLibPlan" -ForegroundColor Gray
         Write-Host "  * Refresh texlib_builder.py + TeXLib.sublime-build in Packages\User" -ForegroundColor Gray
         Write-Host "  * Write $BaseDir\VERSION" -ForegroundColor Gray
     } else {
         Write-Host "  * Install Sublime Text to $SublimeDir" -ForegroundColor Gray
         Write-Host "  * Install SumatraPDF to $SumatraDir"   -ForegroundColor Gray
-        Write-Host "  * Install TeX Live to $TexLiveDir (30-60 min)" -ForegroundColor Gray
+        $SchemeTime = @{ 'full' = '30-60 min'; 'medium' = '5-15 min'; 'basic' = '2-5 min' }[$TexLiveScheme]
+        Write-Host "  * Install TeX Live to $TexLiveDir (scheme-$TexLiveScheme, $SchemeTime)" -ForegroundColor Gray
         Write-Host "  * $TeXLibPlan" -ForegroundColor Gray
         if ($Sandbox) {
             Write-Host "  * SKIP (sandbox): user PATH entry" -ForegroundColor DarkGray
@@ -1138,26 +1462,6 @@ if ($DryRun) {
 # =============================================================================
 # 10. HELPER FUNCTIONS (install-mode only)
 # =============================================================================
-function Invoke-DownloadWithRetry {
-    # Download $Uri to $OutFile, retrying transient failures with backoff.
-    # University Wi-Fi blips on a multi-hundred-MB TeX Live download otherwise
-    # hard-fail the whole install with no recourse but a from-scratch re-run.
-    param([string]$Uri, [string]$OutFile, [int]$Retries = 3)
-    for ($attempt = 1; $attempt -le $Retries; $attempt++) {
-        try {
-            Invoke-WebRequest -Uri $Uri -OutFile $OutFile -UseBasicParsing -TimeoutSec 120
-            return
-        } catch {
-            if ($attempt -ge $Retries) {
-                throw "Download failed after $Retries attempt(s): $Uri`n$_"
-            }
-            $wait = 5 * $attempt
-            Write-Host "  [retry] download attempt $attempt failed; retrying in $wait s..." -ForegroundColor Yellow
-            Start-Sleep -Seconds $wait
-        }
-    }
-}
-
 function Get-SourceFile {
     param ($Key, $DestPath)
     $Info = $Downloads[$Key]
@@ -1350,7 +1654,7 @@ Backup-SublimeSettings | Out-Null
 #     library, so only the user-owned Sublime\ settings come across, and only
 #     when the destination has none yet. Section 13 then lays the current
 #     builder files on top of them.
-if ($LegacyTeXLibDir) {
+if ($LegacyTeXLibDir -and -not $Repair) {
     Write-Host ""
     try {
         if ($MigrateFromLegacy) {
@@ -1379,7 +1683,7 @@ if ($LegacyTeXLibDir) {
 # Retire the user-root junction a pre-0.6.3 install created for the old
 # location. Directory::Delete(path, $false) removes the link entry only and
 # never follows it into the target, so whatever it pointed at is untouched.
-if ($StaleUserRootJunction) {
+if ($StaleUserRootJunction -and -not $Repair) {
     Write-Host ""
     Write-Host "Retiring the leftover user-root junction $StaleUserRootJunction..." -ForegroundColor Cyan
     try {
@@ -1392,9 +1696,9 @@ if ($StaleUserRootJunction) {
 
 
 # =============================================================================
-# 12. INSTALL PROGRAMS (skipped in -OnlyTeXLib)
+# 12. INSTALL PROGRAMS (skipped in -OnlyTeXLib / -Repair)
 # =============================================================================
-if (-not $OnlyTeXLib) {
+if ($InstallComponents) {
 
     # ---- Sublime Text ----
     $InstallSublime = $true
@@ -1478,7 +1782,7 @@ if (-not $OnlyTeXLib) {
             $TexMfSysVarFwd     = $BaseDir.Replace("\", "/") + "/TexLive/$TexLiveYear/texmf-var"
 
             $ProfileContent = @"
-selected_scheme scheme-full
+selected_scheme scheme-$TexLiveScheme
 TEXDIR $TexDirFwd
 TEXMFLOCAL $TexMfLocalFwd
 TEXMFSYSCONFIG $TexMfSysConfigFwd
@@ -1489,7 +1793,8 @@ option_src 0
 "@
             Set-Content -Path "$InstallerRoot\texlive.profile" -Value $ProfileContent -Encoding ASCII
 
-            Write-Host "STARTING TEX LIVE INSTALL (30-60 mins; grab a coffee)..." -ForegroundColor Cyan
+            $SchemeEta = @{ 'full' = '30-60 mins; grab a coffee'; 'medium' = '5-15 mins'; 'basic' = '2-5 mins' }[$TexLiveScheme]
+            Write-Host "STARTING TEX LIVE INSTALL (scheme-$TexLiveScheme, $SchemeEta)..." -ForegroundColor Cyan
             $TLProc = Start-Process -FilePath "$InstallerRoot\install-tl-windows.bat" `
                 -ArgumentList "-no-gui -profile texlive.profile" `
                 -WorkingDirectory $InstallerRoot -PassThru
@@ -1515,7 +1820,9 @@ option_src 0
 # 13. DEPLOY TEXLIB BUNDLE TO ONEDRIVE / DOCUMENTS
 # =============================================================================
 Write-Host ""
-if ($UseExistingTeXLib) {
+if (-not $DeployLibrary) {
+    Write-Host "Leaving the TeXLib library at $TeXLibDir alone (-Repair)." -ForegroundColor Cyan
+} elseif ($UseExistingTeXLib) {
     Write-Host "Using existing TeXLib library at $TeXLibDir (no bundle to deploy)." -ForegroundColor Cyan
 } elseif ($MigrateFromLegacy) {
     Write-Host "TeXLib library already in place at $TeXLibDir (migrated in step 11b)." -ForegroundColor Cyan
@@ -1623,8 +1930,13 @@ try {
     $PackagesDir = "$SublimeDir\Data\Packages"
     $LaTeXToolsDir = "$PackagesDir\LaTeXTools"
 
-    # 16a. Install LaTeXTools (skipped in -OnlyTeXLib if already present).
-    if (-not $OnlyTeXLib -and -not (Test-Path $LaTeXToolsDir)) {
+    # 16a. Install LaTeXTools. -Repair is offline by contract, so it reports a
+    # missing LaTeXTools rather than quietly turning into a download.
+    if ($Repair -and -not (Test-Path $LaTeXToolsDir)) {
+        Write-Host "  [WARN] LaTeXTools is missing from $LaTeXToolsDir." -ForegroundColor Yellow
+        Write-Host "         -Repair does not download; run install.bat without it to fetch LaTeXTools." -ForegroundColor Yellow
+    }
+    if ($InstallComponents -and -not (Test-Path $LaTeXToolsDir)) {
         $ZipPath = "$TempDir\latextools.zip"
         Get-SourceFile -Key "latextools" -DestPath $ZipPath
         Expand-Archive -Path $ZipPath -DestinationPath "$TempDir\lt_extract"
@@ -1636,7 +1948,11 @@ try {
     # never registers, and Ctrl+B does nothing. ST4's plugin host loads libraries
     # from <Data>\Lib\python38. Not gated on the LaTeXTools install above, so a
     # re-run repairs a machine whose regex is missing. Idempotent.
-    if (-not $OnlyTeXLib) {
+    if ($Repair -and -not (Test-Path "$SublimeDir\Data\Lib\python38\regex\__init__.py")) {
+        Write-Host "  [WARN] LaTeXTools' 'regex' dependency is missing; Ctrl+B will do nothing." -ForegroundColor Yellow
+        Write-Host "         -Repair does not download; run install.bat without it to fetch it." -ForegroundColor Yellow
+    }
+    if ($InstallComponents) {
         $SublimeLibDir = "$SublimeDir\Data\Lib\python38"
         $RegexPkgDir   = "$SublimeLibDir\regex"
         if (-not (Test-Path "$RegexPkgDir\__init__.py")) {
@@ -1676,6 +1992,49 @@ try {
             $src = Join-Path $BundledSublimeDir $f
             if (Test-Path $src) { Copy-Item $src $UserDir -Force }
         }
+    }
+
+    # 16b-2. Deploy the native TeXLib Sublime package.
+    # The library carries a real Sublime package in Sublime\texlib\ -- the
+    # command palette entries, Main.sublime-menu, snippets, the TeXLib Build
+    # Output syntax, and the texlib_* Python modules (doctor, scaffold, bank,
+    # texam, complete, locate, ...). It ships inside every release bundle, and
+    # through 0.6.4 the installer never deployed any of it: installed users got
+    # the four flat builder files in Packages\User and nothing else, while a
+    # developer running the library's own deploy-plugin.ps1 got the lot.
+    #
+    # It cannot simply live where it already sits. Packages\User is junctioned
+    # to <library>\Sublime, so the package IS physically present at
+    # Packages\User\texlib\ -- but Sublime only loads .py at the TOP level of a
+    # package directory, so a nested folder is inert. It needs its own package
+    # directory, which is what deploy-plugin.ps1 creates as Packages\TeXLib.
+    #
+    # A junction rather than a copy, for the same reason that script uses one:
+    # the package then tracks the library it came from, so an -OnlyTeXLib
+    # refresh updates the plugin with no extra step.
+    $PluginSource = Join-Path $SublimeUserSync "texlib"
+    $PluginLink   = Join-Path $PackagesDir "TeXLib"
+    if (Test-Path $PluginSource) {
+        if (Test-Path $PluginLink) {
+            $LinkItem = Get-Item $PluginLink -Force
+            if ($LinkItem.Attributes -match 'ReparsePoint') {
+                # Re-point it: a prior install may have linked an older location.
+                [System.IO.Directory]::Delete($PluginLink, $false)
+            } else {
+                # A real directory here is someone's hand-installed package.
+                # Refusing is right -- clobbering it would lose their work -- but
+                # it is not worth failing an otherwise good install over.
+                Write-Host "  [warn] $PluginLink is a real folder, not a junction; leaving it alone." -ForegroundColor Yellow
+                Write-Host "         The bundled TeXLib plugin was NOT deployed. Move that folder and re-run." -ForegroundColor Yellow
+                $PluginLink = $null
+            }
+        }
+        if ($PluginLink) {
+            New-Item -ItemType Junction -Path $PluginLink -Target $PluginSource | Out-Null
+            Write-Host "  Deployed the TeXLib Sublime package to $PluginLink" -ForegroundColor Green
+        }
+    } else {
+        Write-Host "  [note] No Sublime\texlib package in this library; skipping plugin deploy." -ForegroundColor Gray
     }
 
     # 16c-16e: skipped in -OnlyTeXLib (configs already point at correct paths).
@@ -1975,38 +2334,87 @@ if ($WriteMachineState) {
     Write-Host ""
     Write-Host "Creating shortcuts..." -ForegroundColor Cyan
 
-    function New-DesktopAndStartMenuShortcut {
-        param ($SourceExe, $ShortcutName)
+    # GetFolderPath returns "" when a shell folder can't be resolved (redirected
+    # or roaming profiles, some service contexts). Unguarded, "$Dir\$Name.lnk"
+    # collapses to "\Sublime.lnk", which resolves to the DRIVE ROOT --
+    # C:\Sublime.lnk. That fails noisily where the root isn't writable and
+    # succeeds silently where it is, littering C:\ instead of creating
+    # shortcuts. Skip a folder we couldn't resolve rather than guessing.
+    $DesktopPath   = [Environment]::GetFolderPath("Desktop")
+    $StartMenuRoot = [Environment]::GetFolderPath("StartMenu")
+    if (-not $DesktopPath)   { Write-Host "  [warn] Desktop folder unresolvable; skipping Desktop shortcuts" -ForegroundColor Yellow }
+    if (-not $StartMenuRoot) { Write-Host "  [warn] Start Menu folder unresolvable; skipping Start Menu shortcuts" -ForegroundColor Yellow }
+
+    # One "TeXLib" Start Menu folder rather than loose entries scattered among
+    # every other program: the three things belong together, and it gives
+    # Doctor somewhere to live that isn't "find the folder you extracted the
+    # installer into, months ago".
+    $StartMenuGroup = if ($StartMenuRoot) { "$StartMenuRoot\Programs\TeXLib" } else { $null }
+    if ($StartMenuGroup -and -not (Test-Path $StartMenuGroup)) {
+        New-Item -ItemType Directory -Force -Path $StartMenuGroup | Out-Null
+    }
+
+    function New-TeXLibShortcut {
+        param(
+            [string]$Path,
+            [string]$TargetPath,
+            [string]$Arguments = "",
+            [string]$Description = "",
+            [string]$IconLocation = ""
+        )
+        if (-not $Path) { return }
         try {
             $WS = New-Object -ComObject WScript.Shell
-            # GetFolderPath returns "" when the shell folder can't be resolved
-            # (redirected/roaming profiles, some service contexts). Unguarded,
-            # "$DesktopPath\$ShortcutName.lnk" collapses to "\Sublime.lnk",
-            # which resolves to the DRIVE ROOT -- C:\Sublime.lnk. That fails
-            # noisily where the root isn't writable and succeeds silently where
-            # it is, littering C:\ instead of creating shortcuts. Skip the
-            # folder we couldn't resolve rather than guessing.
-            $Targets = @()
-            $DesktopPath = [Environment]::GetFolderPath("Desktop")
-            if ($DesktopPath) { $Targets += "$DesktopPath\$ShortcutName.lnk" }
-            else { Write-Host "  [warn] Desktop folder unresolvable; skipping Desktop shortcut for '$ShortcutName'" -ForegroundColor Yellow }
-
-            $StartMenuRoot = [Environment]::GetFolderPath("StartMenu")
-            if ($StartMenuRoot) { $Targets += "$StartMenuRoot\Programs\$ShortcutName.lnk" }
-            else { Write-Host "  [warn] Start Menu folder unresolvable; skipping Start Menu shortcut for '$ShortcutName'" -ForegroundColor Yellow }
-
-            foreach ($Target in $Targets) {
-                $Sc = $WS.CreateShortcut($Target)
-                $Sc.TargetPath = $SourceExe
-                $Sc.Save()
-            }
+            $Sc = $WS.CreateShortcut($Path)
+            $Sc.TargetPath = $TargetPath
+            if ($Arguments)    { $Sc.Arguments = $Arguments }
+            if ($Description)  { $Sc.Description = $Description }
+            if ($IconLocation) { $Sc.IconLocation = $IconLocation }
+            $Sc.Save()
         } catch {
-            Write-Host "  [warn] Could not create shortcut '$ShortcutName': $_" -ForegroundColor Yellow
+            Write-Host "  [warn] Could not create shortcut '$Path': $_" -ForegroundColor Yellow
         }
     }
 
-    New-DesktopAndStartMenuShortcut -SourceExe "$SublimeDir\sublime_text.exe"          -ShortcutName "Sublime"
-    New-DesktopAndStartMenuShortcut -SourceExe "$SumatraDir\$($SumatraExeName)"   -ShortcutName "Sumatra"
+    $SublimeExe = "$SublimeDir\sublime_text.exe"
+    $SumatraExe = "$SumatraDir\$($SumatraExeName)"
+
+    # Desktop keeps the two apps only -- a desktop is not a place for a
+    # diagnostic tool.
+    if ($DesktopPath) {
+        New-TeXLibShortcut -Path "$DesktopPath\Sublime.lnk" -TargetPath $SublimeExe -Description "Sublime Text (TeXLib)"
+        New-TeXLibShortcut -Path "$DesktopPath\Sumatra.lnk" -TargetPath $SumatraExe -Description "SumatraPDF (TeXLib)"
+    }
+
+    if ($StartMenuGroup) {
+        New-TeXLibShortcut -Path "$StartMenuGroup\Sublime Text (TeXLib).lnk" -TargetPath $SublimeExe -Description "Sublime Text, configured for TeXLib"
+        New-TeXLibShortcut -Path "$StartMenuGroup\SumatraPDF (TeXLib).lnk"   -TargetPath $SumatraExe -Description "SumatraPDF, configured for TeXLib"
+        # Doctor runs from the copy stashed in <BaseDir>\Scripts (section 11),
+        # so it keeps working after the extracted installer folder is deleted --
+        # which is exactly when someone needs to diagnose something.
+        $StashedInstaller = "$ScriptsDir\install.ps1"
+        if (Test-Path $StashedInstaller) {
+            New-TeXLibShortcut -Path "$StartMenuGroup\TeXLib Doctor.lnk" `
+                -TargetPath "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" `
+                -Arguments "-NoProfile -ExecutionPolicy Bypass -NoExit -File `"$StashedInstaller`" -Doctor" `
+                -Description "Diagnose this TeXLib install and print a pass/warn/fail report" `
+                -IconLocation "$env:SystemRoot\System32\imageres.dll,76"
+        }
+        Write-Host "  Start Menu group: $StartMenuGroup" -ForegroundColor Green
+    }
+
+    # Loose Programs\*.lnk from installs before 0.7.0, now superseded by the
+    # group above. Left behind they are duplicate entries pointing at the same
+    # two exes.
+    if ($StartMenuRoot) {
+        foreach ($Old in @("Sublime.lnk", "Sumatra.lnk")) {
+            $OldPath = "$StartMenuRoot\Programs\$Old"
+            if (Test-Path $OldPath) {
+                Remove-Item $OldPath -Force -ErrorAction SilentlyContinue
+                Write-Host "  Removed the pre-0.7.0 loose Start Menu entry $Old" -ForegroundColor Gray
+            }
+        }
+    }
 }
 
 
@@ -2022,7 +2430,8 @@ sublime_dir=$SublimeDir
 sumatra_dir=$SumatraDir
 texlive_dir=$TexLiveDir
 using_onedrive=$UsingOneDrive
-last_mode=$(if ($OnlyTeXLib) { 'only-texlib' } else { 'full' })
+texlive_scheme=$TexLiveScheme
+last_mode=$(if ($Repair) { 'repair' } elseif ($OnlyTeXLib) { 'only-texlib' } else { 'full' })
 "@
 Set-Content -Path $VersionFile -Value $VersionContent -Encoding UTF8
 Write-Host "  Wrote $VersionFile" -ForegroundColor Gray
@@ -2096,7 +2505,9 @@ if (Test-Path $TempDir) {
 # =============================================================================
 Write-Host ""
 Write-Host "================================================" -ForegroundColor Green
-if ($OnlyTeXLib) {
+if ($Repair) {
+    Write-Host "   TeXLib configuration repaired (installer v$InstallerVersion)   " -ForegroundColor Green
+} elseif ($OnlyTeXLib) {
     Write-Host "   TeXLib library refreshed (installer v$InstallerVersion)   " -ForegroundColor Green
 } else {
     Write-Host "   TeXLib v$InstallerVersion installation complete!  " -ForegroundColor Green
