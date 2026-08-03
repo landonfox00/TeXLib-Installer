@@ -4,6 +4,34 @@ All notable changes to TeXLib-Installer are recorded here. Format follows [Keep 
 
 ## [Unreleased]
 
+## [0.7.2] — 2026-08-03
+
+From reading a real install log on a returning work machine.
+
+### Fixed
+
+- **The installer warned about a pin it was thirty lines from making correct.**
+  Re-installing over a previous uninstall arrives with `.pdf` still pinned to
+  `TeXLib.SumatraPDF` and that ProgID's key already deleted, so the stale-entry
+  purge called it dead and told the user to go reset it by hand — while section
+  17 was about to re-register that very ProgID and make the pin right again.
+  The purge now excludes the ProgIDs the same run is about to register. The
+  remaining warnings (`OneTeX.*`, from before the rename) are the genuinely
+  dead ones.
+- **"No stale 'Open with' entries found" printed directly beneath four warnings
+  about stale entries.** The counter only incremented on a *successful* clear,
+  so a `UserChoice` that Windows refused to delete produced a warning and then
+  got reported as nothing found. Un-clearable pins are now collected and
+  reported once, in one place, and never alongside a claim that there were none
+  — matching what the uninstaller already did.
+- **Sublime nagged to update itself out of the installer's control.** The
+  bundled Sublime is a pinned portable build, hash-verified on the way in, but
+  nothing set `update_check` — so it popped "Update Available: 4180 → 4200", and
+  taking that swaps the managed copy for an unmanaged one that no longer matches
+  what the installer configured around it. `"update_check": false` is now in the
+  Preferences template; updates arrive with a new installer release instead
+  (`install.bat -Update`).
+
 ## [0.7.1] — 2026-08-03
 
 ### Fixed

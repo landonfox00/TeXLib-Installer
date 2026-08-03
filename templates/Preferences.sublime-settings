@@ -10,6 +10,14 @@
 
 	"ignored_packages": ["Vintage"],
 
+	// This Sublime is a PINNED PORTABLE copy that the installer manages: the
+	// build is fixed in install.ps1's $Downloads and hash-verified on the way
+	// in. Left on, Sublime pops an "Update Available" dialog offering a newer
+	// build, and taking it swaps the managed copy for an unmanaged one that no
+	// longer matches what the installer configured around it. Updates come with
+	// a new installer release instead -- `install.bat -Update`.
+	"update_check": false,
+
 	"font_size": 11,
 	"word_wrap": true,
 	"index_files": true,

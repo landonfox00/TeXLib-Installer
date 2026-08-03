@@ -131,7 +131,7 @@ param(
 # =============================================================================
 # 0. INSTALLER METADATA
 # =============================================================================
-$InstallerVersion = "0.7.1"
+$InstallerVersion = "0.7.2"
 $InstallerRepo    = "https://github.com/landonfox00/TeXLib-Installer"
 $ReleasesApi      = "https://api.github.com/repos/landonfox00/TeXLib-Installer/releases/latest"
 
@@ -2097,10 +2097,11 @@ if ($WriteMachineState) {
     $ManagedProgIDs = @("TeXLib.SublimeFile", "TeXLib.SumatraPDF",
                         "OneTeX.SublimeFile", "OneTeX.SumatraPDF")
 
-    # Helpers below report through this counter rather than by returning a count:
-    # a stray object escaping any of the cmdlets they call would otherwise turn
-    # an integer return into an array and quietly break the tally.
+    # Helpers below report through these rather than by returning a count: a
+    # stray object escaping any of the cmdlets they call would otherwise turn an
+    # integer return into an array and quietly break the tally.
     $script:StaleCleared = 0
+    $script:StillPinned  = @()   # extensions whose UserChoice Windows would not let us clear
 
     function Test-OwnedAndDead {
         # Is this Open With entry OURS (one of our exe names or ProgIDs) AND
@@ -2159,7 +2160,7 @@ if ($WriteMachineState) {
         # this bug. Only entries that are OURS (our exe names, our ProgIDs) and
         # DEAD (exe missing / ProgID key gone) are touched; an association the
         # user set to some other app is never disturbed.
-        param([string]$Ext, [string[]]$ExePatterns, [string[]]$ProgIDs)
+        param([string]$Ext, [string[]]$ExePatterns, [string[]]$ProgIDs, [string[]]$AboutToRegister = @())
         $FileExts = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\$Ext"
         $ClassExt = "HKCU:\Software\Classes\$Ext"
         # The provider bolts these onto every Get-ItemProperty result; they are
@@ -2233,21 +2234,30 @@ if ($WriteMachineState) {
             }
         }
 
-        # --- UserChoice: Explorer's pinned default. Windows guards this key, so
-        # the delete can legitimately fail; that is a [stale] entry we could not
-        # clear, not an install failure.
+        # --- UserChoice: Explorer's pinned default.
+        #
+        # A ProgID this run is ABOUT TO REGISTER is not stale, however dead it
+        # looks right now. Re-installing over a previous uninstall reaches here
+        # with .pdf still pinned to TeXLib.SumatraPDF and that ProgID's key
+        # already deleted -- so the naive test called it dead and warned, while
+        # section 17 was thirty lines from making that exact pin correct again.
+        # The warning was not just noise; it told the user to go undo something
+        # the installer wanted.
         $UserChoice = "$FileExts\UserChoice"
         if (Test-Path $UserChoice) {
             $Pinned = $null
             try { $Pinned = (Get-ItemProperty -Path $UserChoice -ErrorAction SilentlyContinue).ProgId } catch { $Pinned = $null }
-            if ($Pinned -and (Test-OwnedAndDead -Name $Pinned -ExePatterns $ExePatterns -ProgIDs $ProgIDs)) {
+            if ($Pinned -and ($AboutToRegister -notcontains $Pinned) -and
+                (Test-OwnedAndDead -Name $Pinned -ExePatterns $ExePatterns -ProgIDs $ProgIDs)) {
                 try {
                     Remove-Item -Path $UserChoice -Recurse -Force -ErrorAction Stop
                     Write-Host "  [stale] $Ext default was pinned to $Pinned; cleared" -ForegroundColor Gray
                     $script:StaleCleared++
                 } catch {
-                    Write-Host "  [warn] $Ext is pinned to the dead ProgID $Pinned and Windows would not let us clear it." -ForegroundColor Yellow
-                    Write-Host "         Right Click -> Open With -> Choose Another App to reset it." -ForegroundColor Yellow
+                    # Windows guards this key and some builds refuse the delete
+                    # outright. Collected for one coherent line at the end rather
+                    # than four near-identical yellow blocks mid-run.
+                    $script:StillPinned += $Ext
                 }
             }
         }
@@ -2309,16 +2319,31 @@ public static extern void SHChangeNotify(int eventId, uint flags, System.IntPtr 
         # install root is the thing users actually see, and re-registering on top
         # of it just leaves two entries with the same name in the list.
         $ExePatterns = @("sublime_text.exe", "SumatraPDF*.exe")
+        # The ProgIDs this run is about to (re-)register, so the purge does not
+        # treat them as dead in the window before they exist again.
+        $WillRegister = @("TeXLib.SublimeFile", "TeXLib.SumatraPDF")
         $script:StaleCleared = 0
+        $script:StillPinned  = @()
         Unregister-StaleAppEntry -ExePatterns $ExePatterns
         foreach ($Ext in $ManagedExts) {
-            Clear-StaleOpenWithEntry -Ext $Ext -ExePatterns $ExePatterns -ProgIDs $ManagedProgIDs
+            Clear-StaleOpenWithEntry -Ext $Ext -ExePatterns $ExePatterns `
+                                     -ProgIDs $ManagedProgIDs -AboutToRegister $WillRegister
         }
         if ($script:StaleCleared -gt 0) {
             $Plural = if ($script:StaleCleared -eq 1) { "entry" } else { "entries" }
             Write-Host "  Cleared $($script:StaleCleared) stale 'Open with' $Plural" -ForegroundColor Green
-        } else {
+        } elseif ($script:StillPinned.Count -eq 0) {
             Write-Host "  No stale 'Open with' entries found" -ForegroundColor Gray
+        }
+        if ($script:StillPinned.Count -gt 0) {
+            # Reported here, once, instead of a four-line yellow block per
+            # extension in the middle of the run -- and never alongside "No
+            # stale entries found", which is what it used to contradict.
+            Write-Host "  [note] Windows would not let us clear the pinned default app for" -ForegroundColor Yellow
+            Write-Host "         $($script:StillPinned -join ', ')" -ForegroundColor Yellow
+            Write-Host "         Each points at an entry that no longer exists, so Windows will ask" -ForegroundColor Gray
+            Write-Host "         which app to use the next time you open one. To settle it now:" -ForegroundColor Gray
+            Write-Host "         Right Click -> Open With -> Choose Another App -> 'Always use this app'." -ForegroundColor Gray
         }
 
         foreach ($Ext in $SublimeExts) {
