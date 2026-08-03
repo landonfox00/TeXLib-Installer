@@ -246,6 +246,53 @@ jobs:
           if ($bad) { Write-Host "$bad case(s) failed." -ForegroundColor Red; exit 1 }
           Write-Host "OK: all $($cases.Count) version-comparison cases passed." -ForegroundColor Green
 
+      - name: Every in-script call passes parameters the function actually has
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # The case table above passes while the SHIPPED code is broken if a
+          # call site misspells a parameter: these are simple functions (no
+          # CmdletBinding), and PowerShell sweeps unrecognised arguments into
+          # $args instead of erroring. That is exactly how v0.7.0 shipped an
+          # -Update that always reported "already on the latest release" --
+          # `Test-IsNewerVersion -Latest $x` left -Candidate unbound and $null,
+          # and the null guard returned $false. It failed SAFE, so nothing
+          # complained. Walk the AST and check every call against the real
+          # parameter names of the function it targets.
+          $ast = [System.Management.Automation.Language.Parser]::ParseFile(
+                   (Resolve-Path .\tools\install.ps1), [ref]$null, [ref]$null)
+
+          $funcs = @{}
+          foreach ($f in $ast.FindAll({ $args[0] -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true)) {
+            $names = @()
+            if ($f.Parameters) { $names = @($f.Parameters | ForEach-Object { $_.Name.VariablePath.UserPath }) }
+            elseif ($f.Body.ParamBlock) { $names = @($f.Body.ParamBlock.Parameters | ForEach-Object { $_.Name.VariablePath.UserPath }) }
+            $funcs[$f.Name] = $names
+          }
+
+          $bad = 0
+          foreach ($cmd in $ast.FindAll({ $args[0] -is [System.Management.Automation.Language.CommandAst] }, $true)) {
+            $name = $cmd.GetCommandName()
+            if (-not $name -or -not $funcs.ContainsKey($name)) { continue }
+            foreach ($el in $cmd.CommandElements) {
+              if ($el -isnot [System.Management.Automation.Language.CommandParameterAst]) { continue }
+              $p = $el.ParameterName
+              # Accept an unambiguous prefix, exactly as PowerShell binds.
+              $match = @($funcs[$name] | Where-Object { $_ -ieq $p })
+              if ($match.Count -eq 0) { $match = @($funcs[$name] | Where-Object { $_ -ilike "$p*" }) }
+              if ($match.Count -ne 1) {
+                Write-Host ("FAIL: line {0}: {1} -{2} -- no such parameter (has: {3})" -f `
+                  $el.Extent.StartLineNumber, $name, $p, ($funcs[$name] -join ', ')) -ForegroundColor Red
+                $bad++
+              }
+            }
+          }
+          if ($bad) {
+            Write-Host "$bad bad call site(s). A simple function swallows these silently." -ForegroundColor Red
+            exit 1
+          }
+          Write-Host "OK: every call to a locally-defined function binds real parameters." -ForegroundColor Green
+
       - name: Test-InstallerOwnsJunction case table (extracted from uninstall.ps1)
         shell: pwsh
         run: |
