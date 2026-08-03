@@ -4,6 +4,106 @@ All notable changes to TeXLib-Installer are recorded here. Format follows [Keep 
 
 ## [Unreleased]
 
+## [0.6.3] — 2026-08-03
+
+An uninstall-and-layout release. The uninstaller genuinely removes what it says it removes, the library stops living in `Documents`, Windows stops accumulating dead "Open with" entries, and the release folder no longer offers four things to double-click when only two of them work.
+
+### Fixed
+
+- **The uninstaller removed almost nothing.** `Start-Transcript` wrote its log to
+  `%LOCALAPPDATA%\TeXLib\Logs\uninstall-<timestamp>.log` -- inside the very
+  directory the next statement deleted -- and held the file open for the whole
+  run. `Remove-Item -Recurse` walked the root in enumeration order, hit the
+  locked log, and aborted. Everything after it alphabetically (`Sublime Text`,
+  `Sumatra`, `TexLive`) was never touched, and the one-line
+  `[WARN] Some files could not be removed` gave no hint that three of the four
+  components had survived. The log now goes to `%TEMP%\TeXLib-Uninstall\`.
+- **`Packages\User` is a junction, and `Remove-Item -Recurse` follows it.** In
+  Windows PowerShell 5.1 that meant the uninstaller reached *through* the
+  junction into the library's `Sublime\` folder -- deleting the user's settings
+  where it could, and throwing partway through the root removal where it could
+  not (a locked file or a OneDrive placeholder on the other side). Junctions
+  under the install root are now unlinked with
+  `Directory.Delete(path, recursive: false)` before anything is removed.
+- **A running Sublime Text or SumatraPDF made the removal fail.** Their own
+  executables are locked while running, which produced the same partial-removal
+  abort. The uninstaller now detects processes whose image lives under the
+  install root, offers to close them (`-Force` to skip the question; `-Silent`
+  closes them), and asks nothing about a Sublime the user installed elsewhere.
+- **One locked file no longer abandons the rest of the removal.** When the bulk
+  `Remove-Item` fails, the uninstaller retries child by child and then reports
+  exactly how many items are left and where, instead of a bare warning.
+
+### Changed
+
+- **The TeXLib library installs to `<InstallPath>\Library`** (by default
+  `%LOCALAPPDATA%\TeXLib\Library`) instead of `<OneDrive>\Documents\TeXLib`. It
+  now sits alongside the Sublime plugin it carries and the portable Sublime /
+  Sumatra / TeX Live trees. `Documents` made sense while the library was a
+  OneDrive-synced document tree; it no longer is. A deployed snapshot that every
+  re-install overwrites does not belong among the user's own files, and on a
+  machine that also has a git checkout of TeXLib it was landing on top of it.
+  Bonus: on a normal profile the new path has no space or comma in it, so
+  kpathsea resolves it without the `%USERPROFILE%\TeXLib` junction.
+  - **Upgrades migrate automatically.** A pre-0.6.3 library in Documents /
+    OneDrive is detected (from the previous install's `VERSION` stamp, then the
+    two defaults it could have used), the user's `Sublime\` settings are carried
+    across, and -- when this installer copy ships no `texlib\` bundle -- the
+    whole library is copied over rather than the install failing. The old folder
+    is never modified or deleted; the installer says where it is and leaves the
+    decision to you.
+  - The `%USERPROFILE%\TeXLib` junction a pre-0.6.3 install created for the old
+    location is retired on the next install, but only when that install's own
+    `VERSION` stamp claims it -- the same ownership rule the uninstaller uses.
+  - The junction logic is no longer OneDrive-specific: it fires whenever the
+    resolved library path contains a space or comma, and pre-flight now warns
+    (instead of building a useless link) when `%USERPROFILE%` has one too.
+- **`install.ps1` and `uninstall.ps1` moved into `tools\`.** The release folder
+  now contains exactly two clickable things -- `install.bat` and
+  `uninstall.bat` -- rather than four files whose names differ by an extension,
+  two of which do nothing useful on a double-click. `package-integrity` asserts
+  both the new location and the absence of the old one.
+- **File associations are labelled `Sublime Text (TeXLib)` / `SumatraPDF
+  (TeXLib)`** in the Open With dialog, so they are distinguishable from a
+  Sublime or SumatraPDF the user installed themselves.
+
+### Added
+
+- **Stale "Open with" entries are cleared on every install.** Each install and
+  uninstall used to leave its `Applications\<exe>` key, its ProgIDs, and its rows
+  in Explorer's per-extension `OpenWithList` / `OpenWithProgids` / `UserChoice`
+  behind, so the dialog slowly filled with duplicate Sublime and SumatraPDF
+  entries pointing at executables that were long gone. Section 17 now purges
+  them first and registers fresh afterwards (through the namespaced `TeXLib.*`
+  ProgIDs only -- writing `Applications\sublime_text.exe` would name the *exe*
+  rather than us, and HKCU shadows HKLM, so it would hijack the Open With entry
+  of a Sublime the user installed in Program Files), then calls `SHChangeNotify`
+  so Explorer rereads instead of showing the old list until the next sign-out.
+  Malformed rows (values that name no exe, AUMID, or CLSID path -- they render
+  as blank lines) go too. Only entries that are **ours** and **dead** are
+  touched: liveness is resolved through `HKEY_CLASSES_ROOT`, the merged view
+  Explorer itself uses, so a per-machine Sublime registered in `HKLM` is
+  recognised as live and left alone. The uninstaller does the same on the way
+  out. `-Doctor` reports any leftovers it finds.
+- **Per-component uninstall.** An interactive `uninstall.bat` now asks about
+  Sublime Text, SumatraPDF, and TeX Live separately -- keeping the 6 GB TeX Live
+  tree across a reinstall saves 30-60 minutes -- and about a pre-0.6.3 library in
+  Documents, which is still preserved by default. Switches for unattended runs:
+  `-All`, `-RemoveLibrary`, `-KeepSublime`, `-KeepSumatra`, `-KeepTeXLive`,
+  `-Force`.
+- **`uninstall.ps1 -InstallPath`**, the counterpart to `install.ps1`'s. Without
+  it the uninstaller hardcoded `%LOCALAPPDATA%\TeXLib` and could only ever clear
+  the registry/PATH/shortcut artifacts of a non-default install. It also now
+  reads component paths from the install's `VERSION` stamp rather than assuming
+  them, so an install made with `-InstallPath` uninstalls cleanly.
+- **`legacy-library-migration` CI job.** Seeds a pre-0.6.3 machine, installs, and
+  asserts the library moved, the user's settings came with it, and the old folder
+  is untouched -- then tears down with `-All` and asserts that the old folder
+  still survives, because a folder the installer only read from is not its to
+  delete. The `junction` job now reaches the comma/space path through
+  `-InstallPath` (the runner has no OneDrive), and both teardown jobs assert that
+  the components are actually gone.
+
 ## [0.6.2] — 2026-07-30
 
 A reliability release for the **returning machine** — a computer that already has TeXLib. Every path unique to that state was broken or untested: reusing an already-synced library aborted the install at the very last step, the uninstaller crashed on a plain double-click before removing anything, the update check offered to "update" you to an older release, and the uninstaller would unlink a `%USERPROFILE%\TeXLib` junction it had never created. None of it was visible to CI, which only ever installed once onto a clean VM.

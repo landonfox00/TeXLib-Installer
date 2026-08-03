@@ -10,8 +10,9 @@
     Run this from the repo root or from the tools/ directory.
 
 .PARAMETER TexLibPath
-    Path to the TeXLib repo root to snapshot. Defaults to the OneDrive
-    location used by the author; override on any other machine.
+    Path to the TeXLib repo root to snapshot. Defaults to
+    %USERPROFILE%\Documents\TeXLib, falling back to the OneDrive Documents copy
+    if that is where the checkout still lives; override on any other machine.
 
 .PARAMETER Version
     Release version string (no leading 'v'). Used for the ZIP filename and
@@ -25,7 +26,7 @@
 #>
 [CmdletBinding()]
 param(
-    [string]$TexLibPath = "$env:USERPROFILE\OneDrive - University of Nevada, Reno\Documents\TeXLib",
+    [string]$TexLibPath = "",
     [Parameter(Mandatory=$true)]
     [string]$Version,
     [string]$OutDir = ""
@@ -43,6 +44,20 @@ $RepoRoot = if ($PSScriptRoot) {
 
 if (-not $OutDir) { $OutDir = Join-Path $RepoRoot "dist" }
 
+# Resolve the TeXLib checkout to snapshot. The library moved out of OneDrive, so
+# the local Documents copy is checked first; the OneDrive path stays as a
+# fallback for a machine that has not moved yet.
+if (-not $TexLibPath) {
+    $TexLibCandidates = @("$env:USERPROFILE\Documents\TeXLib")
+    foreach ($od in @($env:OneDrive, $env:OneDriveCommercial, $env:OneDriveConsumer)) {
+        if ($od) { $TexLibCandidates += "$od\Documents\TeXLib" }
+    }
+    foreach ($c in $TexLibCandidates) {
+        if (Test-Path (Join-Path $c "course-metadata.sty")) { $TexLibPath = $c; break }
+    }
+    if (-not $TexLibPath) { $TexLibPath = $TexLibCandidates[0] }
+}
+
 Write-Host "make-release.ps1" -ForegroundColor Cyan
 Write-Host "  Repo root:   $RepoRoot"
 Write-Host "  TeXLib path: $TexLibPath"
@@ -55,7 +70,8 @@ if (-not (Test-Path $TexLibPath)) {
     Write-Host "TeXLib path not found: $TexLibPath" -ForegroundColor Red
     exit 1
 }
-$RequiredFiles = @("install.ps1", "uninstall.ps1", "install.bat", "uninstall.bat")
+$RequiredFiles = @("tools\install.ps1", "tools\uninstall.ps1", "tools\boot_wrapper.ps1",
+                   "install.bat", "uninstall.bat")
 foreach ($f in $RequiredFiles) {
     if (-not (Test-Path (Join-Path $RepoRoot $f))) {
         Write-Host "Missing required installer file: $f" -ForegroundColor Red
@@ -72,8 +88,11 @@ if (Test-Path $StageRoot) {
 New-Item -ItemType Directory -Force -Path $StageRoot | Out-Null
 
 Write-Host "Copying installer files..." -ForegroundColor Cyan
+# Only the two .bat files and the docs sit at the release root: that is the
+# whole point of keeping the .ps1 files in tools\, so a user opening the
+# extracted folder sees exactly two things to double-click.
 $InstallerFiles = @(
-    "install.ps1", "uninstall.ps1", "install.bat", "uninstall.bat",
+    "install.bat", "uninstall.bat",
     "INSTALL.md", "README.md", "LICENSE", "CHANGELOG.md"
 )
 foreach ($f in $InstallerFiles) {
@@ -82,14 +101,15 @@ foreach ($f in $InstallerFiles) {
 }
 Copy-Item (Join-Path $RepoRoot "templates") $StageRoot -Recurse -Force
 
-# install.bat / uninstall.bat invoke tools/boot_wrapper.ps1, so it MUST ship
-# -- without it the .bat just flashes open and dies (PowerShell -File on a
-# missing script). make-release.ps1 itself is the build tool, and
-# dev-install-test.ps1 is a local test harness; neither ships.
-# package-integrity asserts both stay out of the bundle.
+# install.bat / uninstall.bat invoke tools\boot_wrapper.ps1, which in turn runs
+# tools\install.ps1 / tools\uninstall.ps1, so all three MUST ship -- without any
+# of them the .bat just flashes open and dies (PowerShell -File on a missing
+# script). make-release.ps1 itself is the build tool, and dev-install-test.ps1
+# is a local test harness; neither ships. package-integrity asserts that the
+# shipped three are present and the other two are not.
 $ToolsStage = Join-Path $StageRoot "tools"
 New-Item -ItemType Directory -Force -Path $ToolsStage | Out-Null
-foreach ($w in @("boot_wrapper.ps1")) {
+foreach ($w in @("boot_wrapper.ps1", "install.ps1", "uninstall.ps1")) {
     Copy-Item (Join-Path $RepoRoot "tools\$w") $ToolsStage -Force
 }
 

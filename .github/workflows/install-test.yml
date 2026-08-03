@@ -49,7 +49,7 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $bad = @()
-          foreach ($f in 'install.ps1','uninstall.ps1') {
+          foreach ($f in 'tools\install.ps1','tools\uninstall.ps1') {
             $b = [System.IO.File]::ReadAllBytes((Resolve-Path $f))
             $hasBom = ($b.Length -ge 3 -and $b[0] -eq 0xEF -and $b[1] -eq 0xBB -and $b[2] -eq 0xBF)
             $nonAscii = ($b | Where-Object { $_ -ge 0x80 }).Count
@@ -86,9 +86,9 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          # Assemble a sandbox mirroring the release layout (tools\ one level
-          # below the inner script) so the REAL wrapper's Split-Path resolution
-          # finds our stub as the sibling '<Kind>.ps1'.
+          # Assemble a sandbox mirroring the release layout (wrapper and inner
+          # scripts together in tools\) so the REAL wrapper's $PSScriptRoot
+          # resolution finds our stub as the sibling '<Kind>.ps1'.
           $sandbox = Join-Path $env:RUNNER_TEMP 'wrap-arg-test'
           Remove-Item -Recurse -Force $sandbox -ErrorAction SilentlyContinue
           New-Item -ItemType Directory -Force -Path (Join-Path $sandbox 'tools') | Out-Null
@@ -100,7 +100,7 @@ jobs:
             'Write-Host "STUB-INNER-RAN Silent=$Silent"'
             'exit 0'
           ) -join "`r`n"
-          Set-Content -Encoding UTF8 -Path (Join-Path $sandbox 'uninstall.ps1') -Value $stub
+          Set-Content -Encoding UTF8 -Path (Join-Path $sandbox 'tools\uninstall.ps1') -Value $stub
 
           # Launch exactly as uninstall.bat does: WinPS 5.1, -File, positional
           # 'uninstall', NO further args. `type nul |` feeds a closed, empty
@@ -148,7 +148,7 @@ jobs:
             'Write-Host "BOUND Silent=$Silent Doctor=$Doctor DryRun=$DryRun InstallPath=[$InstallPath]"'
             'exit 0'
           ) -join "`r`n"
-          Set-Content -Encoding UTF8 -Path (Join-Path $sandbox 'install.ps1') -Value $inst
+          Set-Content -Encoding UTF8 -Path (Join-Path $sandbox 'tools\install.ps1') -Value $inst
           # uninstall.ps1's shape: switch-only, nothing to absorb a stray token.
           $unin = @(
             '[CmdletBinding()]'
@@ -156,7 +156,7 @@ jobs:
             'Write-Host "BOUND Silent=$Silent RemoveJunction=$RemoveJunction"'
             'exit 0'
           ) -join "`r`n"
-          Set-Content -Encoding UTF8 -Path (Join-Path $sandbox 'uninstall.ps1') -Value $unin
+          Set-Content -Encoding UTF8 -Path (Join-Path $sandbox 'tools\uninstall.ps1') -Value $unin
 
           $wrapper = Join-Path $sandbox 'tools\boot_wrapper.ps1'
           $bad = 0
@@ -211,7 +211,7 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $ast = [System.Management.Automation.Language.Parser]::ParseFile(
-                   (Resolve-Path .\install.ps1), [ref]$null, [ref]$null)
+                   (Resolve-Path .\tools\install.ps1), [ref]$null, [ref]$null)
           $fn = $ast.FindAll({
                   param($n)
                   $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
@@ -255,7 +255,7 @@ jobs:
           # which on a developer machine is the live link to their library.
           # Testing the decision in isolation keeps that path untouched.
           $ast = [System.Management.Automation.Language.Parser]::ParseFile(
-                   (Resolve-Path .\uninstall.ps1), [ref]$null, [ref]$null)
+                   (Resolve-Path .\tools\uninstall.ps1), [ref]$null, [ref]$null)
           $fn = $ast.FindAll({
                   param($n)
                   $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
@@ -382,7 +382,7 @@ jobs:
           # Fail fast (and legibly) if the switch was removed, rather than let
           # WinPS 5.1's CmdletBinding param-binding error surface as an opaque
           # exit 1 that looks just like a real hash drift.
-          if (-not (Select-String -Path .\install.ps1 -Pattern 'VerifyDownloads' -Quiet)) {
+          if (-not (Select-String -Path .\tools\install.ps1 -Pattern 'VerifyDownloads' -Quiet)) {
             Write-Host "install.ps1 has no -VerifyDownloads switch; the canary cannot run." -ForegroundColor Red
             exit 1
           }
@@ -396,7 +396,7 @@ jobs:
           # suppresses the wrapper-style final pause belt-and-suspenders.
           $env:TEXLIB_INSTALLER_WRAPPED = '1'
           powershell.exe -NoProfile -ExecutionPolicy Bypass `
-            -File .\install.ps1 -Silent -VerifyDownloads
+            -File .\tools\install.ps1 -Silent -VerifyDownloads
           $rc = $LASTEXITCODE
           Write-Host "install.ps1 -VerifyDownloads exit code: $rc  (0=all good, 20=drift)"
           exit $rc
@@ -429,7 +429,7 @@ jobs:
           # pre-flight must fail non-zero AND tell them to grab the release zip
           # instead -- the real-world failure from 2026-06-15.
           $out = & powershell.exe -NoProfile -ExecutionPolicy Bypass `
-            -File .\install.ps1 -Silent -DryRun 2>&1 | Out-String
+            -File .\tools\install.ps1 -Silent -DryRun 2>&1 | Out-String
           $rc = $LASTEXITCODE
           Write-Host $out
           if ($rc -eq 0) { Write-Host "FAIL: expected non-zero exit when the bundle is missing" -ForegroundColor Red; exit 1 }
@@ -463,7 +463,7 @@ jobs:
           $env:OneDriveConsumer = ''
           $installRoot = Join-Path $env:RUNNER_TEMP 'TeXLibRoot'
           powershell.exe -NoProfile -ExecutionPolicy Bypass `
-            -File .\install.ps1 -Silent -DryRun -InstallPath $installRoot
+            -File .\tools\install.ps1 -Silent -DryRun -InstallPath $installRoot
           $rc = $LASTEXITCODE
           Write-Host "install.ps1 -DryRun exit code: $rc"
           if ($rc -ne 0) {
@@ -472,11 +472,13 @@ jobs:
           exit $rc
 
   # ---------------------------------------------------------------------------
-  # 4. junction — FAST. Exercises the OneDrive comma/space path that the v0.5.0
-  #    user-root junction feature exists for, which CI otherwise never reaches
-  #    (no OneDrive on the runner). Fakes $env:OneDrive to a comma+space path and
-  #    runs -OnlyTeXLib (junction + bundle deploy, NOT the ~30 min TeX Live
-  #    install), then asserts %USERPROFILE%\TeXLib is a junction pointing there.
+  # 4. junction — FAST. Exercises the comma/space library path that the v0.5.0
+  #    user-root junction feature exists for. Since 0.6.3 the library lives at
+  #    <InstallPath>\Library, so the way to reach that path is an -InstallPath
+  #    with a space and a comma in it (before 0.6.3 it was a UNR-style OneDrive
+  #    folder name, which no runner has). Runs -OnlyTeXLib (junction + bundle
+  #    deploy, NOT the ~30 min TeX Live install), then asserts
+  #    %USERPROFILE%\TeXLib is a junction pointing at the library.
   # ---------------------------------------------------------------------------
   junction:
     if: github.event_name != 'schedule'
@@ -492,23 +494,24 @@ jobs:
           New-Item -ItemType Directory -Force -Path 'texlib\Sublime' | Out-Null
           Set-Content -Encoding UTF8 -Path 'texlib\CHANGELOG.md' -Value "# Changelog`r`n`r`n## [Unreleased]`r`n- CI stub bundle (not a real release)."
 
-      - name: Install with a faked comma/space OneDrive path
+      - name: Install to a path with BOTH a space and a comma in it
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           $env:TEXLIB_INSTALLER_WRAPPED = '1'
-          # Fake an OneDrive whose path has BOTH a space and a comma (like
-          # "OneDrive - University of Nevada, Reno") so $NeedsUserRootJunction
-          # fires -- the exact UNR environment GitHub runners never reproduce.
-          $fakeOneDrive = Join-Path $env:RUNNER_TEMP 'OneDrive - Fake University, Org'
-          New-Item -ItemType Directory -Force -Path (Join-Path $fakeOneDrive 'Documents') | Out-Null
-          $env:OneDrive = $fakeOneDrive
+          # An install root whose path has BOTH a space and a comma, so the
+          # library at <root>\Library trips $NeedsUserRootJunction -- kpathsea
+          # splits TEXINPUTS on commas and chokes on spaces, and this is the
+          # only way to reach that on a runner.
+          $dirtyRoot = Join-Path $env:RUNNER_TEMP 'TeXLib Root, Fake Org'
+          "DIRTY_ROOT=$dirtyRoot" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          $env:OneDrive = ''
           $env:OneDriveCommercial = ''
           $env:OneDriveConsumer = ''
           # -OnlyTeXLib exercises junction creation + bundle deploy WITHOUT the
           # ~30 min TeX Live full install.
           powershell.exe -NoProfile -ExecutionPolicy Bypass `
-            -File .\install.ps1 -Silent -OnlyTeXLib
+            -File .\tools\install.ps1 -Silent -OnlyTeXLib -InstallPath $dirtyRoot
           $rc = $LASTEXITCODE
           Write-Host "install.ps1 -Silent -OnlyTeXLib exit code: $rc"
           if ($rc -ne 0) { exit $rc }
@@ -528,15 +531,20 @@ jobs:
           $target = $item.Target; if (-not $target) { $target = $item.LinkTarget }
           $target = ($target -join ';')
           Write-Host "junction target: $target"
-          if ($target -and ($target -notlike '*OneDrive - Fake University, Org*')) {
+          if ($target -and ($target -notlike '*TeXLib Root, Fake Org*')) {
             Write-Host "FAIL: junction points somewhere unexpected" -ForegroundColor Red; exit 1
+          }
+          # 0.6.3 puts the library under the install root, so the junction has to
+          # land on <root>\Library rather than the root itself.
+          if ($target -and ($target -notlike '*\Library')) {
+            Write-Host "FAIL: junction does not point at the <root>\Library folder" -ForegroundColor Red; exit 1
           }
           # The stub bundle deploys into $TeXLibDir, which was reassigned to the
           # junction -- so it must be visible through it.
           if (-not (Test-Path (Join-Path $junction 'CHANGELOG.md'))) {
             Write-Host "FAIL: stub bundle not visible through the junction" -ForegroundColor Red; exit 1
           }
-          Write-Host "OK: %USERPROFILE%\TeXLib is a junction at the comma/space OneDrive path; bundle deployed through it." -ForegroundColor Green
+          Write-Host "OK: %USERPROFILE%\TeXLib is a junction at the comma/space library path; bundle deployed through it." -ForegroundColor Green
 
   # ---------------------------------------------------------------------------
   # 4b. reuse-existing-library — FAST. Covers the RETURNING machine, which every
@@ -574,10 +582,13 @@ jobs:
           $installRoot = Join-Path $env:RUNNER_TEMP 'TeXLibRoot'
           "INSTALL_ROOT=$installRoot" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
-          # With OneDrive nulled below, $TeXLibDir is %USERPROFILE%\Documents\
-          # TeXLib and no user-root junction is needed. Pre-flight accepts the
+          # 0.6.3+ default: the library lives at <InstallPath>\Library. Seeding
+          # it THERE is what makes the installer take the reuse-in-place path
+          # ($UseExistingTeXLib) rather than the pre-0.6.3 migration path, which
+          # legacy-library-migration covers separately. Pre-flight accepts the
           # library once the three core .sty files exist.
-          $lib = Join-Path $env:USERPROFILE 'Documents\TeXLib'
+          $lib = Join-Path $installRoot 'Library'
+          "LIB_ROOT=$lib" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           New-Item -ItemType Directory -Force -Path (Join-Path $lib 'Sublime') | Out-Null
           Set-Content -Encoding UTF8 -Path (Join-Path $lib 'CHANGELOG.md') -Value "# Changelog`r`n`r`n## [Unreleased]`r`n- CI stub library (not a real release)."
           foreach ($p in 'course-metadata','texlib-build','basic-utilities') {
@@ -610,7 +621,7 @@ jobs:
           $env:TEXLIB_INSTALLER_WRAPPED = '1'
           $env:OneDrive = ''; $env:OneDriveCommercial = ''; $env:OneDriveConsumer = ''
           $out = & powershell.exe -NoProfile -ExecutionPolicy Bypass `
-            -File .\install.ps1 -Silent -InstallPath $env:INSTALL_ROOT 2>&1 | Out-String
+            -File .\tools\install.ps1 -Silent -InstallPath $env:INSTALL_ROOT 2>&1 | Out-String
           $rc = $LASTEXITCODE
           Write-Host $out
           Write-Host "install.ps1 exit code: $rc"
@@ -630,7 +641,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $lib  = Join-Path $env:USERPROFILE 'Documents\TeXLib'
+          $lib  = $env:LIB_ROOT
           $user = Join-Path $env:INSTALL_ROOT 'Sublime Text\Data\Packages\User'
           if (-not (Test-Path $user)) { Write-Host "FAIL: $user missing" -ForegroundColor Red; exit 1 }
           $item = Get-Item $user -Force
@@ -663,7 +674,7 @@ jobs:
           $env:TEXLIB_INSTALLER_WRAPPED = '1'
           $env:OneDrive = ''; $env:OneDriveCommercial = ''; $env:OneDriveConsumer = ''
           Set-Content -Encoding ascii -Path answers.txt -Value "s`r`ns`r`ns"
-          $cmd = "powershell.exe -NoProfile -ExecutionPolicy Bypass -File install.ps1 -InstallPath `"$env:INSTALL_ROOT`" < answers.txt"
+          $cmd = "powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools\install.ps1 -InstallPath `"$env:INSTALL_ROOT`" < answers.txt"
           $out = & cmd /c $cmd 2>&1 | Out-String
           $rc = $LASTEXITCODE
           Write-Host $out
@@ -712,8 +723,12 @@ jobs:
           if (Test-Path $junction) { [System.IO.Directory]::Delete($junction, $false) }
           New-Item -ItemType Junction -Path $junction -Target $target | Out-Null
 
-          Set-Content -Encoding ascii -Path confirm.txt -Value "Y"
-          $out = & cmd /c "uninstall.bat < confirm.txt" 2>&1 | Out-String
+          # Answers: the top-level confirmation, then the four per-component
+          # questions 0.6.3 asks (Sublime / Sumatra / TeX Live, and the library
+          # only when it sits outside the install root -- it does not here, so
+          # the fourth line is simply unread).
+          Set-Content -Encoding ascii -Path confirm.txt -Value "Y`r`nY`r`nY`r`nY"
+          $out = & cmd /c "uninstall.bat -InstallPath `"$env:INSTALL_ROOT`" < confirm.txt" 2>&1 | Out-String
           $rc = $LASTEXITCODE
           Write-Host $out
           Write-Host "uninstall.bat exit code: $rc"
@@ -740,7 +755,126 @@ jobs:
           if ($out -notmatch 'Leaving .*TeXLib in place') {
             Write-Host "FAIL: no explanation printed for the preserved junction." -ForegroundColor Red; exit 1
           }
-          Write-Host "OK: uninstall.bat ran cleanly and preserved the unclaimed junction." -ForegroundColor Green
+          # The whole point of 0.6.3's uninstall rework: the components really go.
+          # Before it, the Packages\User junction inside the root made
+          # Remove-Item -Recurse throw partway through and leave Sublime and
+          # SumatraPDF sitting there.
+          foreach ($gone in @('Sublime Text','Sumatra','Library')) {
+            if (Test-Path (Join-Path $env:INSTALL_ROOT $gone)) {
+              Write-Host "FAIL: $gone survived the uninstall." -ForegroundColor Red; exit 1
+            }
+          }
+          Write-Host "OK: uninstall.bat removed every component and preserved the unclaimed junction." -ForegroundColor Green
+
+  # ---------------------------------------------------------------------------
+  # 4c. legacy-library-migration — FAST. Covers the 0.6.3 relocation. A machine
+  #     whose library is still at the pre-0.6.3 Documents\TeXLib must come out of
+  #     an install with the library at <InstallPath>\Library, the user's own
+  #     Sublime settings carried across, and the old folder byte-for-byte
+  #     untouched. No other job reaches this: they all start from a location the
+  #     0.6.3 default already agrees with.
+  # ---------------------------------------------------------------------------
+  legacy-library-migration:
+    if: github.event_name != 'schedule'
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Seed a pre-0.6.3 machine (library in Documents) plus a bundle
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $installRoot = Join-Path $env:RUNNER_TEMP 'TeXLibRoot'
+          "INSTALL_ROOT=$installRoot" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+          # The pre-0.6.3 location, carrying a settings file that exists ONLY
+          # there: finding it at the new location afterwards is what proves the
+          # migration ran, rather than the bundle simply being deployed.
+          $legacy = Join-Path $env:USERPROFILE 'Documents\TeXLib'
+          "LEGACY_LIB=$legacy" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          New-Item -ItemType Directory -Force -Path (Join-Path $legacy 'Sublime') | Out-Null
+          foreach ($p in 'course-metadata','texlib-build','basic-utilities') {
+            $sty = "\NeedsTeXFormat{LaTeX2e}`r`n\ProvidesPackage{$p}[2026/01/01 CI stub]`r`n\endinput"
+            Set-Content -Encoding UTF8 -Path (Join-Path $legacy "$p.sty") -Value $sty
+          }
+          Set-Content -Encoding UTF8 -Path (Join-Path $legacy 'Sublime\my-keymap.sublime-keymap') -Value '[{ "//": "user keymap that must survive the move" }]'
+
+          # A real bundle, so the install takes the deploy path and the migration
+          # is limited to carrying the user's settings across.
+          New-Item -ItemType Directory -Force -Path 'texlib\Sublime' | Out-Null
+          Set-Content -Encoding UTF8 -Path 'texlib\CHANGELOG.md' -Value "# Changelog`r`n`r`n## [Unreleased]`r`n- CI stub bundle (not a real release)."
+          foreach ($p in 'course-metadata','texlib-build','basic-utilities') {
+            $sty = "\NeedsTeXFormat{LaTeX2e}`r`n\ProvidesPackage{$p}[2026/01/01 CI stub]`r`n\endinput"
+            Set-Content -Encoding UTF8 -Path ("texlib\{0}.sty" -f $p) -Value $sty
+          }
+          Set-Content -Encoding UTF8 -Path 'texlib\Sublime\texlib_builder.py' -Value '# CI stub builder.'
+          Set-Content -Encoding UTF8 -Path 'texlib\Sublime\TeXLib.sublime-build' -Value '{ "//": "CI stub build." }'
+
+          # Empty component dirs so all four big downloads are skipped.
+          New-Item -ItemType Directory -Force -Path `
+            (Join-Path $installRoot 'Sublime Text\Data\Packages\LaTeXTools'), `
+            (Join-Path $installRoot 'Sublime Text\Data\Lib\python38\regex'), `
+            (Join-Path $installRoot 'Sumatra'), `
+            (Join-Path $installRoot 'TexLive\2025\bin\windows') | Out-Null
+          Set-Content -Encoding UTF8 -Path (Join-Path $installRoot 'Sublime Text\Data\Lib\python38\regex\__init__.py') -Value '# CI stub regex.'
+
+      - name: Install onto the pre-0.6.3 machine (-Silent)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $env:TEXLIB_INSTALLER_WRAPPED = '1'
+          $env:OneDrive = ''; $env:OneDriveCommercial = ''; $env:OneDriveConsumer = ''
+          $out = & powershell.exe -NoProfile -ExecutionPolicy Bypass `
+            -File .\tools\install.ps1 -Silent -InstallPath $env:INSTALL_ROOT 2>&1 | Out-String
+          $rc = $LASTEXITCODE
+          Write-Host $out
+          if ($out -notmatch 'pre-0\.6\.3 library') {
+            Write-Host "FAIL: the legacy library was never detected; this job is not testing what it claims." -ForegroundColor Red; exit 1
+          }
+          if ($rc -ne 0) { Write-Host "FAIL: install exited $rc." -ForegroundColor Red; exit $rc }
+
+      - name: Assert the settings moved and the old folder is intact
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $new = Join-Path $env:INSTALL_ROOT 'Library'
+          if (-not (Test-Path (Join-Path $new 'course-metadata.sty'))) {
+            Write-Host "FAIL: no library at $new" -ForegroundColor Red; exit 1
+          }
+          $keymap = Join-Path $new 'Sublime\my-keymap.sublime-keymap'
+          if (-not (Test-Path $keymap)) {
+            Write-Host "FAIL: the user's keymap did not come across to $keymap" -ForegroundColor Red; exit 1
+          }
+          if ((Get-Content $keymap -Raw) -notmatch 'must survive the move') {
+            Write-Host "FAIL: the keymap at the new location is not the user's." -ForegroundColor Red; exit 1
+          }
+          # Non-destructive is the promise: the old tree stays exactly as it was.
+          foreach ($f in 'course-metadata.sty','Sublime\my-keymap.sublime-keymap') {
+            if (-not (Test-Path (Join-Path $env:LEGACY_LIB $f))) {
+              Write-Host "FAIL: the migration removed $f from $env:LEGACY_LIB" -ForegroundColor Red; exit 1
+            }
+          }
+          Write-Host "OK: library relocated, settings carried over, pre-0.6.3 folder intact." -ForegroundColor Green
+
+      - name: Teardown with -All, and assert the old folder still survives
+        if: always()
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $env:TEXLIB_INSTALLER_WRAPPED = '1'
+          # -All is the "remove everything" switch, and it removes everything the
+          # INSTALL owns. A pre-0.6.3 folder the installer merely read from is
+          # not ours to delete, and must survive even this.
+          $out = & cmd /c "uninstall.bat -All -Silent -InstallPath `"$env:INSTALL_ROOT`"" 2>&1 | Out-String
+          Write-Host $out
+          if (Test-Path $env:INSTALL_ROOT) {
+            Write-Host "FAIL: -All left $env:INSTALL_ROOT behind." -ForegroundColor Red; exit 1
+          }
+          if (-not (Test-Path (Join-Path $env:LEGACY_LIB 'course-metadata.sty'))) {
+            Write-Host "FAIL: -All deleted the pre-0.6.3 library the installer only read from." -ForegroundColor Red; exit 1
+          }
+          Write-Host "OK: -All removed the install and left the pre-0.6.3 folder alone." -ForegroundColor Green
 
   # ---------------------------------------------------------------------------
   # 5. package-integrity — FAST. Builds an actual release bundle with
@@ -774,11 +908,19 @@ jobs:
 
           # Every file install.bat / uninstall.bat invoke must ship, or the .bat
           # flashes open and dies (PowerShell -File on a missing script).
-          $required = @('install.bat','uninstall.bat','install.ps1','uninstall.ps1',
-                        'tools\boot_wrapper.ps1',
+          $required = @('install.bat','uninstall.bat',
+                        'tools\boot_wrapper.ps1','tools\install.ps1','tools\uninstall.ps1',
                         'texlib','templates')
           $missing = $required | Where-Object { -not (Test-Path (Join-Path $stage $_)) }
           if ($missing) { Write-Host "FAIL: bundle missing: $($missing -join ', ')" -ForegroundColor Red; exit 1 }
+          # And the .ps1 files must NOT be at the release root: the whole point
+          # of tools\ is that a user opening the folder sees only the two .bat
+          # files, with nothing beside them to mis-click.
+          foreach ($r in 'install.ps1','uninstall.ps1') {
+            if (Test-Path (Join-Path $stage $r)) {
+              Write-Host "FAIL: $r is at the bundle root; it belongs in tools\" -ForegroundColor Red; exit 1
+            }
+          }
           # Build/dev-only tools must NOT ship. make-release.ps1 builds the
           # bundle; dev-install-test.ps1 drives install.ps1 against a seeded
           # sandbox and is useless (and confusing) to an end user.
@@ -856,7 +998,7 @@ jobs:
           $env:OneDriveCommercial = ''
           $env:OneDriveConsumer = ''
           powershell.exe -NoProfile -ExecutionPolicy Bypass `
-            -File .\install.ps1 -Silent -InstallPath $env:INSTALL_ROOT
+            -File .\tools\install.ps1 -Silent -InstallPath $env:INSTALL_ROOT
           $rc = $LASTEXITCODE
           Write-Host "install.ps1 -Silent exit code: $rc"
           exit $rc
@@ -873,7 +1015,7 @@ jobs:
           $env:OneDriveCommercial = ''
           $env:OneDriveConsumer = ''
           $out = & powershell.exe -NoProfile -ExecutionPolicy Bypass `
-            -File .\install.ps1 -Silent -Doctor -InstallPath $env:INSTALL_ROOT 2>&1 | Out-String
+            -File .\tools\install.ps1 -Silent -Doctor -InstallPath $env:INSTALL_ROOT 2>&1 | Out-String
           Write-Host $out
           $rc = $LASTEXITCODE
           Write-Host "install.ps1 -Doctor exit code: $rc"
@@ -905,9 +1047,9 @@ jobs:
         # Always run so the VM is left clean even if install/Doctor failed.
         # uninstall.ps1 -Silent is fully non-interactive and always exits 0, so
         # it never masks an earlier failure (install/Doctor own pass/fail).
-        # uninstall.ps1 has NO -InstallPath param and hardcodes %LOCALAPPDATA%\
-        # TeXLib, so it mainly clears the HKCU/PATH/shortcut artifacts here; the
-        # $RUNNER_TEMP install root is reclaimed when the VM is discarded.
+        # -InstallPath (new in 0.6.3) points it at the $RUNNER_TEMP root this job
+        # installed to, so the teardown removes the real thing rather than
+        # clearing HKCU/PATH/shortcuts and leaving the components behind.
         #
         # Routed through the .bat (not uninstall.ps1 directly) so the ONE job
         # that performs a real install also tears it down through the entry
@@ -918,9 +1060,15 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $env:TEXLIB_INSTALLER_WRAPPED = '1'
-          $out = & cmd /c "uninstall.bat -Silent" 2>&1 | Out-String
+          $out = & cmd /c "uninstall.bat -Silent -InstallPath `"$env:INSTALL_ROOT`"" 2>&1 | Out-String
           Write-Host $out
           if ($out -match 'positional parameter cannot be found') {
             Write-Host "FAIL: wrapper arg forwarding regressed." -ForegroundColor Red; exit 1
           }
           Write-Host "uninstall.ps1 -Silent exit code: $LASTEXITCODE"
+          foreach ($gone in @('Sublime Text','Sumatra','Library','TexLive')) {
+            if (Test-Path (Join-Path $env:INSTALL_ROOT $gone)) {
+              Write-Host "FAIL: $gone survived the silent uninstall." -ForegroundColor Red; exit 1
+            }
+          }
+          Write-Host "OK: silent uninstall removed every component." -ForegroundColor Green
