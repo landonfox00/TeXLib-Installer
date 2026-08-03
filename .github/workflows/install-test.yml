@@ -1239,6 +1239,15 @@ jobs:
             }
           }
 
+          # The author's Package Control state must never ship: on a coworker's
+          # machine it makes any Package Control they install start installing
+          # PowerShell/UnitTesting and re-resolving LaTeXTools' libraries over
+          # the pinned copies, which killed a plugin host on first launch.
+          $pcState = Join-Path $stage 'texlib\Sublime\Package Control.sublime-settings'
+          if (Test-Path $pcState) {
+            Write-Host "FAIL: the bundle carries the author's Package Control.sublime-settings" -ForegroundColor Red; exit 1
+          }
+
           # The wrapper install.bat invokes must be a real, parseable script
           # (a missing/corrupt wrapper is exactly what makes install.bat flash
           # open and die).

@@ -131,7 +131,7 @@ param(
 # =============================================================================
 # 0. INSTALLER METADATA
 # =============================================================================
-$InstallerVersion = "0.7.2"
+$InstallerVersion = "0.8.0"
 $InstallerRepo    = "https://github.com/landonfox00/TeXLib-Installer"
 $ReleasesApi      = "https://api.github.com/repos/landonfox00/TeXLib-Installer/releases/latest"
 
@@ -460,12 +460,7 @@ $Downloads = @{
         "File"    = "install-tl.zip"
         "Type"    = "Dynamic"
     }
-    "pkgctrl" = @{
-        # Rolling file (no per-release URL); left unhashed intentionally.
-        "Url"  = "https://packagecontrol.io/Package%20Control.sublime-package"
-        "File" = "Package Control.sublime-package"
-        "Type" = "Skip"
-    }
+    # NOTE: Package Control is deliberately NOT installed -- see section 12.
     "latextools" = @{
         # Pinned to a tagged release (NOT the moving master branch) and hashed,
         # so the installer can't run an unverified, ever-changing copy of the
@@ -1728,15 +1723,29 @@ if ($InstallComponents) {
             $ZipPath = "$TempDir\sublime.zip"
             Get-SourceFile -Key "sublime" -DestPath $ZipPath
             Expand-Archive -Path $ZipPath -DestinationPath $SublimeDir
-
-            $InstalledPkgsDir = "$SublimeDir\Data\Installed Packages"
-            New-Item -ItemType Directory -Force -Path $InstalledPkgsDir | Out-Null
-            Get-SourceFile -Key "pkgctrl" -DestPath "$InstalledPkgsDir\Package Control.sublime-package"
         } catch {
             Write-Host "Sublime Text install failed: $_" -ForegroundColor Red
             Stop-Installer 3
         }
     }
+
+    # Package Control is deliberately NOT installed (dropped in 0.8.0).
+    #
+    # This installer already does Package Control's job, and does it with
+    # pinned, hash-verified artifacts: LaTeXTools comes from a tagged release,
+    # its `regex` library from a specific wheel, and the TeXLib plugin from the
+    # bundled library. Running both managers over the same Packages tree is not
+    # redundancy, it is a race -- and it bit for real. On first launch Package
+    # Control read the shipped `installed_packages` list, decided LaTeXTools'
+    # declared libraries were missing (our hand-placed regex carried no
+    # .dist-info, so it was invisible to it), and reinstalled `regex` on top of
+    # `_regex.cp38-win_amd64.pyd` while the 3.8 plugin host had it loaded. That
+    # is what "plugin_host-3.8 has exited unexpectedly" was.
+    #
+    # Anyone who wants Package Control can install it themselves the usual way;
+    # nothing here interferes with that. An existing copy is left strictly
+    # alone -- by the time someone re-runs the installer it may be managing
+    # packages of their own.
 
     # ---- SumatraPDF ----
     $InstallSumatra = $true
@@ -1970,6 +1979,16 @@ try {
             New-Item -ItemType Directory -Force -Path $SublimeLibDir | Out-Null
             if (Test-Path $RegexPkgDir) { Remove-Item $RegexPkgDir -Recurse -Force }
             Move-Item -Path "$RegexExtract\regex" -Destination $RegexPkgDir
+            # Keep the wheel's .dist-info alongside the package. It is how any
+            # Python tooling -- Package Control included, if a user installs it
+            # later -- recognises regex as already present. Moving only regex\
+            # left an unregistered copy that Package Control cheerfully
+            # reinstalled over, while the plugin host had the .pyd loaded.
+            foreach ($Dist in @(Get-ChildItem -Path $RegexExtract -Directory -Filter '*.dist-info' -ErrorAction SilentlyContinue)) {
+                $DistDest = Join-Path $SublimeLibDir $Dist.Name
+                if (Test-Path $DistDest) { Remove-Item $DistDest -Recurse -Force }
+                Move-Item -Path $Dist.FullName -Destination $DistDest
+            }
             Write-Host "  Installed LaTeXTools dependency 'regex' to $SublimeLibDir" -ForegroundColor Green
         }
     }
@@ -1998,6 +2017,31 @@ try {
             $src = Join-Path $BundledSublimeDir $f
             if (Test-Path $src) { Copy-Item $src $UserDir -Force }
         }
+    }
+
+    # 16b-1. Defuse a shipped Package Control settings file.
+    #
+    # The library's Sublime\ folder has historically carried a
+    # `Package Control.sublime-settings` holding a snapshot of the AUTHOR's
+    # personal setup -- "installed_packages": [LaTeXTools, Package Control,
+    # PowerShell, UnitTesting]. That folder becomes Packages\User via the
+    # settings junction, so the file is live for every coworker who installs.
+    # If Package Control is ever present, it reads that list on startup and
+    # starts installing: PowerShell and UnitTesting, which have nothing to do
+    # with TeXLib, and LaTeXTools' declared libraries on top of the copies this
+    # installer placed by hand.
+    #
+    # 0.8.0+ release bundles no longer contain the file, but a library deployed
+    # by an older installer still has it sitting there. Remove it -- UNLESS
+    # Package Control is actually installed, in which case the file is now its
+    # own live state and deleting it would make it re-resolve everything.
+    $PkgCtrlSettings = Join-Path $SublimeUserSync "Package Control.sublime-settings"
+    $PkgCtrlInstalled = Test-Path "$SublimeDir\Data\Installed Packages\Package Control.sublime-package"
+    if ((Test-Path $PkgCtrlSettings) -and -not $PkgCtrlInstalled) {
+        Remove-Item $PkgCtrlSettings -Force -ErrorAction SilentlyContinue
+        Write-Host "  Removed a stale Package Control settings file (Package Control is not installed)" -ForegroundColor Gray
+    } elseif ($PkgCtrlInstalled) {
+        Write-Host "  [note] Package Control is installed here; leaving it and its settings alone." -ForegroundColor Gray
     }
 
     # 16b-2. Deploy the native TeXLib Sublime package.
@@ -2552,8 +2596,9 @@ Write-Host ""
 if (-not $OnlyTeXLib) {
     Write-Host "First-launch notes:" -ForegroundColor Yellow
     Write-Host "  1. Open a NEW terminal -- the updated PATH is not visible to this one." -ForegroundColor Gray
-    Write-Host "  2. Sublime Text may show a Package Control loading message on first run;" -ForegroundColor Gray
-    Write-Host "     just restart Sublime once and it goes away." -ForegroundColor Gray
+    Write-Host "  2. Everything Sublime needs is already installed and pinned. If you want" -ForegroundColor Gray
+    Write-Host "     Package Control for packages of your own, install it yourself the usual" -ForegroundColor Gray
+    Write-Host "     way -- nothing here gets in its way." -ForegroundColor Gray
     Write-Host "  3. If .tex / .pdf don't open with the right app, Right Click -> Open With" -ForegroundColor Gray
     Write-Host "     -> Choose Another App -> 'Always use this app'. Windows sometimes" -ForegroundColor Gray
     Write-Host "     refuses to honor the registry defaults on the first try. The TeXLib" -ForegroundColor Gray

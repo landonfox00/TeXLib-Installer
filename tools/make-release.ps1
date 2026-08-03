@@ -144,6 +144,18 @@ if ($gitOk) {
     }
 }
 
+# The author's own Package Control state never ships, by either path above. The
+# library tracks it because the author's Sublime uses it, but on a coworker's
+# machine that file makes any Package Control they install start pulling down
+# PowerShell and UnitTesting and re-resolving LaTeXTools' libraries over the
+# pinned copies the installer placed by hand -- which is how a plugin host got
+# killed on first launch. See section 12 of install.ps1.
+$PkgCtrlState = Join-Path $TexLibStage "Sublime\Package Control.sublime-settings"
+if (Test-Path $PkgCtrlState) {
+    Remove-Item $PkgCtrlState -Force
+    Write-Host "  Excluded the author's Package Control.sublime-settings from the bundle." -ForegroundColor Gray
+}
+
 # Record the exact TeXLib state bundled, for traceability. The bundle is a
 # git-archive of HEAD, so this pins which TeXLib commit shipped -- the source
 # path alone never told you that.
