@@ -1048,8 +1048,14 @@ jobs:
           if ((Get-Item $user -Force).Attributes -notmatch 'ReparsePoint') {
             Write-Host "FAIL: -Repair did not junction Packages\User." -ForegroundColor Red; exit 1
           }
-          if (-not (Test-Path (Join-Path $env:LIB_ROOT 'LaTeXTools.sublime-settings'))) {
-            Write-Host "FAIL: -Repair did not write LaTeXTools.sublime-settings." -ForegroundColor Red; exit 1
+          # Settings land in the library's Sublime\ folder -- the one Packages\User
+          # is junctioned to -- not at the library root.
+          $ltSettings = Join-Path $env:LIB_ROOT 'Sublime\LaTeXTools.sublime-settings'
+          if (-not (Test-Path $ltSettings)) {
+            Write-Host "FAIL: -Repair did not write $ltSettings." -ForegroundColor Red; exit 1
+          }
+          if ((Get-Content $ltSettings -Raw) -notmatch '"builder"\s*:\s*"texlib"') {
+            Write-Host "FAIL: the rewritten LaTeXTools settings do not select the texlib builder." -ForegroundColor Red; exit 1
           }
           # And it must not have touched the library it was told to leave alone.
           if (-not (Test-Path (Join-Path $env:LIB_ROOT 'CANARY.txt'))) {
