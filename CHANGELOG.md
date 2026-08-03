@@ -4,6 +4,29 @@ All notable changes to TeXLib-Installer are recorded here. Format follows [Keep 
 
 ## [Unreleased]
 
+## [0.7.1] — 2026-08-03
+
+### Fixed
+
+- **`-Update` never updated.** It called `Test-IsNewerVersion -Latest $Latest`,
+  but the parameter is `-Candidate`. `Test-IsNewerVersion` is a *simple*
+  function — no `[CmdletBinding()]` — and PowerShell sweeps unrecognised
+  arguments into `$args` rather than erroring, so `-Candidate` stayed `$null`,
+  the null guard returned `$false`, and every run reported "Already on the
+  latest release" no matter how far behind it was. It failed safe, which is
+  precisely why nothing complained: the unit test for the comparison passed
+  (it calls the function correctly), and CI was green.
+  - Found by testing the whole loop end to end against the real v0.7.0 release
+    with `$InstallerVersion` faked down — something only possible once there was
+    a published release newer than the working copy.
+  - New CI step walks the AST and checks **every** call to a locally-defined
+    function against that function's real parameter names, so the whole class of
+    silently-swallowed argument goes from invisible to a build failure. Verified
+    by reintroducing the bug in a copy and watching it fail.
+
+> **v0.7.0's `-Update` cannot fetch this release** — that is the bug. Update to
+> 0.7.1 by downloading the ZIP once; `-Update` works from there on.
+
 ## [0.7.0] — 2026-08-03
 
 Convenience release. One of these is a gap rather than a nicety: the installer was shipping a Sublime plugin it never installed.

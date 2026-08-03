@@ -131,7 +131,7 @@ param(
 # =============================================================================
 # 0. INSTALLER METADATA
 # =============================================================================
-$InstallerVersion = "0.7.0"
+$InstallerVersion = "0.7.1"
 $InstallerRepo    = "https://github.com/landonfox00/TeXLib-Installer"
 $ReleasesApi      = "https://api.github.com/repos/landonfox00/TeXLib-Installer/releases/latest"
 
@@ -1025,7 +1025,13 @@ function Invoke-SelfUpdate {
     }
     Write-Host "  Installed: v$InstallerVersion" -ForegroundColor Gray
     Write-Host "  Latest:    v$Latest" -ForegroundColor Gray
-    if (-not (Test-IsNewerVersion -Latest $Latest -Current $InstallerVersion)) {
+    # -Candidate, not -Latest. Test-IsNewerVersion is a SIMPLE function (no
+    # CmdletBinding), and those silently sweep unrecognised arguments into
+    # $args instead of erroring -- so `-Latest $x` left $Candidate null, the
+    # first guard returned $false, and -Update reported "already on the latest
+    # release" no matter how far behind you were. It failed safe, which is why
+    # it took an end-to-end test to notice at all.
+    if (-not (Test-IsNewerVersion -Candidate $Latest -Current $InstallerVersion)) {
         Write-Host ""
         Write-Host "Already on the latest release. Nothing to do." -ForegroundColor Green
         Write-Host "(Re-run without -Update to re-install or repair this version.)" -ForegroundColor Gray
