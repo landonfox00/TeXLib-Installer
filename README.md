@@ -75,7 +75,7 @@ Combine as needed (e.g. `-OnlyTeXLib -Silent` for unattended library refreshes o
 | `-Silent` | No prompts. Removes the programs; leaves a pre-0.6.3 library and an unclaimed junction. |
 | `-All` | Remove everything with no per-component prompts. Implies `-RemoveLibrary` and `-RemoveJunction`. |
 | `-InstallPath C:\path` | Uninstall an install rooted somewhere other than `%LOCALAPPDATA%\TeXLib`. |
-| `-RemoveLibrary` | Also delete a library that lives *outside* the install root (a pre-0.6.3 `Documents\TeXLib`). A 0.6.3+ library is inside the root and always goes with it. |
+| `-RemoveLibrary` | Answer yes to the library question up front. Only changes anything for a library *outside* the install root (a pre-0.6.3 `Documents\TeXLib`) — the one case that defaults to staying. |
 | `-KeepSublime` / `-KeepSumatra` / `-KeepTeXLive` | Leave that component in place. Keeping TeX Live saves a 30-60 minute reinstall. |
 | `-Force` | Close running Sublime / SumatraPDF without asking (they hold locks that would otherwise fail the removal). |
 | `-RemoveJunction` | Remove `%USERPROFILE%\TeXLib` even when the installer cannot prove it created it. Check where it points first. |

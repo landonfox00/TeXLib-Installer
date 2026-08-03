@@ -164,10 +164,13 @@ Flags can be combined: `install.bat -OnlyTeXLib -Silent` is the typical lab-mach
 Double-click `uninstall.bat` from the same folder you ran the installer from. After confirming, it asks about each component in turn, so you can remove some and keep others:
 
 ```
-Remove Sublime Text (...)?  (Y/n)
-Remove SumatraPDF (...)?    (Y/n)
-Remove TeX Live (...)?      (Y/n)
+Remove Sublime Text (...)?        (Y/n)
+Remove SumatraPDF (...)?          (Y/n)
+Remove TeX Live (...)?            (Y/n)
+Remove the TeXLib library (...)?  (Y/n)
 ```
+
+Nothing is exempt from the question, and each prompt names the folder that actually gets deleted. Only the *default* differs: the library defaults to going when it's inside the install root, and to staying when it's a pre-0.6.3 `Documents\TeXLib` that may have your own materials next to it.
 
 Keeping TeX Live is worth considering — it's ~6 GB and takes 30-60 minutes to reinstall, and a later `install.bat` run detects it and offers to skip it.
 
@@ -177,7 +180,7 @@ Whatever you choose, the uninstaller also:
 - Removes the Desktop and Start Menu shortcuts
 - Removes the `%USERPROFILE%\TeXLib` junction, if this installer created one (a real folder with the same name, or a junction you made yourself, is preserved)
 
-The TeXLib library at `%LOCALAPPDATA%\TeXLib\Library` goes with the install — it's a snapshot the installer put there, not your own work. **A pre-0.6.3 `Documents\TeXLib` is preserved by default**, since you may have parked course materials next to it; the uninstaller offers to remove it and takes `-RemoveLibrary` if you want it gone.
+**A pre-0.6.3 `Documents\TeXLib` defaults to staying**, since you may have parked course materials next to it — press Enter to keep it, or answer `y` (or pass `-RemoveLibrary`) to delete it. If that library is reached through a `%USERPROFILE%\TeXLib` junction, the prompt names the real OneDrive/Documents folder, because that's the one whose contents go.
 
 For unattended use: `uninstall.bat -Silent` removes the programs with no prompts, and `uninstall.bat -All -Silent` removes everything. Add `-InstallPath` if you installed to a non-default location, and `-Force` to close a running Sublime / SumatraPDF without being asked (they hold file locks that would otherwise stop the removal).
 
