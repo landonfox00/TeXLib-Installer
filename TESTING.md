@@ -1,9 +1,9 @@
 # Testing TeXLib-Installer
 
 A manual test pass before tagging a release. Run top to bottom on a real
-Windows 10/11 machine (or VM). Where it matters, test on a machine whose
-OneDrive path contains a comma/space (e.g. UNR's `OneDrive - University of
-Nevada, Reno`) so the junction path gets exercised.
+Windows 10/11 machine (or VM). Where it matters, test with an `-InstallPath`
+containing a comma and a space so the junction path gets exercised, and on a
+machine that still has a pre-0.6.3 `Documents\TeXLib` so the migration does.
 
 Legend: `▶` = action, `✓` = expected result.
 
@@ -52,9 +52,10 @@ is nothing to clean up but the sandbox directory; add `-Keep` to inspect it.
 This is the fastest way to exercise the paths CI's clean-VM jobs cannot reach.
 
 > **Never** run `uninstall.ps1` / `uninstall.bat` to clean up after a local
-> test. It removes `%USERPROFILE%\TeXLib` whenever that is a junction — on a
-> developer machine that is the live junction to your real TeXLib library.
-> Uninstall is covered by CI, where the VM is disposable.
+> test. It rewrites HKCU file associations and the user PATH regardless of
+> `-InstallPath`, and removes `%USERPROFILE%\TeXLib` when the install claims it
+> — none of which the sandbox flags contain. Uninstall is covered by CI, where
+> the VM is disposable.
 
 ## 2. Pre-flight (no changes made)
 
@@ -68,31 +69,65 @@ This is the fastest way to exercise the paths CI's clean-VM jobs cannot reach.
 ✓ Each component downloads, hash-verifies, and installs under
   `%LOCALAPPDATA%\TeXLib`. No red errors. Desktop + Start Menu shortcuts appear.
 
+## 3b. Library location and migration
+
+▶ On a machine upgrading from ≤0.6.2, watch the pre-flight output.
+✓ It names the pre-0.6.3 library it found, and says the old folder is left in
+  place.
+✓ After the install, `%LOCALAPPDATA%\TeXLib\Library` holds the library, and any
+  personal file you had in the old `Sublime\` folder is there too.
+✓ `Documents\TeXLib` is **byte-for-byte unchanged**.
+✓ A `%USERPROFILE%\TeXLib` junction the old install created is gone; one you
+  created yourself is still there.
+
 ## 4. Doctor
 
 ▶ `install.bat -Doctor`
 ✓ All sections `[OK]`: components found, PATH set, junction state correct,
   `texlib_builder.py` deployed, LaTeXTools builder set to `texlib`,
-  file associations registered.
+  file associations registered, no stale "Open with" registrations.
+
+## 4b. Open With hygiene
+
+▶ Before installing, note the entries under Right Click → **Open with** for a
+  `.tex` and a `.pdf`.
+✓ After installing, dead entries from earlier installs are gone, the TeXLib
+  entries read `Sublime Text (TeXLib)` / `SumatraPDF (TeXLib)`, and any
+  Sublime/SumatraPDF you installed yourself is **still listed**.
+✓ The change is visible without signing out (the installer calls
+  `SHChangeNotify`).
 
 ## 5. Editor build (Sublime)
 
-▶ Open `Documents\TeXLib\examples\…\*.tex`, press **Ctrl+B**.
+▶ Open `%LOCALAPPDATA%\TeXLib\Library\examples\…\*.tex`, press **Ctrl+B**.
 ✓ Builds and the PDF opens in SumatraPDF.
 ▶ Press **Ctrl+Shift+B**, pick a variant (Answer Key, Solutions, …).
 ✓ The variant builds; no `.aux`/`.log` left next to the source.
 
 ## 6. Uninstall
 
-▶ `uninstall.bat` → confirm.
-✓ `%LOCALAPPDATA%\TeXLib` removed; shortcuts gone; PATH cleaned.
-✓ `Documents\TeXLib` (the library) is **preserved**. A real (non-junction)
+▶ Leave Sublime Text **running**, then `uninstall.bat` → confirm.
+✓ It reports the running programs and offers to close them.
+▶ Answer `Y` to Sublime and Sumatra, `n` to TeX Live.
+✓ `Sublime Text\` and `Sumatra\` are gone; `TexLive\` remains; the install root
+  survives to hold it, with `Scripts\` and `VERSION` intact.
+▶ `uninstall.bat` again, answering `Y` to everything.
+✓ `%LOCALAPPDATA%\TeXLib` is **entirely gone** — including `Library\`. Shortcuts
+  gone, PATH cleaned, TeXLib entries out of the Open With lists, entries for your
+  own Sublime/SumatraPDF untouched.
+✓ A pre-0.6.3 `Documents\TeXLib` is **preserved** unless you answered `Y` to the
+  library question or passed `-RemoveLibrary`. A real (non-junction)
   `%USERPROFILE%\TeXLib` is left untouched.
+✓ The uninstall log is in `%TEMP%\TeXLib-Uninstall\`, not inside the removed
+  tree.
 
 ## 7. Release packaging
 
 ▶ `tools\make-release.ps1 -Version <v>`
 ✓ Produces `dist\TeXLib-Installer-v<v>.zip` + `SHA256SUMS`. Unzip and confirm
-  it contains `templates/` and the `texlib/` library snapshot.
+  the root holds `install.bat`, `uninstall.bat`, `templates/`, `texlib/` and
+  `tools/` — and **no** `.ps1` files, so there is nothing to mis-click.
+✓ `tools/` contains `boot_wrapper.ps1`, `install.ps1`, `uninstall.ps1`, and
+  neither `make-release.ps1` nor `dev-install-test.ps1`.
 ▶ Extract the ZIP to a clean machine and run §3–§6 from it.
 ✓ A from-ZIP install behaves identically to a from-repo install.

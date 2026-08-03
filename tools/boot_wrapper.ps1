@@ -52,8 +52,11 @@ $Label = if ($Kind -eq 'install') { 'Installer' } else { 'Uninstaller' }
 # Tell the inner script we're handling user prompts + exit-code surfacing.
 $env:TEXLIB_INSTALLER_WRAPPED = "1"
 
-# tools\boot_wrapper.ps1 lives one directory below the inner scripts.
-$ScriptDir = Split-Path $PSScriptRoot -Parent
+# install.ps1 / uninstall.ps1 are siblings in tools\. They live here rather than
+# at the release root so the only clickable things a user sees are install.bat
+# and uninstall.bat -- a .ps1 next to a .bat of the same name was a reliable
+# source of "which one do I double-click?".
+$ScriptDir = $PSScriptRoot
 
 # Boot log in %TEMP% so a locked install dir does not prevent logging. The
 # timestamp prevents collisions if a coworker re-runs after a failure.
@@ -226,6 +229,10 @@ if ($RC -ne 0) {
         Write-Host "   %LOCALAPPDATA%\TeXLib\Logs\install-<timestamp>.log"     -ForegroundColor Yellow
         Write-Host "   (or %TEMP%\TeXLib-Install\install-<timestamp>.log if the" -ForegroundColor Yellow
         Write-Host "    install dir didn't exist yet)"                         -ForegroundColor Yellow
+    } else {
+        Write-Host ""
+        Write-Host " Uninstall log (if Start-Transcript reached it):"          -ForegroundColor Yellow
+        Write-Host "   %TEMP%\TeXLib-Uninstall\uninstall-<timestamp>.log"      -ForegroundColor Yellow
     }
     Write-Host ""
     Write-Host " Please attach the boot log when reporting:"                   -ForegroundColor Yellow

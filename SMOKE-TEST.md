@@ -17,18 +17,21 @@ the one behavior CI can only simulate).
 - [ ] **Open a brand-new terminal** (PATH only refreshes in new processes) and
       run `pdflatex --version` — it should report TeX Live and a path under
       `%LOCALAPPDATA%\TeXLib\TexLive\<year>\bin\windows`.
-- [ ] `install.bat`-installed `%LOCALAPPDATA%\TeXLib\install.bat ... -Doctor`
-      (or run `install.ps1 -Doctor`) reports all `[OK]` and **exits 0**
+- [ ] `install.bat -Doctor` reports all `[OK]` and **exits 0**
       (`echo %ERRORLEVEL%` / `$LASTEXITCODE` should be 0).
 
-## OneDrive path (UNR machines specifically)
-- [ ] On a machine whose OneDrive folder contains a space/comma (e.g.
-      `OneDrive - University of Nevada, Reno`), confirm `%USERPROFILE%\TeXLib`
-      exists and is a **junction** (`fsutil reparsepoint query "%USERPROFILE%\TeXLib"`
-      or `Get-Item $env:USERPROFILE\TeXLib -Force | Select LinkType,Target`).
+## Library location
+- [ ] The library is at `%LOCALAPPDATA%\TeXLib\Library` and **nothing new
+      appeared in `Documents`**.
 - [ ] Open a TeXLib document that `\usepackage`s the library and **build it** —
-      it should compile (this is what the comma-in-`TEXINPUTS` junction exists
-      to make possible).
+      it should compile (this is what the `TEXINPUTS` wiring exists for).
+- [ ] Upgrading from ≤0.6.2: your old `Documents\TeXLib` is untouched, and any
+      personal file from its `Sublime\` folder is now under
+      `%LOCALAPPDATA%\TeXLib\Library\Sublime` too.
+- [ ] Only when installed with an `-InstallPath` containing a space or comma:
+      confirm `%USERPROFILE%\TeXLib` exists and is a **junction**
+      (`fsutil reparsepoint query "%USERPROFILE%\TeXLib"` or
+      `Get-Item $env:USERPROFILE\TeXLib -Force | Select LinkType,Target`).
 
 ## Editor + viewer integration
 - [ ] **Double-click a `.tex` file** in Explorer → it opens in Sublime Text.
@@ -36,8 +39,19 @@ the one behavior CI can only simulate).
       in **SumatraPDF**.
 - [ ] **Double-click a `.pdf`** → it opens in SumatraPDF. Note: the installer
       also takes over `.txt` (opens in Sublime) — confirm that's intended.
+- [ ] Right Click → **Open with** on a `.tex`: no duplicate or dead Sublime
+      entries, ours reads `Sublime Text (TeXLib)`, and a Sublime you installed
+      yourself is **still listed**. This is the one thing no headless job can
+      check, because it needs a real Explorer.
 
 ## Uninstall
-- [ ] Run `uninstall.bat`. Confirm `%LOCALAPPDATA%\TeXLib` is gone, the PATH
-      entry is cleaned, shortcuts/associations are removed, and your
-      `Documents\TeXLib` (the synced library) is **preserved**.
+- [ ] Leave Sublime Text open, then run `uninstall.bat`. It should notice and
+      offer to close it.
+- [ ] Answer `n` to TeX Live and `Y` to the rest: `Sublime Text\` and `Sumatra\`
+      are gone, `TexLive\` survives.
+- [ ] Run it again, answering `Y` to everything. Confirm `%LOCALAPPDATA%\TeXLib`
+      is **entirely gone** (including `Library\`), the PATH entry is cleaned, and
+      shortcuts/associations are removed.
+- [ ] A pre-0.6.3 `Documents\TeXLib` is **preserved** unless you asked for it.
+- [ ] Right Click → **Open with** again: the TeXLib entries are gone, and your
+      own Sublime/SumatraPDF entries are still there.

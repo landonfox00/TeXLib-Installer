@@ -42,7 +42,7 @@ param(
 $ErrorActionPreference = 'Stop'
 
 $RepoRoot = Split-Path -Parent $PSScriptRoot
-$Installer = Join-Path $RepoRoot 'install.ps1'
+$Installer = Join-Path $PSScriptRoot 'install.ps1'
 if (-not (Test-Path $Installer)) { throw "install.ps1 not found at $Installer" }
 
 $Root = Join-Path $SandboxRoot 'root'      # -InstallPath : components

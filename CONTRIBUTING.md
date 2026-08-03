@@ -16,7 +16,8 @@ non-technical colleagues. The audience matters: changes should keep the install
   (`fix(install): …`, `docs: …`).
 - **Update `CHANGELOG.md`** under `## [Unreleased]` (Keep a Changelog). The
   installer and uninstaller version strings (`$InstallerVersion` in
-  `install.ps1`, `$UninstallerVersion` in `uninstall.ps1`) are kept in lockstep.
+  `tools/install.ps1`, `$UninstallerVersion` in `tools/uninstall.ps1`) are kept
+  in lockstep.
 
 ## PowerShell conventions
 
@@ -24,9 +25,16 @@ non-technical colleagues. The audience matters: changes should keep the install
   syntax (ternary, `??`, `&&`/`||` chaining).
 - Set `$ErrorActionPreference = 'Stop'` and guard tolerated failures explicitly
   (`-ErrorAction SilentlyContinue` / `try`/`catch`).
-- Files are UTF-8 **without BOM** (em dashes etc. appear in messages). When
-  parse-checking, decode as UTF-8 explicitly — `ParseFile` on the raw bytes
-  mis-reads the dashes as syntax errors.
+- `tools/install.ps1` and `tools/uninstall.ps1` are UTF-8 **with** a BOM, and
+  the `encoding-guard` CI job enforces it. Without the BOM, Windows PowerShell
+  5.1 — which `install.bat` launches — decodes any non-ASCII byte (an em dash in
+  a message, say) as Windows-1252 and aborts with a parse error before running a
+  line. That shipped once, in v0.5.0. Prefer `--` over em dashes in new script
+  text anyway; the BOM is the belt to that suspenders.
+- The `.ps1` files live in `tools/`, not at the repo root, so an extracted
+  release folder offers exactly two clickable things: `install.bat` and
+  `uninstall.bat`. Anything a script reads (`templates/`, the `texlib/` bundle,
+  pre-staged component ZIPs) is resolved from the root, one level up.
 - Downloads must verify a SHA256/SHA512 and fail closed on mismatch; pin
   third-party code to a tag/commit (never a moving branch).
 
@@ -40,8 +48,13 @@ non-technical colleagues. The audience matters: changes should keep the install
   ```
 
 - **Dry run** (no system changes): `install.bat -DryRun` (or
-  `powershell -File install.ps1 -DryRun`).
+  `powershell -File tools\install.ps1 -DryRun`).
 - **Doctor** (diagnose an existing install): `install.bat -Doctor`.
+- **Contained end-to-end run:** `powershell -File tools\dev-install-test.ps1`.
+  Builds a returning-machine sandbox and installs into it twice; contained
+  entirely by `-InstallPath` / `-TeXLibPath` / `-Sandbox`, so cleanup is deleting
+  one directory. Never use `uninstall.bat` to clean up a local test — it rewrites
+  HKCU associations and the user PATH regardless of `-InstallPath`.
 - **Manual checklist:** work through [TESTING.md](TESTING.md). A real
   end-to-end install on a clean machine is the gold standard before any release
   that touches download/extract/configure logic — it's the one path CI can't
@@ -49,7 +62,8 @@ non-technical colleagues. The audience matters: changes should keep the install
 
 ## Refreshing component versions
 
-The pinned versions live in the `$Downloads` table at the top of `install.ps1`;
+The pinned versions live in the `$Downloads` table at the top of
+`tools/install.ps1`;
 the header documents the refresh steps (new URL → recompute hash → bump version
 → CHANGELOG → re-release). The SumatraPDF exe name derives from its zip name,
 and the TeX Live tree year is `$TexLiveYear` — update those single sources.

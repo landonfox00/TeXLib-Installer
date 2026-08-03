@@ -41,19 +41,19 @@
     %LOCALAPPDATA% lives on a small SSD or is locked down by Group Policy.
 
 .PARAMETER HideJunction
-    Apply the +h (hidden) file attribute to the %USERPROFILE%\TeXLib junction
-    that gets created when your OneDrive path contains a space or comma (e.g.
-    "OneDrive - University of Nevada, Reno"). Off by default -- a visible
-    junction is easier to discover and diagnose. Has no effect when no
-    junction is needed.
+    Apply the +h (hidden) file attribute to the %USERPROFILE%\TeXLib junction,
+    which gets created only when the library path contains a space or comma
+    (i.e. when -InstallPath points somewhere with one). Off by default -- a
+    visible junction is easier to discover and diagnose. No effect when no
+    junction is needed, which is the normal case as of 0.6.3.
 
 .PARAMETER TeXLibPath
-    Override where the TeXLib library lives. Defaults to <OneDrive>\Documents\
-    TeXLib, or %USERPROFILE%\Documents\TeXLib when OneDrive isn't detected --
-    neither of which -InstallPath affects. Setting this also suppresses the
-    %USERPROFILE%\TeXLib junction: an explicit path is taken as deliberate, so
-    the installer does not second-guess it for commas or spaces. Pair with
-    -Sandbox for a throwaway run on a machine you care about.
+    Override where the TeXLib library lives. Defaults to <InstallPath>\Library,
+    so it sits alongside the Sublime plugin and moves with -InstallPath.
+    Setting this also suppresses the %USERPROFILE%\TeXLib junction and any
+    migration from a pre-0.6.3 location: an explicit path is taken as
+    deliberate, so the installer does not second-guess it. Pair with -Sandbox
+    for a throwaway run on a machine you care about.
 
 .PARAMETER Sandbox
     Skip every write that lands outside -InstallPath / -TeXLibPath: the user
@@ -102,7 +102,7 @@ param(
 # =============================================================================
 # 0. INSTALLER METADATA
 # =============================================================================
-$InstallerVersion = "0.6.2"
+$InstallerVersion = "0.6.3"
 $InstallerRepo    = "https://github.com/landonfox00/TeXLib-Installer"
 $ReleasesApi      = "https://api.github.com/repos/landonfox00/TeXLib-Installer/releases/latest"
 
@@ -162,7 +162,12 @@ function Stop-Installer {
 # =============================================================================
 # 1. SETUP VARIABLES
 # =============================================================================
-$ScriptDir  = $PSScriptRoot
+# This script lives in tools\; everything it reads (templates\, the texlib\
+# bundle, any pre-staged component ZIPs) sits at the release root one level up.
+# Keeping the .ps1 files out of that root is deliberate: the only clickable
+# things a user sees there are install.bat and uninstall.bat, so there is
+# nothing to mis-click.
+$ScriptDir  = Split-Path $PSScriptRoot -Parent
 
 # Install location (per-user, no admin needed). -InstallPath overrides.
 $BaseDir = if ($InstallPath) { $InstallPath } else { "$env:LOCALAPPDATA\TeXLib" }
@@ -180,47 +185,144 @@ $SumatraDir = "$BaseDir\Sumatra"
 $TexLiveDir = "$BaseDir\TexLive\$TexLiveYear"
 $TexBinPath = "$TexLiveDir\bin\windows"
 
-# TeXLib bundle: this installer expects a sibling `texlib\` directory
-# containing the TeXLib library snapshot. The release ZIP includes it.
+# TeXLib bundle: a `texlib\` directory at the release root (one level up from
+# this script) holding the TeXLib library snapshot. The release ZIP includes it.
 $TexLibBundle = Join-Path $ScriptDir "texlib"
 
-# Synced content location (OneDrive-aware detection).
+# --- TeXLib library location -------------------------------------------------
+# The library is deployed INSIDE the install root, next to the portable Sublime
+# Text / SumatraPDF / TeX Live trees -- and so next to the Sublime plugin, which
+# rides in the library's own Sublime\ subfolder and is junctioned in as
+# Packages\User.
+#
+# Through 0.6.2 it went to <OneDrive>\Documents\TeXLib instead, from back when
+# the library was a OneDrive-synced document tree. It no longer is, and a
+# deployed snapshot that every re-install overwrites has no business in
+# Documents: there it is indistinguishable from the user's own work, and on a
+# machine that also has a git checkout of TeXLib it lands right on top of it.
+# Keeping it under the install root also makes the uninstall a single directory
+# removal, and on a normal profile hands kpathsea a path with no space or comma
+# in it -- which is what the junction below exists to work around.
+$DefaultTeXLibDir = "$BaseDir\Library"
+
 $OneDrivePath = $env:OneDrive
 if (-not $OneDrivePath) { $OneDrivePath = $env:OneDriveCommercial }
 if (-not $OneDrivePath) { $OneDrivePath = $env:OneDriveConsumer }
 
-if ($TeXLibPath) {
-    # Explicit override wins over detection. $UsingOneDrive stays false so the
-    # junction block below is skipped entirely -- a caller who names the path
-    # has already decided, and silently rehoming it through
-    # %USERPROFILE%\TeXLib would defeat the point (notably for -Sandbox runs,
-    # where that junction is the one artifact left outside the sandbox).
-    $TeXLibDir = $TeXLibPath
-    $UsingOneDrive = $false
-} elseif ($OneDrivePath -and (Test-Path "$OneDrivePath\Documents")) {
-    $TeXLibDir = "$OneDrivePath\Documents\TeXLib"
-    $UsingOneDrive = $true
-} else {
-    $TeXLibDir = "$env:USERPROFILE\Documents\TeXLib"
-    $UsingOneDrive = $false
-}
+# -TeXLibPath still wins and is still taken as deliberate: no junction is built
+# for it, and no legacy location is migrated into it (notably for -Sandbox runs,
+# where that junction is the one artifact left outside the sandbox).
+$ExplicitTeXLibPath = [bool]$TeXLibPath
+$TeXLibDir = if ($ExplicitTeXLibPath) { $TeXLibPath } else { $DefaultTeXLibDir }
+
+# Kept in the VERSION stamp for continuity with pre-0.6.3 installs. True only
+# when the resolved library really sits inside OneDrive (an explicit -TeXLibPath
+# pointed there), never merely because OneDrive is present on the machine.
+$UsingOneDrive = [bool]($OneDrivePath -and ($TeXLibDir -like "$OneDrivePath*"))
 
 # Writes that land outside -InstallPath / -TeXLibPath: user PATH (14), HKCU
 # file associations (17), Desktop + Start Menu shortcuts (18). -Sandbox skips
 # exactly those three and nothing else.
 $WriteMachineState = (-not $OnlyTeXLib) -and (-not $Sandbox)
 
+function Test-TeXLibLibraryDir {
+    # A directory counts as a TeXLib library only when the core .sty files are
+    # actually in it -- the same probe pre-flight 7i and the Doctor use, so an
+    # empty leftover folder never passes for a library.
+    param([string]$Dir)
+    if (-not $Dir -or -not (Test-Path $Dir)) { return $false }
+    foreach ($f in @("course-metadata.sty", "texlib-build.sty", "basic-utilities.sty")) {
+        if (-not (Test-Path (Join-Path $Dir $f))) { return $false }
+    }
+    return $true
+}
+
+function Get-ShellCommandExe {
+    # Pull the executable out of a shell command. Two shapes turn up in the
+    # wild, and only one of them is well behaved:
+    #     "C:\path\app.exe" "%1"            -- quoted
+    #     C:\Program Files\app.exe "%1"     -- UNQUOTED, spaces and all
+    # Splitting the second on whitespace yields "C:\Program", which does not
+    # exist -- so a naive parse declares a perfectly live app dead and the purge
+    # below rips it out of the user's Open With lists. Match up to the FIRST
+    # .exe instead, and keep first-token as a last resort.
+    param([string]$Command)
+    if (-not $Command) { return $null }
+    if ($Command -match '^\s*"([^"]+)"')        { return $Matches[1] }
+    if ($Command -match '^\s*(.*?\.exe)(\s|$)') { return $Matches[1] }
+    if ($Command -match '^\s*(\S+)')            { return $Matches[1] }
+    return $null
+}
+
+function Test-ShellCommandLive {
+    # A shell registration is stale when the exe it names is no longer on disk
+    # -- which is exactly what every leftover "Open with" entry looks like.
+    # Shared by the Doctor's association check and section 17's purge.
+    param([string]$RegKey)
+    if (-not (Test-Path $RegKey)) { return $false }
+    $cmd = $null
+    try { $cmd = (Get-Item -Path $RegKey).GetValue("") } catch { $cmd = $null }
+    $exe = Get-ShellCommandExe $cmd
+    if (-not $exe) { return $false }
+    return (Test-Path $exe)
+}
+
+function Get-StampedValue {
+    # Read one `key=value` line out of a VERSION stamp. $null when absent/blank.
+    param([string]$VersionFile, [string]$Key)
+    if (-not $VersionFile -or -not (Test-Path $VersionFile)) { return $null }
+    $line = Get-Content $VersionFile -ErrorAction SilentlyContinue |
+            Where-Object { $_ -match "^\s*$([regex]::Escape($Key))\s*=" } |
+            Select-Object -First 1
+    if (-not $line) { return $null }
+    $val = ($line -split '=', 2)[1]
+    if (-not $val) { return $null }
+    $val = $val.Trim()
+    if (-not $val) { return $null }
+    return $val
+}
+
+# --- Pre-0.6.3 library locations ---------------------------------------------
+# A returning machine has its library -- and, more to the point, the user's own
+# Sublime settings -- in one of these. They serve two purposes: seeding the new
+# location with those settings, and standing in as an install source when this
+# installer copy ships no texlib\ bundle. Priority is most-authoritative first:
+# what the previous install actually stamped, then the two defaults it could
+# have picked, then the user-root junction those were reached through.
+$PriorTeXLibRoot = Get-StampedValue -VersionFile "$BaseDir\VERSION" -Key "texlib_root"
+
+$LegacyTeXLibDir = $null
+if (-not $ExplicitTeXLibPath) {
+    $LegacyCandidates = @()
+    if ($PriorTeXLibRoot) { $LegacyCandidates += $PriorTeXLibRoot }
+    if ($OneDrivePath)    { $LegacyCandidates += "$OneDrivePath\Documents\TeXLib" }
+    $LegacyCandidates += "$env:USERPROFILE\Documents\TeXLib"
+    $LegacyCandidates += "$env:USERPROFILE\TeXLib"
+    foreach ($Candidate in $LegacyCandidates) {
+        if ($Candidate.TrimEnd('\') -ieq $TeXLibDir.TrimEnd('\')) { continue }
+        if (Test-TeXLibLibraryDir $Candidate) { $LegacyTeXLibDir = $Candidate; break }
+    }
+}
+
 # --- User-root junction (TEXINPUTS-safe path) --------------------------------
-# kpathsea (TeX Live's file resolver) splits TEXINPUTS on commas and chokes
-# on spaces, so a OneDrive folder named "OneDrive - University of Nevada,
-# Reno" silently breaks every TeX build. When the resolved path has either,
-# we pipe it through a junction at %USERPROFILE%\TeXLib and reassign
-# $TeXLibDir to the clean path so every downstream consumer (settings
-# template, deploy target, version stamp, doctor) sees a sane location.
+# kpathsea (TeX Live's file resolver) splits TEXINPUTS on commas and chokes on
+# spaces. The default library path (%LOCALAPPDATA%\TeXLib\Library) is clean on a
+# normal profile, so as of 0.6.3 this is a fallback rather than the usual case:
+# it fires when -InstallPath puts the library somewhere with a space or comma in
+# it. We pipe the path through a junction at %USERPROFILE%\TeXLib and reassign
+# $TeXLibDir to the clean path so every downstream consumer (settings template,
+# deploy target, version stamp, doctor) sees a sane location.
 # Idempotent across re-runs; not touched in Doctor/Version/DryRun modes.
 $UserRootJunction       = "$env:USERPROFILE\TeXLib"
 $UserRootJunctionTarget = $TeXLibDir
-$NeedsUserRootJunction  = $UsingOneDrive -and ($TeXLibDir -match '[ ,]')
+# The junction only helps if the junction's OWN path is clean. With a Windows
+# account named "Jane Smith", %USERPROFILE%\TeXLib carries the same space the
+# library path did, so rehoming through it would fix nothing while adding a
+# reparse point to explain. Pre-flight warns about that case instead.
+$JunctionPathIsClean    = ($UserRootJunction -notmatch '[ ,]')
+$DirtyTeXLibPath        = (-not $ExplicitTeXLibPath) -and ($TeXLibDir -match '[ ,]')
+$NeedsUserRootJunction  = $DirtyTeXLibPath -and $JunctionPathIsClean
+$UnfixableTeXLibPath    = $DirtyTeXLibPath -and (-not $JunctionPathIsClean)
 $UserRootJunctionState  = "not-needed"   # not-needed | present | blocked | will-create
 
 if ($NeedsUserRootJunction) {
@@ -243,9 +345,10 @@ if ($NeedsUserRootJunction) {
             Write-Host ""
             Write-Host "FATAL: $UserRootJunction exists but is not a junction." -ForegroundColor Red
             Write-Host "       The installer needs to create a junction here so TeX can resolve" -ForegroundColor Red
-            Write-Host "       the comma/space-bearing OneDrive path. Move or rename the existing" -ForegroundColor Red
-            Write-Host "       folder (it looks like a real directory you created yourself) and" -ForegroundColor Red
-            Write-Host "       re-run the installer." -ForegroundColor Red
+            Write-Host "       $TeXLibDir, which contains a space or comma. Move or rename the" -ForegroundColor Red
+            Write-Host "       existing folder (it looks like a real directory you created" -ForegroundColor Red
+            Write-Host "       yourself) and re-run the installer -- or pass -InstallPath with a" -ForegroundColor Red
+            Write-Host "       path free of spaces and commas." -ForegroundColor Red
             Write-Host ""
             Stop-Installer 12
         }
@@ -266,6 +369,20 @@ if ($NeedsUserRootJunction) {
         if ($HideJunction -and ($UserRootJunctionState -eq "present")) {
             try { & attrib.exe +h $UserRootJunction } catch { $null = $_ }
         }
+    }
+}
+
+# A pre-0.6.3 install rehomed the library through this same junction and stamped
+# it as texlib_root. With the library now inside the install root, that junction
+# is a leftover -- and one this installer is entitled to retire, because the
+# stamp proves we created it (the same ownership rule uninstall.ps1 applies).
+# Retired in section 11b, after the settings behind it have been carried over.
+$StaleUserRootJunction = $null
+if ((-not $NeedsUserRootJunction) -and $PriorTeXLibRoot -and
+    ($PriorTeXLibRoot.TrimEnd('\') -ieq $UserRootJunction.TrimEnd('\')) -and
+    (Test-Path $UserRootJunction)) {
+    if ((Get-Item $UserRootJunction -Force).Attributes -match 'ReparsePoint') {
+        $StaleUserRootJunction = $UserRootJunction
     }
 }
 
@@ -498,27 +615,39 @@ function Invoke-Doctor {
         _Fail "pdflatex not on PATH; reinstall or add $TexBinPath manually"
     }
 
-    if (Test-Path $TeXLibDir) {
+    # Diagnose the library where THIS machine actually has it. The VERSION stamp
+    # is the authority: on a pre-0.6.3 install it still points into Documents,
+    # and reporting the 0.6.3 default missing would be a false alarm.
+    $DoctorTeXLibDir = if ($PriorTeXLibRoot) { $PriorTeXLibRoot } else { $TeXLibDir }
+    if (Test-Path $DoctorTeXLibDir) {
         $CoreFiles = @("course-metadata.sty", "texlib-build.sty", "basic-utilities.sty")
-        $MissingCore = $CoreFiles | Where-Object { -not (Test-Path (Join-Path $TeXLibDir $_)) }
+        $MissingCore = $CoreFiles | Where-Object { -not (Test-Path (Join-Path $DoctorTeXLibDir $_)) }
         if ($MissingCore.Count -eq 0) {
-            _Pass "TeXLib library at $TeXLibDir (core .sty files present)"
+            _Pass "TeXLib library at $DoctorTeXLibDir (core .sty files present)"
         } else {
-            _Warn "TeXLib library at $TeXLibDir but missing: $($MissingCore -join ', ')"
+            _Warn "TeXLib library at $DoctorTeXLibDir but missing: $($MissingCore -join ', ')"
         }
     } else {
-        _Fail "TeXLib library directory $TeXLibDir does not exist"
+        _Fail "TeXLib library directory $DoctorTeXLibDir does not exist"
+    }
+    if ($PriorTeXLibRoot -and ($PriorTeXLibRoot.TrimEnd('\') -ine $TeXLibDir.TrimEnd('\')) -and -not $ExplicitTeXLibPath) {
+        _Warn "The library is at the pre-0.6.3 location $PriorTeXLibRoot; 0.6.3+ installs it to $TeXLibDir. Re-run the installer to move it (your Sublime settings come along; the old folder is left for you to delete)."
     }
 
-    # User-root junction (created when OneDrive path contains a space or comma).
+    # User-root junction (created when the library path contains a space/comma).
     if ($NeedsUserRootJunction) {
         if ($UserRootJunctionState -eq "present") {
             _Pass "User-root junction $UserRootJunction -> $UserRootJunctionTarget (TEXINPUTS-safe)"
         } elseif ($UserRootJunctionState -eq "blocked") {
-            _Fail "$UserRootJunction exists but is NOT a junction; TeX commands will fail because the OneDrive path contains a space/comma. Move or rename the folder and re-run the installer."
+            _Fail "$UserRootJunction exists but is NOT a junction; TeX commands will fail because $UserRootJunctionTarget contains a space/comma. Move or rename the folder and re-run the installer."
         } else {
-            _Fail "OneDrive path contains a space/comma but $UserRootJunction junction is missing. Re-run the installer to create it."
+            _Fail "The library path contains a space/comma but the $UserRootJunction junction is missing. Re-run the installer to create it."
         }
+    } elseif ($UnfixableTeXLibPath) {
+        _Warn "$TeXLibDir contains a space or comma and $UserRootJunction cannot alias it (it has one too); kpathsea may not resolve the library. Re-install with -InstallPath set to a path free of spaces and commas."
+    }
+    if ($StaleUserRootJunction) {
+        _Warn "$StaleUserRootJunction is a leftover junction from the pre-0.6.3 library location. Re-run the installer to retire it (its target is preserved)."
     }
     Write-Host ""
 
@@ -579,6 +708,31 @@ function Invoke-Doctor {
         } else {
             _Warn "$Ext has no HKCU association; Right Click -> Open With to set defaults"
         }
+    }
+
+    # Leftovers from earlier installs. Each of these is a duplicate row in the
+    # "Open with" dialog pointing at an exe that is no longer there -- harmless
+    # to the build, baffling to the user. Section 17 clears them on every
+    # install, so finding any here means this machine has not been re-installed
+    # since 0.6.3.
+    $StaleApps = @()
+    $AppsKey = "HKCU:\Software\Classes\Applications"
+    if (Test-Path $AppsKey) {
+        foreach ($App in @(Get-ChildItem $AppsKey -ErrorAction SilentlyContinue)) {
+            if ($App.PSChildName -notlike "sublime_text.exe" -and $App.PSChildName -notlike "SumatraPDF*.exe") { continue }
+            if (-not (Test-ShellCommandLive "$($App.PSPath)\shell\open\command")) { $StaleApps += $App.PSChildName }
+        }
+    }
+    foreach ($ID in @("TeXLib.SublimeFile", "TeXLib.SumatraPDF", "OneTeX.SublimeFile", "OneTeX.SumatraPDF")) {
+        if ((Test-Path "HKCU:\Software\Classes\$ID") -and
+            -not (Test-ShellCommandLive "HKCU:\Software\Classes\$ID\shell\open\command")) {
+            $StaleApps += $ID
+        }
+    }
+    if ($StaleApps.Count -eq 0) {
+        _Pass "No stale 'Open with' registrations"
+    } else {
+        _Warn "Stale 'Open with' registrations pointing at missing executables: $($StaleApps -join ', '). Re-run the installer to clear them."
     }
     Write-Host ""
 
@@ -829,51 +983,65 @@ Add-PreflightOK "Installing an isolated portable Sublime Text under $SublimeDir 
 # 7g. SumatraPDF: always a portable copy.
 Add-PreflightOK "Installing a portable SumatraPDF (any existing install is left untouched)"
 
-# 7h. OneDrive enrollment.
-if ($UsingOneDrive) {
-    Add-PreflightOK "OneDrive detected at $OneDrivePath; TeXLib will sync via $UserRootJunctionTarget"
-    if ($NeedsUserRootJunction) {
-        switch ($UserRootJunctionState) {
-            "present"     { Add-PreflightNote "(using existing junction $UserRootJunction so TeX can resolve the space/comma-bearing OneDrive path)" }
-            "will-create" { Add-PreflightNote "(will create junction $UserRootJunction so TeX can resolve the space/comma-bearing OneDrive path)" }
-            "blocked"     { Add-PreflightFailure "$UserRootJunction exists as a real folder, not a junction. Move or rename it and re-run." }
-        }
-    }
+# 7h. Library location.
+if ($ExplicitTeXLibPath) {
+    Add-PreflightOK "TeXLib library will live at $TeXLibDir (-TeXLibPath)"
 } else {
-    Add-PreflightWarning "OneDrive not detected; TeXLib will live at $TeXLibDir (no multi-machine sync)"
+    Add-PreflightOK "TeXLib library will live at $TeXLibDir (inside the install root, alongside the Sublime plugin)"
+}
+if ($LegacyTeXLibDir) {
+    Add-PreflightNote "(found a pre-0.6.3 library at $LegacyTeXLibDir; your Sublime settings carry over, and that folder is left in place for you to delete)"
+}
+if ($UnfixableTeXLibPath) {
+    Add-PreflightWarning "$TeXLibDir contains a space or comma, and $UserRootJunction cannot serve as a clean alias because it has one too. kpathsea may fail to resolve the library; pass -InstallPath with a path free of spaces and commas."
+}
+if ($NeedsUserRootJunction) {
+    switch ($UserRootJunctionState) {
+        "present"     { Add-PreflightNote "(using existing junction $UserRootJunction so TeX can resolve the space/comma-bearing library path)" }
+        "will-create" { Add-PreflightNote "(will create junction $UserRootJunction so TeX can resolve the space/comma-bearing library path)" }
+        "blocked"     { Add-PreflightFailure "$UserRootJunction exists as a real folder, not a junction. Move or rename it and re-run." }
+    }
 }
 
 # 7i. TeXLib library source. Mirrors how we treat Sublime / Sumatra / TeX Live:
-# detect an existing install and reuse it, else deploy our own copy. Two valid
+# detect an existing install and reuse it, else deploy our own copy. Three valid
 # sources, in priority order:
 #   1. bundled snapshot (texlib\, shipped in the release zip) -- deploy it
-#   2. an existing synced library already at the content location -- reuse it
+#   2. a library already at the install location -- reuse it in place
+#   3. a pre-0.6.3 library in Documents / OneDrive -- migrate it across
 # -OnlyTeXLib exists to PUSH a newer bundle, so it still requires a bundle.
 $HaveBundle = Test-Path $TexLibBundle
 
-# An existing library counts only if the core .sty files are actually present
-# at the content location (same core-file probe the Doctor uses). We check the
-# physical target ($UserRootJunctionTarget), which is where content really
-# lives regardless of whether the TEXINPUTS-safe junction exists yet.
-$TeXLibCoreFiles = @("course-metadata.sty", "texlib-build.sty", "basic-utilities.sty")
-$HaveExistingLibrary = (Test-Path $UserRootJunctionTarget) -and
-    (@($TeXLibCoreFiles | Where-Object { -not (Test-Path (Join-Path $UserRootJunctionTarget $_)) }).Count -eq 0)
+# An existing library counts only if the core .sty files are actually present.
+# We check the physical target ($UserRootJunctionTarget), which is where content
+# really lives regardless of whether the TEXINPUTS-safe junction exists yet.
+$HaveExistingLibrary = Test-TeXLibLibraryDir $UserRootJunctionTarget
 
 $UseExistingTeXLib = $false
+$MigrateFromLegacy = $false
 
 if ($HaveBundle) {
     Add-PreflightOK "TeXLib bundle found at $TexLibBundle"
 } elseif ($HaveExistingLibrary -and -not $OnlyTeXLib) {
     # No bundle in this installer copy (e.g. running from a source checkout, or
     # a copy synced without its dist\ folder), but this machine already has the
-    # library synced here. Reuse it, exactly like a detected TeX distribution --
-    # no bundle needed. Skips the deploy copy (13), which also spares OneDrive a
-    # burst of write I/O into the very folder it is syncing.
+    # library where we want it. Reuse it, exactly like a detected TeX
+    # distribution -- no bundle needed, and no deploy copy in section 13.
     $UseExistingTeXLib = $true
     $ExistingVer = Get-TeXLibVersion $UserRootJunctionTarget
     $VerNote = if ($ExistingVer) { " (TeXLib $ExistingVer)" } else { "" }
     Add-PreflightOK "Existing TeXLib library detected at $UserRootJunctionTarget$VerNote; will use it (no bundle needed)"
-    Add-PreflightNote "(this installer copy ships no texlib\ bundle; reusing the already-synced library, like a detected TeX distribution)"
+    Add-PreflightNote "(this installer copy ships no texlib\ bundle; reusing the library already in place, like a detected TeX distribution)"
+} elseif ($LegacyTeXLibDir -and -not $OnlyTeXLib) {
+    # No bundle and nothing at the new location, but this machine has a
+    # pre-0.6.3 library sitting in Documents / OneDrive. Copy it across rather
+    # than failing: for a returning user with a source checkout of the
+    # installer, their existing library IS the only available source.
+    $MigrateFromLegacy = $true
+    $ExistingVer = Get-TeXLibVersion $LegacyTeXLibDir
+    $VerNote = if ($ExistingVer) { " (TeXLib $ExistingVer)" } else { "" }
+    Add-PreflightOK "Pre-0.6.3 TeXLib library detected at $LegacyTeXLibDir$VerNote; will copy it to $UserRootJunctionTarget"
+    Add-PreflightNote "(the original is left untouched -- delete it yourself once you have confirmed the new install works)"
 } else {
     # Neither a bundle nor an existing library: nothing to install from. The #1
     # cause is grabbing the source tree ("Code -> Download ZIP", or the release
@@ -925,8 +1093,16 @@ if ($DryRun) {
     }
     $TeXLibPlan = if ($UseExistingTeXLib) {
         "Reuse existing TeXLib library at $TeXLibDir (no bundle to deploy)"
+    } elseif ($MigrateFromLegacy) {
+        "Copy the pre-0.6.3 TeXLib library from $LegacyTeXLibDir to $TeXLibDir (original left in place)"
     } else {
         "Deploy TeXLib bundle from $TexLibBundle to $TeXLibDir"
+    }
+    if ($LegacyTeXLibDir -and -not $MigrateFromLegacy) {
+        Write-Host "  * Carry Sublime settings over from $LegacyTeXLibDir\Sublime (original left in place)" -ForegroundColor Gray
+    }
+    if ($StaleUserRootJunction) {
+        Write-Host "  * Retire the leftover user-root junction $StaleUserRootJunction (target preserved)" -ForegroundColor Gray
     }
     if ($OnlyTeXLib) {
         Write-Host "  * $TeXLibPlan" -ForegroundColor Gray
@@ -1140,14 +1316,15 @@ try {
     }
 
     if (-not (Test-Path $TeXLibDir)) {
-        Write-Host "Creating TeXLib in Documents..." -ForegroundColor Cyan
+        Write-Host "Creating the TeXLib library folder at $TeXLibDir..." -ForegroundColor Cyan
         New-Item -ItemType Directory -Force -Path $TeXLibDir | Out-Null
     }
 
-    # Stash the installer scripts so the user can re-run / uninstall / doctor later.
-    Copy-Item "$ScriptDir\install.ps1"   "$ScriptsDir\install.ps1"   -Force
-    if (Test-Path "$ScriptDir\uninstall.ps1") {
-        Copy-Item "$ScriptDir\uninstall.ps1" "$ScriptsDir\uninstall.ps1" -Force
+    # Stash the installer scripts so the user can re-run / uninstall / doctor
+    # later. They are siblings of THIS file in tools\, not of $ScriptDir.
+    Copy-Item "$PSScriptRoot\install.ps1" "$ScriptsDir\install.ps1" -Force
+    if (Test-Path "$PSScriptRoot\uninstall.ps1") {
+        Copy-Item "$PSScriptRoot\uninstall.ps1" "$ScriptsDir\uninstall.ps1" -Force
     }
 } catch {
     Write-Host "Failed to prepare directories: $_" -ForegroundColor Red
@@ -1156,6 +1333,62 @@ try {
 
 # Backup whatever's already in TeXLib\Sublime before we touch anything.
 Backup-SublimeSettings | Out-Null
+
+
+# =============================================================================
+# 11b. MIGRATE A PRE-0.6.3 LIBRARY LOCATION
+# =============================================================================
+# Through 0.6.2 the library -- and with it Packages\User, meaning every Sublime
+# setting the user ever changed -- lived in Documents / OneDrive. Now that it
+# lives in the install root, an upgrade has to carry those settings across or
+# the user silently loses their keymaps, snippets, and spell-check word lists.
+#
+# Two shapes, both non-destructive; the old folder is never deleted or edited:
+#   * $MigrateFromLegacy -- no bundle and nothing at the new location, so the
+#     old library IS the only install source. Copy the whole tree.
+#   * otherwise -- a bundle (or a library already in place) supplies the
+#     library, so only the user-owned Sublime\ settings come across, and only
+#     when the destination has none yet. Section 13 then lays the current
+#     builder files on top of them.
+if ($LegacyTeXLibDir) {
+    Write-Host ""
+    try {
+        if ($MigrateFromLegacy) {
+            Write-Host "Migrating TeXLib library from $LegacyTeXLibDir..." -ForegroundColor Cyan
+            Copy-Item "$LegacyTeXLibDir\*" $TeXLibDir -Recurse -Force -Exclude ".git", ".github"
+            Write-Host "  Copied to $TeXLibDir" -ForegroundColor Green
+        } elseif (-not (Test-Path $SublimeUserSync)) {
+            $LegacySublime = Join-Path $LegacyTeXLibDir "Sublime"
+            if (Test-Path $LegacySublime) {
+                Write-Host "Carrying Sublime settings over from $LegacySublime..." -ForegroundColor Cyan
+                New-Item -ItemType Directory -Force -Path $SublimeUserSync | Out-Null
+                Copy-Item "$LegacySublime\*" $SublimeUserSync -Recurse -Force
+                Write-Host "  Settings copied to $SublimeUserSync" -ForegroundColor Green
+            }
+        }
+    } catch {
+        # Non-fatal by design. A fresh library is still a working install, and
+        # aborting here would strand a mid-upgrade user with nothing to run.
+        Write-Host "  [WARN] Could not migrate from $LegacyTeXLibDir : $_" -ForegroundColor Yellow
+        Write-Host "  [WARN] Your old library is untouched; copy anything you need across by hand." -ForegroundColor Yellow
+    }
+    Write-Host "  Your previous library is still at $LegacyTeXLibDir -- nothing there was" -ForegroundColor Gray
+    Write-Host "  modified. Delete it yourself once the new install checks out." -ForegroundColor Gray
+}
+
+# Retire the user-root junction a pre-0.6.3 install created for the old
+# location. Directory::Delete(path, $false) removes the link entry only and
+# never follows it into the target, so whatever it pointed at is untouched.
+if ($StaleUserRootJunction) {
+    Write-Host ""
+    Write-Host "Retiring the leftover user-root junction $StaleUserRootJunction..." -ForegroundColor Cyan
+    try {
+        [System.IO.Directory]::Delete($StaleUserRootJunction, $false)
+        Write-Host "  Removed (its target was not touched)" -ForegroundColor Green
+    } catch {
+        Write-Host "  [WARN] Could not remove $StaleUserRootJunction : $_" -ForegroundColor Yellow
+    }
+}
 
 
 # =============================================================================
@@ -1284,12 +1517,14 @@ option_src 0
 Write-Host ""
 if ($UseExistingTeXLib) {
     Write-Host "Using existing TeXLib library at $TeXLibDir (no bundle to deploy)." -ForegroundColor Cyan
+} elseif ($MigrateFromLegacy) {
+    Write-Host "TeXLib library already in place at $TeXLibDir (migrated in step 11b)." -ForegroundColor Cyan
 } else {
     Write-Host "Deploying TeXLib library..." -ForegroundColor Cyan
     try {
-        # Mirror the bundle into the TeXLib documents folder. We don't delete
-        # extra files here (the user may have course materials sitting alongside
-        # the library), only overwrite the library bits.
+        # Mirror the bundle into the library folder. We don't delete extra files
+        # here (a migration may have put the user's settings there ahead of us),
+        # only overwrite the library bits.
         Copy-Item "$TexLibBundle\*" $TeXLibDir -Recurse -Force -Exclude ".git", ".github"
         Write-Host "  Library deployed to $TeXLibDir" -ForegroundColor Green
     } catch {
@@ -1431,7 +1666,7 @@ try {
     # throws "Cannot overwrite the item ... with itself" -- fatal (exit 10) even
     # though the files are already exactly where they belong. Skip the deploy
     # when both sides resolve to the same directory.
-    $BundledSublimeDir = if ($UseExistingTeXLib) { Join-Path $TeXLibDir "Sublime" } else { Join-Path $TexLibBundle "Sublime" }
+    $BundledSublimeDir = if ($HaveBundle) { Join-Path $TexLibBundle "Sublime" } else { Join-Path $TeXLibDir "Sublime" }
     $SameSublimeDir = [IO.Path]::GetFullPath($BundledSublimeDir).TrimEnd('\') -ieq
                       [IO.Path]::GetFullPath($UserDir).TrimEnd('\')
     if ($SameSublimeDir) {
@@ -1489,11 +1724,180 @@ if ($WriteMachineState) {
     Write-Host ""
     Write-Host "Registering file associations..." -ForegroundColor Cyan
 
+    # Every extension we claim and every ProgID we have ever used (TeXLib.* now,
+    # OneTeX.* before the rename). One list drives both the stale-entry purge
+    # and the registration below; uninstall.ps1 carries the same lists.
+    $SublimeExts   = @(".txt", ".tex", ".cls", ".sty", ".bib", ".sublime-project", ".sublime-workspace")
+    $ManagedExts   = $SublimeExts + @(".pdf")
+    $ManagedProgIDs = @("TeXLib.SublimeFile", "TeXLib.SumatraPDF",
+                        "OneTeX.SublimeFile", "OneTeX.SumatraPDF")
+
+    # Helpers below report through this counter rather than by returning a count:
+    # a stray object escaping any of the cmdlets they call would otherwise turn
+    # an integer return into an array and quietly break the tally.
+    $script:StaleCleared = 0
+
+    function Test-OwnedAndDead {
+        # Is this Open With entry OURS (one of our exe names or ProgIDs) AND
+        # DEAD (the exe behind it is gone)? Both halves matter: an association
+        # the user set to some other app must never be touched, and one of ours
+        # that still resolves is the entry we are about to refresh.
+        #
+        # Resolution goes through HKEY_CLASSES_ROOT, not HKCU, because that is
+        # the merged view Explorer itself uses. A user with their own Sublime in
+        # C:\Program Files registers it under HKLM\Software\Classes; looking only
+        # at HKCU would call their perfectly live install "dead" and strip it out
+        # of every Open With list we touch.
+        param([string]$Name, [string[]]$ExePatterns, [string[]]$ProgIDs)
+        if (-not $Name) { return $false }
+        foreach ($p in $ExePatterns) {
+            if ($Name -like $p) {
+                return (-not (Test-ShellCommandLive "Registry::HKEY_CLASSES_ROOT\Applications\$Name\shell\open\command"))
+            }
+        }
+        if ($ProgIDs -contains $Name) {
+            return (-not (Test-ShellCommandLive "Registry::HKEY_CLASSES_ROOT\$Name\shell\open\command"))
+        }
+        return $false
+    }
+
+    function Unregister-StaleAppEntry {
+        # HKCU\Software\Classes\Applications\<exe> is what puts an app in the
+        # "Open with" list under its own name. The key is named after the EXE, so
+        # every SumatraPDF version bump (SumatraPDF-3.5.2-64.exe ->
+        # SumatraPDF-3.6-64.exe) mints a new one, and every install that moves or
+        # is uninstalled leaves the old one behind pointing into thin air. Drop
+        # the ones whose exe is gone; leave anything still on disk alone, since
+        # it may be a Sublime the user installed themselves.
+        param([string[]]$ExePatterns)
+        $AppsKey = "HKCU:\Software\Classes\Applications"
+        if (-not (Test-Path $AppsKey)) { return }
+        foreach ($App in @(Get-ChildItem $AppsKey -ErrorAction SilentlyContinue)) {
+            $IsOurs = $false
+            foreach ($p in $ExePatterns) { if ($App.PSChildName -like $p) { $IsOurs = $true; break } }
+            if (-not $IsOurs) { continue }
+            if (Test-ShellCommandLive "$($App.PSPath)\shell\open\command") { continue }
+            Remove-Item -Path $App.PSPath -Recurse -Force -ErrorAction SilentlyContinue
+            Write-Host "  [stale] removed Applications\$($App.PSChildName)" -ForegroundColor Gray
+            $script:StaleCleared++
+        }
+    }
+
+    function Clear-StaleOpenWithEntry {
+        # Purge one extension's leftovers from the three places Explorer builds
+        # its "Open with" list out of:
+        #   HKCU\...\Explorer\FileExts\<ext>\OpenWithList     (MRU of exe names)
+        #   HKCU\...\Explorer\FileExts\<ext>\OpenWithProgids
+        #   HKCU\Software\Classes\<ext>\OpenWith{List,Progids}
+        # plus UserChoice, which pins a default and will happily pin a ProgID
+        # that no longer resolves -- the "double-click does nothing" flavour of
+        # this bug. Only entries that are OURS (our exe names, our ProgIDs) and
+        # DEAD (exe missing / ProgID key gone) are touched; an association the
+        # user set to some other app is never disturbed.
+        param([string]$Ext, [string[]]$ExePatterns, [string[]]$ProgIDs)
+        $FileExts = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\$Ext"
+        $ClassExt = "HKCU:\Software\Classes\$Ext"
+        # The provider bolts these onto every Get-ItemProperty result; they are
+        # not registry values and must never be treated as Open With entries.
+        $ProviderProps = @('PSPath', 'PSParentPath', 'PSChildName', 'PSDrive', 'PSProvider')
+
+        # --- OpenWithList: lettered values (a, b, c, ...) plus an MRUList that
+        # orders them. Drop the dead ones, then re-letter what survives so the
+        # MRUList stays consistent (a hole in the sequence shows up as a blank
+        # row in the Open With dialog).
+        foreach ($ListKey in @("$FileExts\OpenWithList", "$ClassExt\OpenWithList")) {
+            if (-not (Test-Path $ListKey)) { continue }
+            $Props = Get-ItemProperty -Path $ListKey -ErrorAction SilentlyContinue
+            if (-not $Props) { continue }
+            $Order = @()
+            $MRU = $Props.MRUList
+            if ($MRU) { $Order = $MRU.ToCharArray() | ForEach-Object { "$_" } }
+            foreach ($p in $Props.PSObject.Properties) {
+                if ($ProviderProps -contains $p.Name -or $p.Name -eq 'MRUList') { continue }
+                if ($Order -notcontains $p.Name) { $Order += $p.Name }
+            }
+            $Survivors = @()
+            foreach ($Slot in $Order) {
+                $Val = $Props.$Slot
+                if (-not $Val) { continue }
+                # A row here is an exe file name, an AppX AUMID (contains '!')
+                # or a CLSID-relative path (contains '\'). A value with none of
+                # those cannot resolve to any app -- it is corruption, and it
+                # renders as a blank line in the Open With dialog. Applied only
+                # to this key: an OpenWithProgids NAME legitimately has no dot
+                # (`txtfile`), so the same test there would delete real entries.
+                if ($Val -notmatch '[.!\\]') {
+                    Write-Host "  [stale] $Ext -> '$Val' (malformed entry)" -ForegroundColor Gray
+                    $script:StaleCleared++
+                    continue
+                }
+                if (Test-OwnedAndDead -Name $Val -ExePatterns $ExePatterns -ProgIDs $ProgIDs) {
+                    Write-Host "  [stale] $Ext -> $Val (exe gone)" -ForegroundColor Gray
+                    $script:StaleCleared++
+                    continue
+                }
+                $Survivors += $Val
+            }
+            foreach ($p in $Props.PSObject.Properties) {
+                if ($ProviderProps -contains $p.Name) { continue }
+                Remove-ItemProperty -Path $ListKey -Name $p.Name -Force -ErrorAction SilentlyContinue
+            }
+            $Letters = ""
+            for ($i = 0; $i -lt $Survivors.Count; $i++) {
+                $L = [char]([int][char]'a' + $i)
+                New-ItemProperty -Path $ListKey -Name "$L" -Value $Survivors[$i] -PropertyType String -Force | Out-Null
+                $Letters += $L
+            }
+            if ($Letters) {
+                New-ItemProperty -Path $ListKey -Name "MRUList" -Value $Letters -PropertyType String -Force | Out-Null
+            }
+        }
+
+        # --- OpenWithProgids: value NAMES are ProgIDs (the data is empty).
+        foreach ($ProgKey in @("$FileExts\OpenWithProgids", "$ClassExt\OpenWithProgids")) {
+            if (-not (Test-Path $ProgKey)) { continue }
+            $Props = Get-ItemProperty -Path $ProgKey -ErrorAction SilentlyContinue
+            if (-not $Props) { continue }
+            foreach ($p in $Props.PSObject.Properties) {
+                if ($ProviderProps -contains $p.Name) { continue }
+                if (Test-OwnedAndDead -Name $p.Name -ExePatterns $ExePatterns -ProgIDs $ProgIDs) {
+                    Remove-ItemProperty -Path $ProgKey -Name $p.Name -Force -ErrorAction SilentlyContinue
+                    Write-Host "  [stale] $Ext -> ProgID $($p.Name) (no longer resolves)" -ForegroundColor Gray
+                    $script:StaleCleared++
+                }
+            }
+        }
+
+        # --- UserChoice: Explorer's pinned default. Windows guards this key, so
+        # the delete can legitimately fail; that is a [stale] entry we could not
+        # clear, not an install failure.
+        $UserChoice = "$FileExts\UserChoice"
+        if (Test-Path $UserChoice) {
+            $Pinned = $null
+            try { $Pinned = (Get-ItemProperty -Path $UserChoice -ErrorAction SilentlyContinue).ProgId } catch { $Pinned = $null }
+            if ($Pinned -and (Test-OwnedAndDead -Name $Pinned -ExePatterns $ExePatterns -ProgIDs $ProgIDs)) {
+                try {
+                    Remove-Item -Path $UserChoice -Recurse -Force -ErrorAction Stop
+                    Write-Host "  [stale] $Ext default was pinned to $Pinned; cleared" -ForegroundColor Gray
+                    $script:StaleCleared++
+                } catch {
+                    Write-Host "  [warn] $Ext is pinned to the dead ProgID $Pinned and Windows would not let us clear it." -ForegroundColor Yellow
+                    Write-Host "         Right Click -> Open With -> Choose Another App to reset it." -ForegroundColor Yellow
+                }
+            }
+        }
+    }
+
     function Register-TeXLibAssociation {
         param ($Ext, $ProgID, $Desc, $Exe, $Icon)
         $RegPath = "HKCU:\Software\Classes"
         if (-not (Test-Path "$RegPath\$ProgID")) { New-Item -Path "$RegPath\$ProgID" -Force | Out-Null }
         Set-ItemProperty -Path "$RegPath\$ProgID" -Name "(default)" -Value $Desc
+        # FriendlyAppName is what the Open With dialog actually labels the entry
+        # with. Without it Windows falls back to the exe's own version-info name,
+        # which is how two different installs both end up reading "Sublime Text"
+        # with nothing to tell them apart.
+        Set-ItemProperty -Path "$RegPath\$ProgID" -Name "FriendlyAppName" -Value $Desc
         if ($Icon) {
             if (-not (Test-Path "$RegPath\$ProgID\DefaultIcon")) { New-Item -Path "$RegPath\$ProgID\DefaultIcon" -Force | Out-Null }
             Set-ItemProperty -Path "$RegPath\$ProgID\DefaultIcon" -Name "(default)" -Value $Icon
@@ -1502,17 +1906,61 @@ if ($WriteMachineState) {
         Set-ItemProperty -Path "$RegPath\$ProgID\shell\open\command" -Name "(default)" -Value "`"$Exe`" `"%1`""
         if (-not (Test-Path "$RegPath\$Ext")) { New-Item -Path "$RegPath\$Ext" -Force | Out-Null }
         Set-ItemProperty -Path "$RegPath\$Ext" -Name "(default)" -Value $ProgID
+        # Offer the ProgID in the Open With list for this extension, so the entry
+        # we just (re)pointed at the current exe is the one Windows shows.
+        $OpenWith = "$RegPath\$Ext\OpenWithProgids"
+        if (-not (Test-Path $OpenWith)) { New-Item -Path $OpenWith -Force | Out-Null }
+        New-ItemProperty -Path $OpenWith -Name $ProgID -Value "" -PropertyType String -Force | Out-Null
+    }
+
+    # NOTE: we deliberately do NOT write HKCU\Software\Classes\Applications\
+    # sublime_text.exe. That key is named after the EXE, not after us, and HKCU
+    # shadows HKLM in the merged view Explorer reads -- so pointing it at our
+    # portable copy would silently hijack the Open With entry (and any UserChoice
+    # referencing it) belonging to a Sublime the user installed in Program Files.
+    # Our entries reach the dialog through the TeXLib.* ProgIDs instead, which
+    # are namespaced, carry their own FriendlyAppName, and collide with nothing.
+
+    function Sync-ShellAssociationCache {
+        # Explorer caches the association data it has already read, so without
+        # this the Open With list keeps showing the entries we just deleted until
+        # the next sign-out. SHCNE_ASSOCCHANGED (0x08000000) tells it to reread.
+        if (-not ("TeXLib.Shell" -as [type])) {
+            Add-Type -Namespace TeXLib -Name Shell -MemberDefinition @'
+[System.Runtime.InteropServices.DllImport("shell32.dll")]
+public static extern void SHChangeNotify(int eventId, uint flags, System.IntPtr item1, System.IntPtr item2);
+'@ -ErrorAction SilentlyContinue
+        }
+        try { [TeXLib.Shell]::SHChangeNotify(0x08000000, 0x0000, [IntPtr]::Zero, [IntPtr]::Zero) } catch { $null = $_ }
     }
 
     try {
-        $SublExe = "$SublimeDir\sublime_text.exe"
-        $SublIcon = "$SublimeDir\sublime_text.exe,0"
-        foreach ($Ext in @(".txt", ".tex", ".cls", ".sty", ".bib", ".sublime-project", ".sublime-workspace")) {
-            Register-TeXLibAssociation -Ext $Ext -ProgID "TeXLib.SublimeFile" -Desc "Sublime Text File" -Exe $SublExe -Icon $SublIcon
+        $SublExe  = "$SublimeDir\sublime_text.exe"
+        $SublIcon = "$SublExe,0"
+        $SumExe   = "$SumatraDir\$($SumatraExeName)"
+        $SumIcon  = "$SumExe,0"
+
+        # Purge first, register second: a stale entry pointing at a previous
+        # install root is the thing users actually see, and re-registering on top
+        # of it just leaves two entries with the same name in the list.
+        $ExePatterns = @("sublime_text.exe", "SumatraPDF*.exe")
+        $script:StaleCleared = 0
+        Unregister-StaleAppEntry -ExePatterns $ExePatterns
+        foreach ($Ext in $ManagedExts) {
+            Clear-StaleOpenWithEntry -Ext $Ext -ExePatterns $ExePatterns -ProgIDs $ManagedProgIDs
         }
-        $SumExe = "$SumatraDir\$($SumatraExeName)"
-        $SumIcon = "$SumatraDir\$($SumatraExeName),0"
-        Register-TeXLibAssociation -Ext ".pdf" -ProgID "TeXLib.SumatraPDF" -Desc "SumatraPDF Document" -Exe $SumExe -Icon $SumIcon
+        if ($script:StaleCleared -gt 0) {
+            $Plural = if ($script:StaleCleared -eq 1) { "entry" } else { "entries" }
+            Write-Host "  Cleared $($script:StaleCleared) stale 'Open with' $Plural" -ForegroundColor Green
+        } else {
+            Write-Host "  No stale 'Open with' entries found" -ForegroundColor Gray
+        }
+
+        foreach ($Ext in $SublimeExts) {
+            Register-TeXLibAssociation -Ext $Ext -ProgID "TeXLib.SublimeFile" -Desc "Sublime Text (TeXLib)" -Exe $SublExe -Icon $SublIcon
+        }
+        Register-TeXLibAssociation -Ext ".pdf" -ProgID "TeXLib.SumatraPDF" -Desc "SumatraPDF (TeXLib)" -Exe $SumExe -Icon $SumIcon
+        Sync-ShellAssociationCache
         Write-Host "  Registered .tex .cls .sty .bib .pdf and friends" -ForegroundColor Green
     } catch {
         Write-Host "File-association registration failed: $_" -ForegroundColor Red
@@ -1666,7 +2114,9 @@ if (-not $OnlyTeXLib) {
     Write-Host "     just restart Sublime once and it goes away." -ForegroundColor Gray
     Write-Host "  3. If .tex / .pdf don't open with the right app, Right Click -> Open With" -ForegroundColor Gray
     Write-Host "     -> Choose Another App -> 'Always use this app'. Windows sometimes" -ForegroundColor Gray
-    Write-Host "     refuses to honor the registry defaults on the first try." -ForegroundColor Gray
+    Write-Host "     refuses to honor the registry defaults on the first try. The TeXLib" -ForegroundColor Gray
+    Write-Host "     entries are the ones labelled 'Sublime Text (TeXLib)' and" -ForegroundColor Gray
+    Write-Host "     'SumatraPDF (TeXLib)'." -ForegroundColor Gray
     Write-Host ""
 }
 Write-Host "Troubleshooting:    install.bat -Doctor"            -ForegroundColor Cyan
