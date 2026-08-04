@@ -1393,6 +1393,11 @@ jobs:
             }
           }
           Write-Host "OK: -Verify distinguishes missing, changed and added." -ForegroundColor Green
+          # The last child exited 22 ON PURPOSE, and `shell: pwsh` propagates
+          # $LASTEXITCODE at the end of a step -- so without this the step fails
+          # for passing. Any step whose final child is meant to be non-zero
+          # needs the same line.
+          exit 0
 
       - name: texlib.config.json presets, and the command line still wins
         shell: pwsh
@@ -1436,6 +1441,7 @@ jobs:
           }
           Remove-Item .\texlib.config.json -Force
           Write-Host "OK: config presets apply, explicit args win, bad input is reported not fatal." -ForegroundColor Green
+          exit 0
 
       - name: Uninstall must not take the user's own shortcut with it
         shell: pwsh
