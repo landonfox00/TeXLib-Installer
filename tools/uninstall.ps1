@@ -82,7 +82,7 @@ param(
     [switch]$RemoveJunction
 )
 
-$UninstallerVersion = "0.8.1"   # keep in lockstep with install.ps1 $InstallerVersion
+$UninstallerVersion = "0.9.0"   # keep in lockstep with install.ps1 $InstallerVersion
 $InstallerRepo      = "https://github.com/landonfox00/TeXLib-Installer"
 
 $BaseDir = if ($InstallPath) { $InstallPath } else { "$env:LOCALAPPDATA\TeXLib" }
@@ -541,6 +541,21 @@ if (Test-Path $UserRootJunction) {
 # -----------------------------------------------------------------------------
 # 7. Remove shortcuts.
 # -----------------------------------------------------------------------------
+# The Installed Apps entry, which is very likely how the user got here. Only
+# ours: the key is named TeXLib and records the root it was written for, so an
+# entry describing a DIFFERENT install root (someone running two) is left alone.
+$ArpKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\TeXLib"
+if (Test-Path $ArpKey) {
+    $ArpRoot = $null
+    try { $ArpRoot = (Get-ItemProperty -Path $ArpKey -ErrorAction SilentlyContinue).InstallLocation } catch { $ArpRoot = $null }
+    if (-not $ArpRoot -or ($ArpRoot.TrimEnd('\') -ieq $BaseDir.TrimEnd('\'))) {
+        Remove-Item -Path $ArpKey -Recurse -Force -ErrorAction SilentlyContinue
+        Write-Host "Removed the Installed Apps entry." -ForegroundColor Yellow
+    } else {
+        Write-Host "Left the Installed Apps entry alone: it points at $ArpRoot, not $BaseDir." -ForegroundColor Gray
+    }
+}
+
 Write-Host "Removing shortcuts..." -ForegroundColor Yellow
 $StartMenuRoot = [Environment]::GetFolderPath("StartMenu")
 $StartMenuPath = if ($StartMenuRoot) { "$StartMenuRoot\Programs" } else { $null }

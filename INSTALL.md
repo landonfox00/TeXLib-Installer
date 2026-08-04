@@ -168,6 +168,7 @@ A few details worth knowing:
 | `install.bat -Update` | Get the newest release and install it, in one step. No hunting for a ZIP. |
 | `install.bat -Repair` | Re-apply configuration without reinstalling anything — the fix for weird file associations or a Sublime that lost the builder. Takes seconds, works offline. |
 | `install.bat -Doctor` | Diagnose an existing install (see Troubleshooting). |
+| `install.bat -Verify` | Check that the install is still what the installer put there — lists anything missing, changed, or added since. |
 | `install.bat -Version` | Print installer version + bundled TeXLib version. |
 | `install.bat -TexLiveScheme medium` | Install a smaller TeX Live (~2.5 GB, 5-15 min instead of ~6 GB, 30-60 min). Faster, but less coverage — run `-Doctor` afterwards, which checks every package TeXLib needs. |
 | `install.bat -DryRun` | Run pre-flight checks and print what would happen, without installing anything. Safe to run on a fresh machine to confirm prerequisites. |
@@ -180,7 +181,9 @@ Flags can be combined: `install.bat -OnlyTeXLib -Silent` is the typical lab-mach
 
 ## Uninstalling
 
-Double-click `uninstall.bat` from the same folder you ran the installer from. After confirming, it asks about each component in turn, so you can remove some and keep others:
+TeXLib appears in **Settings → Apps → Installed apps** like any other program, so you can uninstall it from there. (The **Modify** button there runs `-Repair`.)
+
+Or double-click `uninstall.bat` from the folder you ran the installer from. Either way, after confirming it asks about each component in turn, so you can remove some and keep others:
 
 ```
 Remove Sublime Text (...)?        (Y/n)
