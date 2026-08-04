@@ -82,7 +82,7 @@ param(
     [switch]$RemoveJunction
 )
 
-$UninstallerVersion = "0.8.0"   # keep in lockstep with install.ps1 $InstallerVersion
+$UninstallerVersion = "0.8.1"   # keep in lockstep with install.ps1 $InstallerVersion
 $InstallerRepo      = "https://github.com/landonfox00/TeXLib-Installer"
 
 $BaseDir = if ($InstallPath) { $InstallPath } else { "$env:LOCALAPPDATA\TeXLib" }
@@ -542,20 +542,60 @@ if (Test-Path $UserRootJunction) {
 # 7. Remove shortcuts.
 # -----------------------------------------------------------------------------
 Write-Host "Removing shortcuts..." -ForegroundColor Yellow
-$DesktopPath   = [Environment]::GetFolderPath("Desktop")
 $StartMenuRoot = [Environment]::GetFolderPath("StartMenu")
 $StartMenuPath = if ($StartMenuRoot) { "$StartMenuRoot\Programs" } else { $null }
 
+# Desktop redirection can change between install and uninstall -- OneDrive's
+# "Back up your folders" turns it on, and turning it off leaves the old copy
+# behind. A machine can therefore have shortcuts we created sitting in a folder
+# Windows no longer calls the Desktop (observed in the wild: GetFolderPath said
+# C:\Users\<me>\Desktop while ours were in the OneDrive one). Sweep both, which
+# is only safe because Test-OurShortcut below checks where each one points --
+# without that, touching a second Desktop would be reckless.
+$DesktopCandidates = @()
+$Primary = [Environment]::GetFolderPath("Desktop")
+if ($Primary) { $DesktopCandidates += $Primary }
+foreach ($od in @($env:OneDrive, $env:OneDriveCommercial, $env:OneDriveConsumer)) {
+    if (-not $od) { continue }
+    $odDesktop = Join-Path $od "Desktop"
+    if ((Test-Path $odDesktop) -and ($DesktopCandidates -notcontains $odDesktop)) {
+        $DesktopCandidates += $odDesktop
+    }
+}
+
+function Test-OurShortcut {
+    # Does this .lnk point INTO the install root? Names alone are not ownership:
+    # "Sublime.lnk" on the Desktop is at least as likely to be the user's own
+    # shortcut to a Sublime in Program Files as it is to be ours, and deleting
+    # it by name would take theirs with it. Resolve the target and check.
+    #
+    # A shortcut whose target no longer exists still counts if the path is
+    # inside the root -- that is precisely our own leftover from an earlier
+    # install, and the case worth cleaning up.
+    param([string]$Path, [string]$Root)
+    try {
+        $ws = New-Object -ComObject WScript.Shell
+        $target = $ws.CreateShortcut($Path).TargetPath
+    } catch {
+        return $false   # unreadable .lnk: not provably ours, so leave it
+    }
+    if (-not $target -or -not $Root) { return $false }
+    return $target.ToLowerInvariant().StartsWith($Root.TrimEnd('\').ToLowerInvariant() + '\')
+}
+
 # Loose .lnk files: what installs before 0.7.0 created, plus the Desktop pair
-# 0.7.0+ still creates.
+# 0.7.0+ still creates. Checked for ownership before removal.
 $ShortcutNames = @("Sublime.lnk", "Sumatra.lnk", "Sublime Text.lnk", "SumatraPDF.lnk")
 foreach ($n in $ShortcutNames) {
-    foreach ($dir in @($DesktopPath, $StartMenuPath)) {
+    foreach ($dir in ($DesktopCandidates + @($StartMenuPath))) {
         if (-not $dir) { continue }
         $p = Join-Path $dir $n
-        if (Test-Path $p) {
+        if (-not (Test-Path $p)) { continue }
+        if (Test-OurShortcut -Path $p -Root $BaseDir) {
             Remove-Item $p -Force -ErrorAction SilentlyContinue
             Write-Host "  Removed $p" -ForegroundColor Gray
+        } else {
+            Write-Host "  Left $p alone (it does not point into $BaseDir)" -ForegroundColor Gray
         }
     }
 }
