@@ -585,7 +585,8 @@ function Test-OurShortcut {
 
 # Loose .lnk files: what installs before 0.7.0 created, plus the Desktop pair
 # 0.7.0+ still creates. Checked for ownership before removal.
-$ShortcutNames = @("Sublime.lnk", "Sumatra.lnk", "Sublime Text.lnk", "SumatraPDF.lnk")
+$ShortcutNames = @("Sublime Text (TeXLib).lnk", "SumatraPDF (TeXLib).lnk",
+                   "Sublime.lnk", "Sumatra.lnk", "Sublime Text.lnk", "SumatraPDF.lnk")
 foreach ($n in $ShortcutNames) {
     foreach ($dir in ($DesktopCandidates + @($StartMenuPath))) {
         if (-not $dir) { continue }

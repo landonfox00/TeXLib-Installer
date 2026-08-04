@@ -1351,14 +1351,16 @@ jobs:
           $out = & cmd /c "uninstall.bat -All -Silent -InstallPath `"$env:INSTALL_ROOT`"" 2>&1 | Out-String
           Write-Host $out
 
-          # Same name as ours, different target: identifying shortcuts by
-          # filename would have deleted this.
+          # Same name as the one earlier releases created, different target.
+          # Two ways to fail this: the INSTALLER overwriting it (which it did,
+          # until 0.8.1 moved the Desktop shortcuts to suffixed names), or the
+          # UNINSTALLER deleting it by filename.
           if (-not (Test-Path $mine)) {
-            Write-Host "FAIL: the uninstaller deleted a shortcut that was not ours." -ForegroundColor Red; exit 1
+            Write-Host "FAIL: a shortcut that was not ours was overwritten or deleted." -ForegroundColor Red; exit 1
           }
           $ws = New-Object -ComObject WScript.Shell
           if ($ws.CreateShortcut($mine).TargetPath -notmatch 'notepad\.exe') {
-            Write-Host "FAIL: the surviving shortcut is not the user's original." -ForegroundColor Red; exit 1
+            Write-Host "FAIL: the user's shortcut was rewritten to point somewhere else." -ForegroundColor Red; exit 1
           }
           $group = Join-Path ([Environment]::GetFolderPath('StartMenu')) 'Programs\TeXLib'
           if (Test-Path $group) {

@@ -2520,11 +2520,37 @@ if ($WriteMachineState) {
     $SublimeExe = "$SublimeDir\sublime_text.exe"
     $SumatraExe = "$SumatraDir\$($SumatraExeName)"
 
+    function Test-OurShortcut {
+        # Does this .lnk point INTO the install root? A name is not ownership.
+        param([string]$Path, [string]$Root)
+        try { $t = (New-Object -ComObject WScript.Shell).CreateShortcut($Path).TargetPath }
+        catch { return $false }
+        if (-not $t -or -not $Root) { return $false }
+        return $t.ToLowerInvariant().StartsWith($Root.TrimEnd('\').ToLowerInvariant() + '\')
+    }
+
     # Desktop keeps the two apps only -- a desktop is not a place for a
     # diagnostic tool.
+    #
+    # Named to match the Start Menu group rather than the bare "Sublime.lnk" /
+    # "Sumatra.lnk" of earlier releases. Those names are generic enough that a
+    # user with their own Desktop shortcut to a Sublime in Program Files had it
+    # SILENTLY OVERWRITTEN by this section -- CreateShortcut happily rewrites an
+    # existing file. The suffixed names cannot collide, and they say which
+    # Sublime this is, which is the same reason the ProgIDs carry it.
     if ($DesktopPath) {
-        New-TeXLibShortcut -Path "$DesktopPath\Sublime.lnk" -TargetPath $SublimeExe -Description "Sublime Text (TeXLib)"
-        New-TeXLibShortcut -Path "$DesktopPath\Sumatra.lnk" -TargetPath $SumatraExe -Description "SumatraPDF (TeXLib)"
+        New-TeXLibShortcut -Path "$DesktopPath\Sublime Text (TeXLib).lnk" -TargetPath $SublimeExe -Description "Sublime Text, configured for TeXLib"
+        New-TeXLibShortcut -Path "$DesktopPath\SumatraPDF (TeXLib).lnk"   -TargetPath $SumatraExe -Description "SumatraPDF, configured for TeXLib"
+
+        # Retire the pre-0.8.1 names, but only where they are demonstrably ours.
+        # Deleting by name here would repeat the very mistake above.
+        foreach ($Old in @("Sublime.lnk", "Sumatra.lnk")) {
+            $OldPath = Join-Path $DesktopPath $Old
+            if ((Test-Path $OldPath) -and (Test-OurShortcut -Path $OldPath -Root $BaseDir)) {
+                Remove-Item $OldPath -Force -ErrorAction SilentlyContinue
+                Write-Host "  Replaced the pre-0.8.1 Desktop shortcut $Old" -ForegroundColor Gray
+            }
+        }
     }
 
     if ($StartMenuGroup) {

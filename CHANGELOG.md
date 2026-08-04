@@ -20,10 +20,19 @@ Findings from a full audit plus a real end-to-end install on physical hardware. 
   could not have found this. The check only misbehaved when it had something to
   report. Parsing now lives in `Get-MissingTexPackage`, a pure function with a
   six-case unit table including the blank-line marker.
-- **The uninstaller deleted `Sublime.lnk` and `Sumatra.lnk` by filename.** A user
-  with their own Desktop shortcut to a Sublime in Program Files lost it. It now
-  resolves each shortcut and removes it only if it points into the install root
-  — the same ownership rule the "Open with" purge already applies.
+- **A user's own `Desktop\Sublime.lnk` was silently overwritten, then deleted.**
+  Two separate halves of the same mistake — treating a filename as ownership.
+  The installer wrote its Desktop shortcut to the generic `Sublime.lnk`, and
+  `CreateShortcut` cheerfully rewrites an existing file, so anyone with their
+  own shortcut to a Sublime in Program Files lost where it pointed; the
+  uninstaller then removed it by name. The Desktop shortcuts are now
+  `Sublime Text (TeXLib).lnk` / `SumatraPDF (TeXLib).lnk`, matching the Start
+  Menu group and unable to collide, and *both* scripts resolve a shortcut and
+  act only if it points into the install root — the ownership rule the "Open
+  with" purge already applied. The pre-0.8.1 names are cleaned up on install,
+  again only where they are provably ours.
+  - Caught by the new `config-artifacts` job on its first run, which is the
+    entire argument for writing it.
 - **Shortcuts orphaned by a Desktop-redirection change are now cleaned up.**
   OneDrive's folder backup moves the Desktop; turning it off moves it back and
   strands whatever was there. Observed on a real machine: `GetFolderPath` said
