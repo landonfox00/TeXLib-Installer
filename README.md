@@ -61,6 +61,13 @@ The `.ps1` files live in `tools/` on purpose: an extracted release folder should
 | `-Repair` | Re-apply configuration to an existing install: settings junction, builder files, Sublime package, app settings, file associations (with the stale Open With purge), shortcuts. No downloads, no components, library untouched. Works offline. |
 | `-Update` | Fetch the newest release, verify it against its `SHA256SUMS`, and hand off to it. All your other arguments are forwarded. |
 | `-TexLiveScheme full\|medium\|basic` | TeX Live size/time tradeoff. `full` (default, ~6 GB, 30-60 min) is what TeXLib is tested against; `medium` (~2.5 GB) and `basic` (~0.6 GB) are much faster. `-Doctor` checks TeXLib's actual package requirements either way. |
+| `-Verify` | Check the install against the manifest written when it was made; reports files missing, changed, or added. Exit 22 if anything is missing or changed. |
+
+A `texlib.config.json` next to `install.bat` presets any of these — useful for lab deployment. Explicit command-line arguments always win:
+
+```json
+{ "InstallPath": "D:\\TeXLib", "TexLiveScheme": "medium", "Silent": true }
+```
 | `-InstallPath C:\path` | Override the install root. Defaults to `%LOCALAPPDATA%\TeXLib`. Use if `%LOCALAPPDATA%` is on a small SSD or locked down. The library follows it (`<InstallPath>\Library`). |
 | `-TeXLibPath C:\path` | Override where the library lives. Also suppresses the junction and any pre-0.6.3 migration — an explicit path is taken as deliberate. |
 | `-Sandbox` | Skip every write outside `-InstallPath` / `-TeXLibPath` (PATH, HKCU associations, shortcuts). For developing *on* the installer. |

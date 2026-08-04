@@ -4,6 +4,44 @@ All notable changes to TeXLib-Installer are recorded here. Format follows [Keep 
 
 ## [Unreleased]
 
+## [0.9.0] — 2026-08-03
+
+First of three batches of the over-engineering list.
+
+### Added
+
+- **TeXLib appears in Settings > Apps > Installed apps.** Until now it was
+  invisible to Windows' own uninstall list, so removing it meant remembering
+  where you extracted a ZIP months ago. A per-user `Uninstall` key now carries
+  the display name, version, install location, icon and size — with
+  `QuietUninstallString` wired to the one-click Uninstall in Settings, and
+  **Modify mapped to `-Repair`**, which is exactly what that button should do.
+  The uninstaller removes the entry, and only its own: an entry recording a
+  different install root is left alone.
+- **`install.bat -Verify`** — checks an existing install against a manifest
+  written when it was made, and reports the three kinds of difference
+  separately, because they mean different things:
+  *missing* (the installer put it there and it is gone — usually the
+  interesting one), *changed* (edited settings live here, which is normal), and
+  *added* (almost always the user's own work, so it is listed last and never
+  called a problem). Exit 0 when nothing is missing or changed, 22 otherwise.
+  TeX Live is excluded — 100k+ files that `tlmgr` legitimately rewrites — and
+  reparse points are skipped rather than followed, so the library is not hashed
+  twice under two names via the `Packages\User` junction.
+- **`texlib.config.json`** beside `install.bat` presets any option, so a lab
+  deployment is "hand someone the folder" rather than a command line to retype.
+  **Anything passed on the command line always wins** — the file is applied only
+  to options the caller did not name. An unknown key is reported rather than
+  silently ignored, and malformed JSON warns instead of aborting the install.
+
+### Testing
+
+- `config-artifacts` now also asserts the Installed Apps entry (including that
+  Modify maps to `-Repair` and Quiet-uninstall actually invokes the
+  uninstaller), that a manifest is written, that `-Verify` passes clean and then
+  catches one of each difference, and that config presets apply while an
+  explicit argument still beats them.
+
 ## [0.8.1] — 2026-08-03
 
 Findings from a full audit plus a real end-to-end install on physical hardware. Four of these are bugs no CI job could have caught, for reasons worth recording.

@@ -1337,8 +1337,111 @@ jobs:
               Write-Host "FAIL: Start Menu group is missing $n" -ForegroundColor Red; $fail++
             }
           }
+          # --- Installed Apps entry (0.9.0) ----------------------------------
+          $arp = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\TeXLib'
+          if (-not (Test-Path $arp)) {
+            Write-Host "FAIL: no Installed Apps entry was registered." -ForegroundColor Red; $fail++
+          } else {
+            $p = Get-ItemProperty $arp
+            if ($p.InstallLocation -ne $env:INSTALL_ROOT) {
+              Write-Host "FAIL: InstallLocation is '$($p.InstallLocation)', expected '$env:INSTALL_ROOT'" -ForegroundColor Red; $fail++
+            }
+            # Windows uses QuietUninstallString for the one-click Uninstall in
+            # Settings; without it that button does nothing useful.
+            if ($p.QuietUninstallString -notmatch 'uninstall\.ps1') {
+              Write-Host "FAIL: QuietUninstallString does not invoke the uninstaller." -ForegroundColor Red; $fail++
+            }
+            if ($p.ModifyPath -notmatch '-Repair') {
+              Write-Host "FAIL: Modify does not map to -Repair." -ForegroundColor Red; $fail++
+            }
+          }
+
+          # --- install manifest (0.9.0) --------------------------------------
+          if (-not (Test-Path (Join-Path $env:INSTALL_ROOT 'MANIFEST'))) {
+            Write-Host "FAIL: no MANIFEST was written." -ForegroundColor Red; $fail++
+          }
+
           if ($fail) { exit 1 }
-          Write-Host "OK: exe resolution, preferences and Start Menu group all correct." -ForegroundColor Green
+          Write-Host "OK: exe resolution, preferences, Start Menu group, Installed Apps entry and manifest all correct." -ForegroundColor Green
+
+      - name: -Verify sees a clean install, then notices tampering
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $env:TEXLIB_INSTALLER_WRAPPED = '1'
+
+          $clean = & powershell.exe -NoProfile -ExecutionPolicy Bypass `
+            -File .\tools\install.ps1 -Silent -Verify -InstallPath $env:INSTALL_ROOT 2>&1 | Out-String
+          $rc = $LASTEXITCODE
+          Write-Host $clean
+          if ($rc -ne 0) { Write-Host "FAIL: a clean install did not verify (exit $rc)." -ForegroundColor Red; exit 1 }
+
+          # One of each kind of difference, because they mean different things
+          # and -Verify reports them separately.
+          Set-Content -Encoding UTF8 -Path (Join-Path $env:LIB_ROOT 'course-metadata.sty') -Value '\endinput % tampered'
+          Remove-Item (Join-Path $env:LIB_ROOT 'texlib-build.sty') -Force
+          Set-Content -Encoding UTF8 -Path (Join-Path $env:LIB_ROOT 'my-notes.tex') -Value 'the user''s own file'
+
+          $dirty = & powershell.exe -NoProfile -ExecutionPolicy Bypass `
+            -File .\tools\install.ps1 -Silent -Verify -InstallPath $env:INSTALL_ROOT 2>&1 | Out-String
+          $rc = $LASTEXITCODE
+          Write-Host $dirty
+          if ($rc -ne 22) { Write-Host "FAIL: a tampered install exited $rc, expected 22." -ForegroundColor Red; exit 1 }
+          foreach ($expect in 'Missing since install','Changed since install','Added since install','my-notes.tex') {
+            if ($dirty -notmatch [regex]::Escape($expect)) {
+              Write-Host "FAIL: -Verify did not report '$expect'." -ForegroundColor Red; exit 1
+            }
+          }
+          Write-Host "OK: -Verify distinguishes missing, changed and added." -ForegroundColor Green
+          # The last child exited 22 ON PURPOSE, and `shell: pwsh` propagates
+          # $LASTEXITCODE at the end of a step -- so without this the step fails
+          # for passing. Any step whose final child is meant to be non-zero
+          # needs the same line.
+          exit 0
+
+      - name: texlib.config.json presets, and the command line still wins
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $env:TEXLIB_INSTALLER_WRAPPED = '1'
+          # The config lives at the release root, next to install.bat.
+          '{ "TexLiveScheme": "medium", "HideJunction": true }' | Set-Content -Encoding UTF8 -Path .\texlib.config.json
+
+          $out = & powershell.exe -NoProfile -ExecutionPolicy Bypass `
+            -File .\tools\install.ps1 -Silent -Repair -InstallPath $env:INSTALL_ROOT 2>&1 | Out-String
+          Write-Host $out
+          if ($out -notmatch 'TexLiveScheme=medium') {
+            Write-Host "FAIL: the config file's TexLiveScheme was not applied." -ForegroundColor Red; exit 1
+          }
+
+          # An explicitly-passed argument must beat the file. Silently
+          # overriding what someone typed would be the worst possible behaviour.
+          $out2 = & powershell.exe -NoProfile -ExecutionPolicy Bypass `
+            -File .\tools\install.ps1 -Silent -Repair -InstallPath $env:INSTALL_ROOT -TexLiveScheme basic 2>&1 | Out-String
+          if ($out2 -match 'TexLiveScheme=medium') {
+            Write-Host "FAIL: the config file overrode an explicit -TexLiveScheme." -ForegroundColor Red; exit 1
+          }
+
+          # A key that is not an option must be reported, not silently ignored.
+          '{ "NotAnOption": 1 }' | Set-Content -Encoding UTF8 -Path .\texlib.config.json
+          $out3 = & powershell.exe -NoProfile -ExecutionPolicy Bypass `
+            -File .\tools\install.ps1 -Silent -Repair -InstallPath $env:INSTALL_ROOT 2>&1 | Out-String
+          if ($out3 -notmatch 'NotAnOption') {
+            Write-Host "FAIL: an unknown config key was ignored without a word." -ForegroundColor Red; exit 1
+          }
+
+          # And malformed JSON must warn, not abort the install.
+          'not json at all' | Set-Content -Encoding UTF8 -Path .\texlib.config.json
+          $out4 = & powershell.exe -NoProfile -ExecutionPolicy Bypass `
+            -File .\tools\install.ps1 -Silent -Repair -InstallPath $env:INSTALL_ROOT 2>&1 | Out-String
+          $rc = $LASTEXITCODE
+          if ($rc -ne 0) { Write-Host "FAIL: malformed config aborted the install (exit $rc)." -ForegroundColor Red; exit 1 }
+          if ($out4 -notmatch 'could not be read') {
+            Write-Host "FAIL: malformed config was not reported." -ForegroundColor Red; exit 1
+          }
+          Remove-Item .\texlib.config.json -Force
+          Write-Host "OK: config presets apply, explicit args win, bad input is reported not fatal." -ForegroundColor Green
+          exit 0
 
       - name: Uninstall must not take the user's own shortcut with it
         shell: pwsh

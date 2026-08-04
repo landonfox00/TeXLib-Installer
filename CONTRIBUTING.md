@@ -60,6 +60,18 @@ non-technical colleagues. The audience matters: changes should keep the install
   that touches download/extract/configure logic — it's the one path CI can't
   cover.
 
+### Writing CI steps
+
+- A `shell: pwsh` step propagates `$LASTEXITCODE` when it ends. Any step whose
+  **last** child process is meant to exit non-zero — asserting that `-Verify`
+  returns 22, or that `-Repair` refuses without an install — must end with an
+  explicit `exit 0`, or it fails for passing. This has bitten three times.
+- Don't put `2>&1` or `2>$null` on a native command. Windows PowerShell wraps
+  each stderr line in an ErrorRecord, and with the script-wide
+  `$ErrorActionPreference = 'Stop'` that becomes a *terminating* error. It is
+  how the Doctor's package check ended up reporting all 50 packages missing on a
+  healthy install.
+
 ## Refreshing component versions
 
 The pinned versions live in the `$Downloads` table at the top of

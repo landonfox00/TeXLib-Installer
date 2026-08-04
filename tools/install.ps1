@@ -97,7 +97,23 @@
     matches, 20 if any drifted (a vendor silently repackaged a pinned artifact;
     re-pin it). Used by CI to catch the break before a coworker does.
 
+.PARAMETER Verify
+    Check an EXISTING install against the manifest written when it was made:
+    report files that changed, went missing, or appeared. Answers "is this
+    install still what the installer put there?" -- the question behind a build
+    that used to work and now doesn't. Exit 0 when everything matches, 22 when
+    anything differs. TeX Live is excluded from the manifest (100k+ files, and
+    tlmgr legitimately rewrites them); everything this installer authored is in.
+
 .NOTES
+    Configuration file:
+      Drop a texlib.config.json next to install.bat to preset any of the above,
+      so a lab deployment is "hand someone the folder" rather than a command
+      line to retype. Anything passed on the command line always wins.
+
+          { "InstallPath": "D:\\TeXLib", "TexLiveScheme": "medium",
+            "Silent": true }
+
     Refresh procedure (when component versions go stale):
       1. Edit the $Downloads hashtable below with the new file name + URL.
       2. For "Static" entries, recompute the SHA256 with:
@@ -125,13 +141,14 @@ param(
     [string]$TexLiveScheme = 'full',
     [switch]$Sandbox,
     [switch]$HideJunction,
-    [switch]$VerifyDownloads
+    [switch]$VerifyDownloads,
+    [switch]$Verify
 )
 
 # =============================================================================
 # 0. INSTALLER METADATA
 # =============================================================================
-$InstallerVersion = "0.8.1"
+$InstallerVersion = "0.9.0"
 $InstallerRepo    = "https://github.com/landonfox00/TeXLib-Installer"
 $ReleasesApi      = "https://api.github.com/repos/landonfox00/TeXLib-Installer/releases/latest"
 
@@ -139,6 +156,44 @@ $ReleasesApi      = "https://api.github.com/repos/landonfox00/TeXLib-Installer/r
 # THAT function's parameters -- so -Update, which forwards the caller's own
 # arguments to the newer installer, cannot read it from in there.
 $ScriptBoundParameters = $PSBoundParameters
+
+# --- texlib.config.json ------------------------------------------------------
+# Optional presets living next to install.bat, so handing a lab a configured
+# folder beats handing them a command line to retype (and mistype). Read here,
+# before section 1 turns any of these into paths.
+#
+# Explicitly-passed arguments always win: $ScriptBoundParameters is exactly the
+# set the caller named, so a key is applied only when it is absent from that.
+# Silently overriding what someone typed would be a genuinely nasty surprise.
+$ConfigPath = Join-Path (Split-Path $PSScriptRoot -Parent) "texlib.config.json"
+if (Test-Path $ConfigPath) {
+    try {
+        $Config = Get-Content $ConfigPath -Raw | ConvertFrom-Json
+        $Applied = @()
+        foreach ($Entry in $Config.PSObject.Properties) {
+            $Name = $Entry.Name
+            if ($ScriptBoundParameters.ContainsKey($Name)) { continue }   # caller wins
+            if (-not (Get-Variable -Name $Name -Scope Script -ErrorAction SilentlyContinue)) {
+                Write-Host "  [warn] texlib.config.json: '$Name' is not an installer option; ignoring." -ForegroundColor Yellow
+                continue
+            }
+            $Value = $Entry.Value
+            # JSON has no switch type; accept true/false for them.
+            if ((Get-Variable -Name $Name -Scope Script).Value -is [switch]) {
+                $Value = [switch]([bool]$Value)
+            }
+            Set-Variable -Name $Name -Scope Script -Value $Value
+            $Applied += "$Name=$($Entry.Value)"
+        }
+        if ($Applied.Count -gt 0) {
+            Write-Host ""
+            Write-Host "Using texlib.config.json: $($Applied -join ', ')" -ForegroundColor Cyan
+        }
+    } catch {
+        Write-Host ""
+        Write-Host "  [warn] texlib.config.json could not be read ($($_.Exception.Message)); ignoring it." -ForegroundColor Yellow
+    }
+}
 
 # Fail fast: a non-terminating error in a download/extract/copy step must abort
 # the install rather than silently barrel on into a half-built state.
@@ -316,6 +371,38 @@ function Test-ShellCommandLive {
     $exe = Get-ShellCommandExe $cmd
     if (-not $exe) { return $false }
     return (Test-Path $exe)
+}
+
+function Get-ManifestPath {
+    # Which files the manifest covers, as paths relative to the install root.
+    #
+    # Excluded, each for a reason:
+    #   TexLive  -- 100k+ files, and tlmgr rewrites them legitimately, so both
+    #               hashing it and flagging its changes would be noise.
+    #   Logs     -- written during the very run that would hash them.
+    #   MANIFEST -- cannot contain its own hash.
+    # Reparse points are skipped rather than followed: Packages\User is a
+    # junction into the library, so following it would hash the same files twice
+    # and report every library edit under two different names.
+    param([string]$Root)
+    if (-not $Root -or -not (Test-Path $Root)) { return @() }
+    $Skip = @('TexLive', 'Logs')
+    $Results = @()
+    foreach ($Top in @(Get-ChildItem -LiteralPath $Root -Force -ErrorAction SilentlyContinue)) {
+        if ($Top.PSIsContainer) {
+            if ($Skip -contains $Top.Name) { continue }
+            if ($Top.Attributes -match 'ReparsePoint') { continue }
+            foreach ($f in @(Get-ChildItem -LiteralPath $Top.FullName -Recurse -File -Force -ErrorAction SilentlyContinue)) {
+                # A file reached THROUGH a junction still has to be skipped, so
+                # test each directory on the way rather than trusting the top.
+                if ($f.Attributes -match 'ReparsePoint') { continue }
+                $Results += $f.FullName.Substring($Root.TrimEnd('\').Length + 1)
+            }
+        } elseif ($Top.Name -ne 'MANIFEST') {
+            $Results += $Top.Name
+        }
+    }
+    return $Results
 }
 
 function Get-MissingTexPackage {
@@ -996,6 +1083,91 @@ function Invoke-VerifyDownloads {
 
 
 # =============================================================================
+# 5b-2. INTEGRITY MODE (-Verify)
+# =============================================================================
+function Invoke-VerifyInstall {
+    # Compare the install against the manifest written when it was made.
+    # Three kinds of difference, and they mean different things, so they are
+    # reported separately rather than as one "corrupt" verdict:
+    #   changed -- content differs. Edited settings live here, and that is
+    #              normal and expected; so does actual corruption.
+    #   missing -- the installer put it there and it is gone. Usually the
+    #              interesting one.
+    #   extra   -- new since install. Almost always the user's own work, which
+    #              is why it is listed last and never called a problem.
+    Show-Banner
+    Write-Host "Verifying install integrity at $BaseDir" -ForegroundColor Cyan
+    Write-Host ""
+
+    $ManifestFile = "$BaseDir\MANIFEST"
+    if (-not (Test-Path $ManifestFile)) {
+        Write-Host "No manifest at $ManifestFile." -ForegroundColor Yellow
+        if (Test-Path $BaseDir) {
+            Write-Host "This install predates -Verify (manifests arrived in 0.9.0)." -ForegroundColor Gray
+            Write-Host "Run install.bat -Repair to write one, then -Verify again." -ForegroundColor Gray
+        } else {
+            Write-Host "Nothing is installed at $BaseDir." -ForegroundColor Gray
+        }
+        Write-Host ""
+        Stop-Installer 22
+    }
+
+    $Expected = @{}
+    foreach ($Line in (Get-Content $ManifestFile -ErrorAction SilentlyContinue)) {
+        if (-not $Line) { continue }
+        # "<hash>  <relative path>" -- the path may contain spaces, so split on
+        # the FIRST run of whitespace only.
+        if ($Line -match '^(\S+)\s\s?(.+)$') { $Expected[$Matches[2]] = $Matches[1] }
+    }
+    Write-Host "Manifest: $($Expected.Count) files" -ForegroundColor Gray
+
+    $Actual = @{}
+    foreach ($Rel in (Get-ManifestPath -Root $BaseDir)) {
+        try {
+            $Actual[$Rel] = (Get-FileHash -LiteralPath (Join-Path $BaseDir $Rel) -Algorithm SHA256 -ErrorAction Stop).Hash
+        } catch { $null = $_ }
+    }
+
+    $Changed = @(); $Missing = @(); $Extra = @()
+    foreach ($Rel in $Expected.Keys) {
+        if (-not $Actual.ContainsKey($Rel)) { $Missing += $Rel }
+        elseif ($Actual[$Rel] -ne $Expected[$Rel]) { $Changed += $Rel }
+    }
+    foreach ($Rel in $Actual.Keys) { if (-not $Expected.ContainsKey($Rel)) { $Extra += $Rel } }
+
+    function Show-VerifyGroup {
+        param([string]$Label, [string[]]$Items, [string]$Colour, [int]$Limit = 20)
+        if ($Items.Count -eq 0) { return }
+        Write-Host ""
+        Write-Host "$Label ($($Items.Count)):" -ForegroundColor $Colour
+        foreach ($i in ($Items | Sort-Object | Select-Object -First $Limit)) { Write-Host "  $i" -ForegroundColor Gray }
+        if ($Items.Count -gt $Limit) { Write-Host "  ... and $($Items.Count - $Limit) more" -ForegroundColor Gray }
+    }
+
+    Show-VerifyGroup -Label "Missing since install" -Items $Missing -Colour Red
+    Show-VerifyGroup -Label "Changed since install" -Items $Changed -Colour Yellow
+    Show-VerifyGroup -Label "Added since install"   -Items $Extra   -Colour Gray
+
+    Write-Host ""
+    if ($Missing.Count -eq 0 -and $Changed.Count -eq 0) {
+        Write-Host "Everything the installer wrote is present and unmodified." -ForegroundColor Green
+        if ($Extra.Count -gt 0) {
+            Write-Host "($($Extra.Count) file(s) added since -- your own work, most likely.)" -ForegroundColor Gray
+        }
+        Write-Host ""
+        Stop-Installer 0
+    }
+
+    Write-Host "Edited settings show up as 'changed' and are perfectly normal." -ForegroundColor Gray
+    Write-Host "Anything missing, or changes you did not make, are repaired by:" -ForegroundColor Gray
+    Write-Host "  install.bat -Repair      (config only, no downloads)" -ForegroundColor Cyan
+    Write-Host "  install.bat              (full re-install)" -ForegroundColor Cyan
+    Write-Host ""
+    Stop-Installer 22
+}
+
+
+# =============================================================================
 # 5c. SELF-UPDATE MODE (-Update)
 # =============================================================================
 function Invoke-DownloadWithRetry {
@@ -1172,11 +1344,12 @@ function Invoke-SelfUpdate {
 
 
 # =============================================================================
-# 6. EARLY-DISPATCH (-VerifyDownloads, -Version, -Doctor, -Update)
+# 6. EARLY-DISPATCH (-VerifyDownloads, -Version, -Doctor, -Verify, -Update)
 # =============================================================================
 if ($VerifyDownloads) { Invoke-VerifyDownloads }
 if ($Version) { Show-VersionInfo }
 if ($Doctor)  { Invoke-Doctor }
+if ($Verify)  { Invoke-VerifyInstall }
 if ($Update)  { Invoke-SelfUpdate }
 
 Show-Banner
@@ -2586,6 +2759,71 @@ if ($WriteMachineState) {
 
 
 # =============================================================================
+# 18b. REGISTER IN "INSTALLED APPS" (skipped in -OnlyTeXLib / -Sandbox)
+# =============================================================================
+# Until 0.9.0 TeXLib was invisible to Windows' own Installed Apps list, so
+# uninstalling meant remembering where you extracted a ZIP months ago -- or
+# finding <InstallPath>\Scripts, which nobody knows about. A per-user Uninstall
+# key costs nothing and puts it where every other program is.
+#
+# HKCU, not HKLM: the whole install is per-user and needs no admin, and an entry
+# under HKLM would advertise it to users who do not have it.
+if ($WriteMachineState) {
+    Write-Host ""
+    Write-Host "Registering in Installed Apps..." -ForegroundColor Cyan
+    try {
+        $ArpKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\TeXLib"
+        if (-not (Test-Path $ArpKey)) { New-Item -Path $ArpKey -Force | Out-Null }
+
+        $PSExe = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
+        $StashedUninstall = "$ScriptsDir\uninstall.ps1"
+        $StashedInstall   = "$ScriptsDir\install.ps1"
+
+        Set-ItemProperty -Path $ArpKey -Name "DisplayName"     -Value "TeXLib (Sublime Text, SumatraPDF, TeX Live)"
+        Set-ItemProperty -Path $ArpKey -Name "DisplayVersion"  -Value $InstallerVersion
+        Set-ItemProperty -Path $ArpKey -Name "Publisher"       -Value "TeXLib"
+        Set-ItemProperty -Path $ArpKey -Name "InstallLocation" -Value $BaseDir
+        Set-ItemProperty -Path $ArpKey -Name "URLInfoAbout"    -Value $InstallerRepo
+        Set-ItemProperty -Path $ArpKey -Name "InstallDate"     -Value (Get-Date -Format 'yyyyMMdd')
+        Set-ItemProperty -Path $ArpKey -Name "NoModify"        -Value 0 -Type DWord
+        Set-ItemProperty -Path $ArpKey -Name "NoRepair"        -Value 0 -Type DWord
+        if (Test-Path "$SublimeDir\sublime_text.exe") {
+            Set-ItemProperty -Path $ArpKey -Name "DisplayIcon" -Value "$SublimeDir\sublime_text.exe,0"
+        }
+        # Both forms matter: Windows uses QuietUninstallString for the one-click
+        # "Uninstall" in Settings, and UninstallString for the classic dialog.
+        if (Test-Path $StashedUninstall) {
+            Set-ItemProperty -Path $ArpKey -Name "UninstallString" `
+                -Value "`"$PSExe`" -NoProfile -ExecutionPolicy Bypass -File `"$StashedUninstall`" -InstallPath `"$BaseDir`""
+            Set-ItemProperty -Path $ArpKey -Name "QuietUninstallString" `
+                -Value "`"$PSExe`" -NoProfile -ExecutionPolicy Bypass -File `"$StashedUninstall`" -Silent -InstallPath `"$BaseDir`""
+        }
+        # "Modify" maps to -Repair, which is exactly what that button should do.
+        if (Test-Path $StashedInstall) {
+            Set-ItemProperty -Path $ArpKey -Name "ModifyPath" `
+                -Value "`"$PSExe`" -NoProfile -ExecutionPolicy Bypass -File `"$StashedInstall`" -Repair -InstallPath `"$BaseDir`""
+        }
+        # EstimatedSize is in KB and is what Windows shows in the size column.
+        # Measuring a 6 GB TeX Live tree takes real time, so only do it on a run
+        # that actually installed one; otherwise keep whatever is already there.
+        if ($InstallComponents) {
+            try {
+                $Bytes = (Get-ChildItem -Path $BaseDir -Recurse -File -Force -ErrorAction SilentlyContinue |
+                          Measure-Object -Property Length -Sum).Sum
+                if ($Bytes) {
+                    Set-ItemProperty -Path $ArpKey -Name "EstimatedSize" -Value ([int]($Bytes / 1KB)) -Type DWord
+                }
+            } catch { $null = $_ }
+        }
+        Write-Host "  TeXLib now appears in Settings > Apps > Installed apps" -ForegroundColor Green
+    } catch {
+        Write-Host "  [warn] Could not register in Installed Apps: $_" -ForegroundColor Yellow
+        Write-Host "         Non-fatal; uninstall.bat still works." -ForegroundColor Yellow
+    }
+}
+
+
+# =============================================================================
 # 19. WRITE VERSION STAMP
 # =============================================================================
 $VersionFile = "$BaseDir\VERSION"
@@ -2614,6 +2852,28 @@ last_mode=$(if ($Repair) { 'repair' } elseif ($OnlyTeXLib) { 'only-texlib' } els
 "@
 Set-Content -Path $VersionFile -Value $VersionContent -Encoding UTF8
 Write-Host "  Wrote $VersionFile" -ForegroundColor Gray
+
+# --- Install manifest --------------------------------------------------------
+# A hash per file this installer authored, so `install.bat -Verify` can later
+# answer "is this still what was installed?" -- the question behind every build
+# that used to work and now doesn't. Cheap: TeX Live is excluded, so this is
+# tens of MB, not gigabytes.
+$ManifestFile = "$BaseDir\MANIFEST"
+try {
+    $ManifestRelPaths = Get-ManifestPath -Root $BaseDir
+    $ManifestLines = New-Object System.Collections.Generic.List[string]
+    foreach ($Rel in $ManifestRelPaths) {
+        $Full = Join-Path $BaseDir $Rel
+        try {
+            $h = (Get-FileHash -LiteralPath $Full -Algorithm SHA256 -ErrorAction Stop).Hash
+            $ManifestLines.Add("$h  $Rel")
+        } catch { $null = $_ }   # vanished mid-walk: not worth failing an install over
+    }
+    Set-Content -Path $ManifestFile -Value $ManifestLines -Encoding UTF8
+    Write-Host "  Wrote $ManifestFile ($($ManifestLines.Count) files; TeX Live excluded)" -ForegroundColor Gray
+} catch {
+    Write-Host "  [warn] Could not write the install manifest: $_" -ForegroundColor Yellow
+}
 
 
 # =============================================================================
