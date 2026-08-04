@@ -4,6 +4,69 @@ All notable changes to TeXLib-Installer are recorded here. Format follows [Keep 
 
 ## [Unreleased]
 
+## [0.8.1] — 2026-08-03
+
+Findings from a full audit plus a real end-to-end install on physical hardware. Four of these are bugs no CI job could have caught, for reasons worth recording.
+
+### Fixed
+
+- **The Doctor reported every LaTeX package missing on a healthy install.**
+  `kpsewhich` prints a path per file it finds and an **empty line** per file it
+  does not — and `Split-Path "" -Leaf` throws, which the script-wide
+  `$ErrorActionPreference = "Stop"` promoted to terminating, so the `catch`
+  reported all 50 packages absent. A real `-TexLiveScheme basic` install showed
+  it: 50 missing where the true answer was 30. A **full** TeX Live resolves
+  everything, produces no blank lines, and never trips it — so `full-install`
+  could not have found this. The check only misbehaved when it had something to
+  report. Parsing now lives in `Get-MissingTexPackage`, a pure function with a
+  six-case unit table including the blank-line marker.
+- **A user's own `Desktop\Sublime.lnk` was silently overwritten, then deleted.**
+  Two separate halves of the same mistake — treating a filename as ownership.
+  The installer wrote its Desktop shortcut to the generic `Sublime.lnk`, and
+  `CreateShortcut` cheerfully rewrites an existing file, so anyone with their
+  own shortcut to a Sublime in Program Files lost where it pointed; the
+  uninstaller then removed it by name. The Desktop shortcuts are now
+  `Sublime Text (TeXLib).lnk` / `SumatraPDF (TeXLib).lnk`, matching the Start
+  Menu group and unable to collide, and *both* scripts resolve a shortcut and
+  act only if it points into the install root — the ownership rule the "Open
+  with" purge already applied. The pre-0.8.1 names are cleaned up on install,
+  again only where they are provably ours.
+  - Caught by the new `config-artifacts` job on its first run, which is the
+    entire argument for writing it.
+- **Shortcuts orphaned by a Desktop-redirection change are now cleaned up.**
+  OneDrive's folder backup moves the Desktop; turning it off moves it back and
+  strands whatever was there. Observed on a real machine: `GetFolderPath` said
+  `C:\Users\<me>\Desktop` while ours sat in the OneDrive one. The uninstaller
+  sweeps both, which is only safe because of the ownership check above.
+- **A skipped SumatraPDF reinstall left three settings pointing at nothing.**
+  The exe is named by version, and the pinned name is only right when *this* run
+  installed it. Answer "Skip" after a version bump — or run `-Repair` — and the
+  LaTeXTools viewer path, the `.pdf` association and the Start Menu shortcut all
+  named a file that was not there, silently, until someone double-clicked a PDF.
+  Worse, the Doctor resolved the real exe and reported `[OK]`, so it disagreed
+  with the rest of the install without saying so. The exe on disk now wins.
+- **`-Repair` overwrote the recorded TeX Live scheme** with its own parameter
+  default, so repairing a `basic` install stamped it `full` — after which the
+  missing-package report stopped naming the scheme that explained it. A mode
+  that installs no TeX Live now preserves what the installing run wrote.
+- **`-OnlyTeXLib` on a machine without Sublime aborted the whole of section 16**
+  (exit 10) trying to create the plugin junction, because `New-Item -ItemType
+  Junction` does not create missing parents. It now notes and skips.
+- **`-Doctor` printed `.tex ->  (not a TeXLib association)`** with a hole in it
+  when the extension key existed with no default value.
+
+### Added
+
+- **`config-artifacts` CI job** covering what sections 16–18 actually put on the
+  machine, none of which was asserted anywhere: the SumatraPDF exe resolution
+  (seeded with a *newer* exe than the pinned one), `"update_check": false` in
+  the deployed preferences, the Start Menu group, and — on the way back out —
+  that a user's own identically-named shortcut survives the uninstall.
+- **`full-install` now asserts** that `scheme-full` satisfies every package
+  TeXLib requires, that `regex` kept its `.dist-info`, and that Package Control
+  has not come back.
+- **`Get-MissingTexPackage` case table** in `unit-helpers`.
+
 ## [0.8.0] — 2026-08-03
 
 Diagnoses and fixes `plugin_host-3.8 has exited unexpectedly`, seen on a coworker's machine right after a clean install.

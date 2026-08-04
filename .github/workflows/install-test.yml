@@ -246,6 +246,67 @@ jobs:
           if ($bad) { Write-Host "$bad case(s) failed." -ForegroundColor Red; exit 1 }
           Write-Host "OK: all $($cases.Count) version-comparison cases passed." -ForegroundColor Green
 
+      - name: Get-MissingTexPackage case table (extracted from install.ps1)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # The interesting input is the one a healthy machine never produces.
+          # kpsewhich prints a path per file it finds and an EMPTY LINE per file
+          # it does not -- and that empty line is what broke the original check:
+          # Split-Path "" throws, the script-wide "Stop" made it terminating, and
+          # every package got reported missing on a perfectly good install. A
+          # full TeX Live resolves everything, so full-install could never have
+          # caught it. Hence a case table rather than an end-to-end assertion.
+          $ast = [System.Management.Automation.Language.Parser]::ParseFile(
+                   (Resolve-Path .\tools\install.ps1), [ref]$null, [ref]$null)
+          $fn = $ast.FindAll({ $args[0] -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+                               $args[0].Name -eq 'Get-MissingTexPackage' }, $true)
+          if ($fn.Count -ne 1) {
+            Write-Host "FAIL: expected exactly 1 Get-MissingTexPackage in install.ps1, found $($fn.Count)." -ForegroundColor Red; exit 1
+          }
+          . ([scriptblock]::Create($fn[0].Extent.Text))
+
+          $bad = 0
+          function Check($label, $got, $expected) {
+            $g = @($got) -join ','
+            $e = @($expected) -join ','
+            $ok = ($g -eq $e)
+            if (-not $ok) { $script:bad++ }
+            "{0}  {1}`n      got=[{2}] expected=[{3}]" -f $(if($ok){'PASS'}else{'FAIL'}), $label, $g, $e
+          }
+
+          $wanted = @('amsmath.sty','tabularray.sty','tikz.sty')
+
+          # The real shape: a hit, a blank for the miss, a hit.
+          Check 'blank line marks a missing package' `
+            (Get-MissingTexPackage -KpsewhichOutput @(
+                'c:/tl/texmf-dist/tex/latex/amsmath/amsmath.sty', '', 'c:/tl/texmf-dist/tex/latex/pgf/tikz.sty') -Wanted $wanted) `
+            @('tabularray')
+
+          Check 'everything found' `
+            (Get-MissingTexPackage -KpsewhichOutput @(
+                'c:/tl/amsmath.sty','c:/tl/tabularray.sty','c:/tl/tikz.sty') -Wanted $wanted) `
+            @()
+
+          Check 'nothing found (all blanks)' `
+            (Get-MissingTexPackage -KpsewhichOutput @('','','') -Wanted $wanted) `
+            @('amsmath','tabularray','tikz')
+
+          Check 'no output at all' `
+            (Get-MissingTexPackage -KpsewhichOutput @() -Wanted $wanted) `
+            @('amsmath','tabularray','tikz')
+
+          Check 'backslash separators also parse' `
+            (Get-MissingTexPackage -KpsewhichOutput @('c:\tl\amsmath.sty') -Wanted @('amsmath.sty')) `
+            @()
+
+          Check 'whitespace-only line counts as missing' `
+            (Get-MissingTexPackage -KpsewhichOutput @('   ') -Wanted @('amsmath.sty')) `
+            @('amsmath')
+
+          if ($bad) { Write-Host "$bad case(s) failed." -ForegroundColor Red; exit 1 }
+          Write-Host "OK: package-resolution parsing handles the missing-file marker." -ForegroundColor Green
+
       - name: Every in-script call passes parameters the function actually has
         shell: pwsh
         run: |
@@ -1186,6 +1247,128 @@ jobs:
           Write-Host "OK: -Update reached the API, compared versions, and did nothing." -ForegroundColor Green
 
   # ---------------------------------------------------------------------------
+  # 4g. config-artifacts — FAST. Everything sections 16-18 actually put on the
+  #     machine, none of which was asserted anywhere before: the Start Menu
+  #     group, the deployed editor preferences, the SumatraPDF exe resolution,
+  #     and shortcut ownership on the way back out. Driven through -Repair
+  #     because that runs exactly those sections and nothing else.
+  # ---------------------------------------------------------------------------
+  config-artifacts:
+    if: github.event_name != 'schedule'
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Seed an install whose SumatraPDF is NEWER than the pinned one
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $installRoot = Join-Path $env:RUNNER_TEMP 'TeXLibRoot'
+          "INSTALL_ROOT=$installRoot" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          $lib = Join-Path $installRoot 'Library'
+          "LIB_ROOT=$lib" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+          New-Item -ItemType Directory -Force -Path `
+            (Join-Path $lib 'Sublime\texlib'), `
+            (Join-Path $installRoot 'Sublime Text\Data\Packages\LaTeXTools'), `
+            (Join-Path $installRoot 'Sublime Text\Data\Lib\python38\regex'), `
+            (Join-Path $installRoot 'Sumatra'), `
+            (Join-Path $installRoot 'TexLive\2025\bin\windows') | Out-Null
+          foreach ($p in 'course-metadata','texlib-build','basic-utilities') {
+            Set-Content -Encoding UTF8 -Path (Join-Path $lib "$p.sty") -Value "\endinput"
+          }
+          Set-Content -Encoding UTF8 -Path (Join-Path $lib 'Sublime\texlib_builder.py') -Value '# stub'
+          Set-Content -Encoding UTF8 -Path (Join-Path $lib 'Sublime\texlib\texlib.py')  -Value '# stub'
+          Set-Content -Encoding UTF8 -Path (Join-Path $installRoot 'Sublime Text\Data\Lib\python38\regex\__init__.py') -Value '# stub'
+          Set-Content -Encoding UTF8 -Path (Join-Path $installRoot 'Sublime Text\sublime_text.exe') -Value 'stub'
+          # The version-named exe is the point: the pinned name is 3.5.2, and a
+          # user who answered Skip after a bump has something else. Everything
+          # downstream must follow the file that is really there.
+          Set-Content -Encoding UTF8 -Path (Join-Path $installRoot 'Sumatra\SumatraPDF-9.9.9-64.exe') -Value 'stub'
+          $stamp = @("installer_version=0.7.2", "texlib_root=$lib") -join "`r`n"
+          Set-Content -Encoding UTF8 -Path (Join-Path $installRoot 'VERSION') -Value $stamp
+
+          # A shortcut of the USER's, named exactly like ours but pointing
+          # somewhere else entirely. The uninstaller must not touch it.
+          $desktop = [Environment]::GetFolderPath('Desktop')
+          $ws = New-Object -ComObject WScript.Shell
+          $sc = $ws.CreateShortcut((Join-Path $desktop 'Sublime.lnk'))
+          $sc.TargetPath = "$env:SystemRoot\System32\notepad.exe"
+          $sc.Save()
+
+      - name: -Repair, then assert what it put on the machine
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $env:TEXLIB_INSTALLER_WRAPPED = '1'
+          $env:OneDrive = ''; $env:OneDriveCommercial = ''; $env:OneDriveConsumer = ''
+          $out = & powershell.exe -NoProfile -ExecutionPolicy Bypass `
+            -File .\tools\install.ps1 -Silent -Repair -InstallPath $env:INSTALL_ROOT 2>&1 | Out-String
+          $rc = $LASTEXITCODE
+          Write-Host $out
+          if ($rc -ne 0) { Write-Host "FAIL: -Repair exited $rc" -ForegroundColor Red; exit $rc }
+
+          $fail = 0
+          # --- SumatraPDF exe resolution -------------------------------------
+          if ($out -notmatch 'SumatraPDF-9\.9\.9-64\.exe') {
+            Write-Host "FAIL: the run never mentioned the SumatraPDF actually on disk." -ForegroundColor Red; $fail++
+          }
+          $lt = Get-Content (Join-Path $env:LIB_ROOT 'Sublime\LaTeXTools.sublime-settings') -Raw
+          if ($lt -notmatch 'SumatraPDF-9\.9\.9-64\.exe') {
+            Write-Host "FAIL: LaTeXTools viewer points at the pinned exe, not the one installed." -ForegroundColor Red; $fail++
+          }
+          $prog = 'HKCU:\Software\Classes\TeXLib.SumatraPDF\shell\open\command'
+          $cmd = (Get-Item $prog -ErrorAction SilentlyContinue).GetValue('')
+          if ($cmd -notmatch 'SumatraPDF-9\.9\.9-64\.exe') {
+            Write-Host "FAIL: the .pdf association points at a SumatraPDF that is not installed ($cmd)." -ForegroundColor Red; $fail++
+          }
+
+          # --- editor preferences --------------------------------------------
+          $prefs = Get-Content (Join-Path $env:LIB_ROOT 'Sublime\Preferences.sublime-settings') -Raw
+          if ($prefs -notmatch '"update_check"\s*:\s*false') {
+            Write-Host "FAIL: deployed Preferences do not disable Sublime's update check." -ForegroundColor Red; $fail++
+          }
+
+          # --- Start Menu group ----------------------------------------------
+          $group = Join-Path ([Environment]::GetFolderPath('StartMenu')) 'Programs\TeXLib'
+          foreach ($n in 'Sublime Text (TeXLib).lnk','SumatraPDF (TeXLib).lnk','TeXLib Doctor.lnk') {
+            if (-not (Test-Path (Join-Path $group $n))) {
+              Write-Host "FAIL: Start Menu group is missing $n" -ForegroundColor Red; $fail++
+            }
+          }
+          if ($fail) { exit 1 }
+          Write-Host "OK: exe resolution, preferences and Start Menu group all correct." -ForegroundColor Green
+
+      - name: Uninstall must not take the user's own shortcut with it
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $env:TEXLIB_INSTALLER_WRAPPED = '1'
+          $desktop = [Environment]::GetFolderPath('Desktop')
+          $mine = Join-Path $desktop 'Sublime.lnk'
+
+          $out = & cmd /c "uninstall.bat -All -Silent -InstallPath `"$env:INSTALL_ROOT`"" 2>&1 | Out-String
+          Write-Host $out
+
+          # Same name as the one earlier releases created, different target.
+          # Two ways to fail this: the INSTALLER overwriting it (which it did,
+          # until 0.8.1 moved the Desktop shortcuts to suffixed names), or the
+          # UNINSTALLER deleting it by filename.
+          if (-not (Test-Path $mine)) {
+            Write-Host "FAIL: a shortcut that was not ours was overwritten or deleted." -ForegroundColor Red; exit 1
+          }
+          $ws = New-Object -ComObject WScript.Shell
+          if ($ws.CreateShortcut($mine).TargetPath -notmatch 'notepad\.exe') {
+            Write-Host "FAIL: the user's shortcut was rewritten to point somewhere else." -ForegroundColor Red; exit 1
+          }
+          $group = Join-Path ([Environment]::GetFolderPath('StartMenu')) 'Programs\TeXLib'
+          if (Test-Path $group) {
+            Write-Host "FAIL: the Start Menu group survived the uninstall." -ForegroundColor Red; exit 1
+          }
+          Write-Host "OK: our shortcuts went, the user's stayed." -ForegroundColor Green
+
+  # ---------------------------------------------------------------------------
   # 5. package-integrity — FAST. Builds an actual release bundle with
   #    make-release.ps1 and asserts it contains every file install.bat /
   #    uninstall.bat invoke, catching packaging gaps the other jobs miss because
@@ -1345,7 +1528,28 @@ jobs:
             Write-Host "Doctor reported one or more [FAIL] checks; failing the job." -ForegroundColor Red
             exit 1
           }
-          Write-Host "Doctor reported no [FAIL] checks." -ForegroundColor Green
+          # scheme-full must satisfy every package TeXLib requires. If this ever
+          # stops holding, the library gained a dependency that even the full
+          # scheme lacks -- worth knowing immediately rather than from a user.
+          if ($out -notmatch 'LaTeX packages TeXLib requires are installed') {
+            Write-Host "FAIL: Doctor did not confirm TeXLib's LaTeX package requirements." -ForegroundColor Red
+            exit 1
+          }
+          # The regex library must carry its wheel metadata, or a Package Control
+          # a user installs later will not see it and will reinstall over the
+          # loaded .pyd -- which is what killed a plugin host before 0.8.0.
+          $distInfo = Get-ChildItem -Path (Join-Path $env:INSTALL_ROOT 'Sublime Text\Data\Lib\python38') `
+                                    -Directory -Filter 'regex-*.dist-info' -ErrorAction SilentlyContinue
+          if (-not $distInfo) {
+            Write-Host "FAIL: regex was installed without its .dist-info metadata." -ForegroundColor Red
+            exit 1
+          }
+          # And Package Control must NOT be installed (dropped in 0.8.0).
+          if (Test-Path (Join-Path $env:INSTALL_ROOT 'Sublime Text\Data\Installed Packages\Package Control.sublime-package')) {
+            Write-Host "FAIL: Package Control came back." -ForegroundColor Red
+            exit 1
+          }
+          Write-Host "Doctor reported no [FAIL] checks; packages, regex metadata and no-Package-Control all confirmed." -ForegroundColor Green
 
       - name: Upload install log
         if: always()

@@ -131,7 +131,7 @@ param(
 # =============================================================================
 # 0. INSTALLER METADATA
 # =============================================================================
-$InstallerVersion = "0.8.0"
+$InstallerVersion = "0.8.1"
 $InstallerRepo    = "https://github.com/landonfox00/TeXLib-Installer"
 $ReleasesApi      = "https://api.github.com/repos/landonfox00/TeXLib-Installer/releases/latest"
 
@@ -316,6 +316,32 @@ function Test-ShellCommandLive {
     $exe = Get-ShellCommandExe $cmd
     if (-not $exe) { return $false }
     return (Test-Path $exe)
+}
+
+function Get-MissingTexPackage {
+    # Which of $Wanted did kpsewhich fail to resolve?
+    #
+    # Kept as a NAMED, pure function so the unit-helpers CI job can lift it out
+    # by AST and run a case table against it -- because the only interesting
+    # input is the one a healthy machine never produces. kpsewhich emits a path
+    # per file it finds and an EMPTY LINE per file it does not, and that empty
+    # line is what broke the original: `Split-Path "" -Leaf` throws, the
+    # script-wide $ErrorActionPreference = "Stop" made it terminating, and the
+    # catch reported all 50 packages missing on a perfectly good install. A full
+    # TeX Live resolves everything, so no blank lines, so CI could never have
+    # seen it -- the check only misbehaved when it had something to report.
+    param([string[]]$KpsewhichOutput, [string[]]$Wanted)
+    $found = @()
+    foreach ($line in $KpsewhichOutput) {
+        if (-not $line) { continue }                 # the missing-file marker
+        $trimmed = "$line".Trim()
+        if (-not $trimmed) { continue }
+        # kpsewhich reports forward slashes on Windows; take the last segment
+        # without Split-Path, which is fussy about separators and empties.
+        $leaf = ($trimmed -split '[\\/]')[-1]
+        if ($leaf) { $found += $leaf }
+    }
+    return @($Wanted | Where-Object { $found -notcontains $_ } | ForEach-Object { $_ -replace '\.sty$', '' })
 }
 
 function Get-StampedValue {
@@ -683,15 +709,17 @@ function Invoke-Doctor {
     )
     $Kpsewhich = "$TexBinPath\kpsewhich.exe"
     if (Test-Path $Kpsewhich) {
-        # One kpsewhich call, not fifty: it prints a path per file it FINDS and
-        # stays silent for the rest, so compare the basenames it echoed back
-        # against what we asked for.
+        # One kpsewhich call, not fifty.
         $Wanted = $RequiredTexPackages | ForEach-Object { "$_.sty" }
-        $Found = @()
-        try {
-            $Found = @(& $Kpsewhich @Wanted 2>$null | ForEach-Object { Split-Path $_ -Leaf })
-        } catch { $Found = @() }
-        $MissingPkgs = @($Wanted | Where-Object { $Found -notcontains $_ } | ForEach-Object { $_ -replace '\.sty$', '' })
+        $KpseOut = @()
+        # kpsewhich exits 1 when ANY requested file is missing -- which is the
+        # normal case this check exists to measure, not a failure to react to.
+        # Relax the script-wide "Stop" for the call so a non-zero exit and any
+        # stderr chatter cannot turn into a terminating error.
+        $PrevEap = $ErrorActionPreference
+        $ErrorActionPreference = 'Continue'
+        try { $KpseOut = @(& $Kpsewhich @Wanted) } catch { $KpseOut = @() } finally { $ErrorActionPreference = $PrevEap }
+        $MissingPkgs = Get-MissingTexPackage -KpsewhichOutput $KpseOut -Wanted $Wanted
         if ($MissingPkgs.Count -eq 0) {
             _Pass "All $($RequiredTexPackages.Count) LaTeX packages TeXLib requires are installed"
         } else {
@@ -807,6 +835,11 @@ function Invoke-Doctor {
                 _Pass "$Ext -> $ProgID"
             } elseif ($ProgID -like "OneTeX.*") {
                 _Warn "$Ext -> $ProgID (legacy OneTeX association; re-run installer to refresh)"
+            } elseif (-not $ProgID) {
+                # The key exists with no default value -- common, and reading
+                # "$Ext ->  (not a TeXLib association)" with a hole in it invites
+                # the reader to wonder what got lost.
+                _Warn "$Ext has an HKCU key but no default app set; Right Click -> Open With to set one"
             } else {
                 _Warn "$Ext -> $ProgID (not a TeXLib association; another app owns this extension)"
             }
@@ -1832,6 +1865,33 @@ option_src 0
 
 
 # =============================================================================
+# 12b. RESOLVE THE SUMATRAPDF EXE THAT IS ACTUALLY ON DISK
+# =============================================================================
+# SumatraPDF's executable is named by version (SumatraPDF-3.5.2-64.exe), and the
+# pinned name is only correct when THIS run installed it. Answer "Skip" to the
+# reinstall prompt after a version bump -- or run -Repair / -OnlyTeXLib against
+# an older install -- and the pinned name names a file that is not there. All
+# three consumers would then point into thin air: the LaTeXTools viewer path
+# (16e), the .pdf association (17) and the Start Menu shortcut (18). Nothing
+# reads any of them until the user double-clicks a PDF, so it fails silently and
+# late, and the Doctor would not catch it either: it resolves the real exe and
+# reports [OK] while everything else disagrees with it.
+#
+# Newest-first, so a directory that somehow holds two versions picks the one the
+# rest of the install is most likely to want.
+$SumatraOnDisk = Get-ChildItem -Path $SumatraDir -Filter "SumatraPDF*.exe" -ErrorAction SilentlyContinue |
+                 Sort-Object Name -Descending | Select-Object -First 1
+if ($SumatraOnDisk) {
+    if ($SumatraOnDisk.Name -ne $SumatraExeName) {
+        Write-Host ""
+        Write-Host "  [note] Using the SumatraPDF already installed here ($($SumatraOnDisk.Name))" -ForegroundColor Gray
+        Write-Host "         rather than the pinned $SumatraExeName." -ForegroundColor Gray
+    }
+    $SumatraExeName = $SumatraOnDisk.Name
+}
+
+
+# =============================================================================
 # 13. DEPLOY TEXLIB BUNDLE TO ONEDRIVE / DOCUMENTS
 # =============================================================================
 Write-Host ""
@@ -2064,7 +2124,13 @@ try {
     # refresh updates the plugin with no extra step.
     $PluginSource = Join-Path $SublimeUserSync "texlib"
     $PluginLink   = Join-Path $PackagesDir "TeXLib"
-    if (Test-Path $PluginSource) {
+    if (-not (Test-Path $PackagesDir)) {
+        # No Sublime here to deploy into -- e.g. -OnlyTeXLib on a machine that
+        # has the library but not the editor. New-Item -ItemType Junction does
+        # not create missing parents, so without this the whole of section 16
+        # would abort (exit 10) over an optional step.
+        Write-Host "  [note] No Sublime packages folder at $PackagesDir; skipping plugin deploy." -ForegroundColor Gray
+    } elseif (Test-Path $PluginSource) {
         if (Test-Path $PluginLink) {
             $LinkItem = Get-Item $PluginLink -Force
             if ($LinkItem.Attributes -match 'ReparsePoint') {
@@ -2454,11 +2520,37 @@ if ($WriteMachineState) {
     $SublimeExe = "$SublimeDir\sublime_text.exe"
     $SumatraExe = "$SumatraDir\$($SumatraExeName)"
 
+    function Test-OurShortcut {
+        # Does this .lnk point INTO the install root? A name is not ownership.
+        param([string]$Path, [string]$Root)
+        try { $t = (New-Object -ComObject WScript.Shell).CreateShortcut($Path).TargetPath }
+        catch { return $false }
+        if (-not $t -or -not $Root) { return $false }
+        return $t.ToLowerInvariant().StartsWith($Root.TrimEnd('\').ToLowerInvariant() + '\')
+    }
+
     # Desktop keeps the two apps only -- a desktop is not a place for a
     # diagnostic tool.
+    #
+    # Named to match the Start Menu group rather than the bare "Sublime.lnk" /
+    # "Sumatra.lnk" of earlier releases. Those names are generic enough that a
+    # user with their own Desktop shortcut to a Sublime in Program Files had it
+    # SILENTLY OVERWRITTEN by this section -- CreateShortcut happily rewrites an
+    # existing file. The suffixed names cannot collide, and they say which
+    # Sublime this is, which is the same reason the ProgIDs carry it.
     if ($DesktopPath) {
-        New-TeXLibShortcut -Path "$DesktopPath\Sublime.lnk" -TargetPath $SublimeExe -Description "Sublime Text (TeXLib)"
-        New-TeXLibShortcut -Path "$DesktopPath\Sumatra.lnk" -TargetPath $SumatraExe -Description "SumatraPDF (TeXLib)"
+        New-TeXLibShortcut -Path "$DesktopPath\Sublime Text (TeXLib).lnk" -TargetPath $SublimeExe -Description "Sublime Text, configured for TeXLib"
+        New-TeXLibShortcut -Path "$DesktopPath\SumatraPDF (TeXLib).lnk"   -TargetPath $SumatraExe -Description "SumatraPDF, configured for TeXLib"
+
+        # Retire the pre-0.8.1 names, but only where they are demonstrably ours.
+        # Deleting by name here would repeat the very mistake above.
+        foreach ($Old in @("Sublime.lnk", "Sumatra.lnk")) {
+            $OldPath = Join-Path $DesktopPath $Old
+            if ((Test-Path $OldPath) -and (Test-OurShortcut -Path $OldPath -Root $BaseDir)) {
+                Remove-Item $OldPath -Force -ErrorAction SilentlyContinue
+                Write-Host "  Replaced the pre-0.8.1 Desktop shortcut $Old" -ForegroundColor Gray
+            }
+        }
     }
 
     if ($StartMenuGroup) {
@@ -2497,6 +2589,18 @@ if ($WriteMachineState) {
 # 19. WRITE VERSION STAMP
 # =============================================================================
 $VersionFile = "$BaseDir\VERSION"
+
+# -TexLiveScheme describes what THIS run installed. A mode that installs no TeX
+# Live must not overwrite the record with its own parameter default: repair an
+# install made with -TexLiveScheme basic and the stamp would flip to "full",
+# after which the Doctor's missing-package report would stop mentioning the
+# scheme that actually explains it. Keep what the installing run wrote.
+$StampedScheme = $TexLiveScheme
+if (-not $InstallComponents) {
+    $PriorScheme = Get-StampedValue -VersionFile $VersionFile -Key "texlive_scheme"
+    if ($PriorScheme) { $StampedScheme = $PriorScheme }
+}
+
 $VersionContent = @"
 installer_version=$InstallerVersion
 installed_at=$(Get-Date -Format 'o')
@@ -2505,7 +2609,7 @@ sublime_dir=$SublimeDir
 sumatra_dir=$SumatraDir
 texlive_dir=$TexLiveDir
 using_onedrive=$UsingOneDrive
-texlive_scheme=$TexLiveScheme
+texlive_scheme=$StampedScheme
 last_mode=$(if ($Repair) { 'repair' } elseif ($OnlyTeXLib) { 'only-texlib' } else { 'full' })
 "@
 Set-Content -Path $VersionFile -Value $VersionContent -Encoding UTF8
