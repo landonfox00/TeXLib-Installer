@@ -153,7 +153,7 @@ param(
 # =============================================================================
 # 0. INSTALLER METADATA
 # =============================================================================
-$InstallerVersion = "0.9.3"
+$InstallerVersion = "0.9.4"
 $InstallerRepo    = "https://github.com/landonfox00/TeXLib-Installer"
 $ReleasesApi      = "https://api.github.com/repos/landonfox00/TeXLib-Installer/releases/latest"
 
@@ -291,8 +291,18 @@ $TexLiveYear = "2025"
 # advertised "2-5", and scheme-medium ran past the advertised "5-15". Quoting a
 # number the installer cannot control just makes it a liar. Disk usage, by
 # contrast, is stable and worth stating.
-$SchemeDiskGB = @{ 'full' = 6;        'medium' = 2.5;      'basic' = 0.6 }
-$SchemeSize   = @{ 'full' = '~6 GB';  'medium' = '~2.5 GB'; 'basic' = '~0.6 GB' }
+#
+# medium's figure is MEASURED: a completed scheme-medium install came to 1.3 GB
+# on disk. The 2.5 GB previously quoted here was invented, and being caught
+# shipping one made-up number while fixing another is a good reason to mark
+# which is which. full and basic are still upstream approximations -- neither
+# has been measured here, hence the "about".
+#
+# The free-space requirement stays deliberately above the installed size:
+# install-tl needs room for downloads and unpacking on the way, and refusing an
+# install for want of headroom beats dying two thirds of the way through one.
+$SchemeDiskGB = @{ 'full' = 6;            'medium' = 2.5;              'basic' = 1 }
+$SchemeSize   = @{ 'full' = 'about 6 GB'; 'medium' = '1.3 GB measured'; 'basic' = 'about 0.6 GB' }
 $SublimeDir = "$BaseDir\Sublime Text"
 $SumatraDir = "$BaseDir\Sumatra"
 $TexLiveDir = "$BaseDir\TexLive\$TexLiveYear"

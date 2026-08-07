@@ -4,6 +4,21 @@ All notable changes to TeXLib-Installer are recorded here. Format follows [Keep 
 
 ## [Unreleased]
 
+## [0.9.4] — 2026-08-06
+
+### Changed
+
+- **Corrected a second invented number.** `scheme-medium` was documented as
+  "~2.5 GB". A completed install measures **1.3 GB** — the 2.5 was made up, the
+  same way the discarded time estimates were. Having just fixed one set of
+  fabricated figures, shipping another would have been poor form. `medium` is
+  now quoted as measured (1.3 GB, 25.5 minutes), and `full` and `basic` say
+  "about", because neither has actually been measured here and the docs should
+  distinguish the two.
+- The free-space pre-flight deliberately stays **above** the installed size —
+  `install-tl` needs room to download and unpack on the way, and refusing an
+  install for want of headroom beats dying two thirds of the way through one.
+
 ## [0.9.3] — 2026-08-06
 
 ### Fixed

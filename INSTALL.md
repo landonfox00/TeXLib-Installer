@@ -170,7 +170,7 @@ A few details worth knowing:
 | `install.bat -Doctor` | Diagnose an existing install (see Troubleshooting). |
 | `install.bat -Verify` | Check that the install is still what the installer put there — lists anything missing, changed, or added since. |
 | `install.bat -Version` | Print installer version + bundled TeXLib version. |
-| `install.bat -TexLiveScheme medium` | Install a smaller TeX Live (~2.5 GB instead of ~6 GB). Saves disk; saves less time than you'd expect, since most of the wait is downloading from CTAN. Run `-Doctor` afterwards — it names any package TeXLib needs that the smaller scheme left out. **Don't use `basic`:** it's missing 30 of the 50 packages the library requires. |
+| `install.bat -TexLiveScheme medium` | Install a smaller TeX Live — measured at 1.3 GB and 25.5 minutes here, against about 6 GB for `full`. Saves disk; saves less time than you'd expect, since most of the wait is downloading from CTAN. Run `-Doctor` afterwards — it names any package TeXLib needs that the smaller scheme left out. **Don't use `basic`:** it's missing 30 of the 50 packages the library requires. |
 | `install.bat -DryRun` | Run pre-flight checks and print what would happen, without installing anything. Safe to run on a fresh machine to confirm prerequisites. |
 | `install.bat -OnlyTeXLib` | Refresh just the TeXLib library. |
 | `install.bat -InstallPath C:\Tools\TeXLib` | Install to a non-default location (e.g. if `%LOCALAPPDATA%` is on a small SSD). The library follows it, to `C:\Tools\TeXLib\Library`. |
