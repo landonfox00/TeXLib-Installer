@@ -54,12 +54,17 @@
     extracting a ZIP by hand.
 
 .PARAMETER TexLiveScheme
-    Which TeX Live scheme to install: full (default, ~6 GB, 30-60 min),
-    medium (~2.5 GB), or basic (~0.6 GB). full is what TeXLib is tested against
-    and what avoids "missing package" surprises months later; the smaller
-    schemes trade that safety for a much shorter install. `-Doctor` checks the
-    packages TeXLib actually requires whichever you pick, so a too-thin scheme
-    is a diagnosable state rather than a mystery build error.
+    Which TeX Live scheme to install: full (default, ~6 GB), medium (~2.5 GB),
+    or basic (~0.6 GB). full is what TeXLib is tested against and what avoids
+    "missing package" surprises months later.
+
+    A smaller scheme saves disk reliably. It saves LESS time than the sizes
+    suggest, because the install is dominated by downloading from whichever
+    CTAN mirror you are handed -- measured here, scheme-basic took ~12 minutes
+    on a fast connection. And basic is not viable for TeXLib regardless: it is
+    missing 30 of the 50 packages the library requires. Run `-Doctor` after any
+    non-full install; it names exactly what is absent and prints the tlmgr line
+    to fix it.
 
 .PARAMETER InstallPath
     Override the install root. Defaults to %LOCALAPPDATA%\TeXLib. Use this if
@@ -148,7 +153,7 @@ param(
 # =============================================================================
 # 0. INSTALLER METADATA
 # =============================================================================
-$InstallerVersion = "0.9.0"
+$InstallerVersion = "0.9.1"
 $InstallerRepo    = "https://github.com/landonfox00/TeXLib-Installer"
 $ReleasesApi      = "https://api.github.com/repos/landonfox00/TeXLib-Installer/releases/latest"
 
@@ -269,6 +274,16 @@ $LogDir     = "$BaseDir\Logs"
 # scattered find-and-replace. (install-tl honors the explicit TEXDIR in the
 # profile, so the folder name is just a label.)
 $TexLiveYear = "2025"
+
+# What each scheme costs. SIZE is quoted rather than a time estimate, because
+# time is not a property of the scheme: the install is dominated by downloading
+# from whichever CTAN mirror the redirector hands you, and measurement bears
+# that out -- scheme-basic took ~12 minutes on a fast connection against an
+# advertised "2-5", and scheme-medium ran past the advertised "5-15". Quoting a
+# number the installer cannot control just makes it a liar. Disk usage, by
+# contrast, is stable and worth stating.
+$SchemeDiskGB = @{ 'full' = 6;        'medium' = 2.5;      'basic' = 0.6 }
+$SchemeSize   = @{ 'full' = '~6 GB';  'medium' = '~2.5 GB'; 'basic' = '~0.6 GB' }
 $SublimeDir = "$BaseDir\Sublime Text"
 $SumatraDir = "$BaseDir\Sumatra"
 $TexLiveDir = "$BaseDir\TexLive\$TexLiveYear"
@@ -1423,8 +1438,7 @@ if ($PSMajor -gt 5 -or ($PSMajor -eq 5 -and $PSMinor -ge 1)) {
 try {
     $Drive = (Get-Item (Split-Path $BaseDir -Qualifier)).PSDrive
     $FreeGB = [math]::Round($Drive.Free / 1GB, 1)
-    $SchemeNeed = @{ 'full' = 6; 'medium' = 2.5; 'basic' = 0.6 }[$TexLiveScheme]
-    $Need = if ($OnlyTeXLib -or $Repair) { 0.2 } else { $SchemeNeed }
+    $Need = if ($OnlyTeXLib -or $Repair) { 0.2 } else { $SchemeDiskGB[$TexLiveScheme] }
     if ($FreeGB -ge $Need) {
         Add-PreflightOK "Free space on $($Drive.Name): ${FreeGB} GB (>= ${Need} GB required)"
     } else {
@@ -1641,8 +1655,7 @@ if ($DryRun) {
     } else {
         Write-Host "  * Install Sublime Text to $SublimeDir" -ForegroundColor Gray
         Write-Host "  * Install SumatraPDF to $SumatraDir"   -ForegroundColor Gray
-        $SchemeTime = @{ 'full' = '30-60 min'; 'medium' = '5-15 min'; 'basic' = '2-5 min' }[$TexLiveScheme]
-        Write-Host "  * Install TeX Live to $TexLiveDir (scheme-$TexLiveScheme, $SchemeTime)" -ForegroundColor Gray
+        Write-Host "  * Install TeX Live to $TexLiveDir (scheme-$TexLiveScheme, $($SchemeSize[$TexLiveScheme]))" -ForegroundColor Gray
         Write-Host "  * $TeXLibPlan" -ForegroundColor Gray
         if ($Sandbox) {
             Write-Host "  * SKIP (sandbox): user PATH entry" -ForegroundColor DarkGray
@@ -2014,8 +2027,9 @@ option_src 0
 "@
             Set-Content -Path "$InstallerRoot\texlive.profile" -Value $ProfileContent -Encoding ASCII
 
-            $SchemeEta = @{ 'full' = '30-60 mins; grab a coffee'; 'medium' = '5-15 mins'; 'basic' = '2-5 mins' }[$TexLiveScheme]
-            Write-Host "STARTING TEX LIVE INSTALL (scheme-$TexLiveScheme, $SchemeEta)..." -ForegroundColor Cyan
+            Write-Host "STARTING TEX LIVE INSTALL (scheme-$TexLiveScheme, $($SchemeSize[$TexLiveScheme]))..." -ForegroundColor Cyan
+            Write-Host "  Most of this is download time, so it depends on the CTAN mirror you get" -ForegroundColor Gray
+            Write-Host "  more than on the scheme. Progress is reported every 30 seconds." -ForegroundColor Gray
             $TLProc = Start-Process -FilePath "$InstallerRoot\install-tl-windows.bat" `
                 -ArgumentList "-no-gui -profile texlive.profile" `
                 -WorkingDirectory $InstallerRoot -PassThru
