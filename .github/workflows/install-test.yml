@@ -1676,6 +1676,24 @@ jobs:
             Write-Host "FAIL: the bundle carries the author's Package Control.sublime-settings" -ForegroundColor Red; exit 1
           }
 
+          # Nothing but the two deployable plugins may sit at the top level of
+          # the bundle's Sublime\ folder. That folder becomes Packages\User
+          # verbatim via the settings junction, and Sublime loads every
+          # top-level .py there as a plugin -- which is how the author's
+          # test suite ended up running inside plugin_host-3.8 and killing it
+          # (stub_sublime() replaces sys.modules['sublime_plugin']; three
+          # modules end in a bare sys.exit()). Allowlist, so a new dev-only
+          # script added to the library cannot quietly become a coworker's
+          # plugin.
+          $deployablePy = @('texlib_builder.py', 'texlib_pdfpost.py')
+          $strayPy = @(Get-ChildItem -Path (Join-Path $stage 'texlib\Sublime') -File -Filter '*.py' -ErrorAction SilentlyContinue |
+                       Where-Object { $deployablePy -notcontains $_.Name })
+          if ($strayPy.Count -gt 0) {
+            Write-Host "FAIL: the bundle's Sublime\ carries non-deployable .py that Sublime would load as plugins:" -ForegroundColor Red
+            $strayPy | ForEach-Object { Write-Host "  $($_.Name)" -ForegroundColor Red }
+            exit 1
+          }
+
           # The wrapper install.bat invokes must be a real, parseable script
           # (a missing/corrupt wrapper is exactly what makes install.bat flash
           # open and die).

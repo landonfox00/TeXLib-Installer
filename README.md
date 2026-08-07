@@ -105,7 +105,7 @@ End users download the ZIP, extract it, and run `install.bat`. The installer fin
 
 ## Refreshing component versions
 
-The pinned versions in `tools/install.ps1` (Sublime 4180, SumatraPDF 3.5.2, TeX Live 2025) are reproducible and known to work, but they go stale. To refresh:
+The pinned versions in `tools/install.ps1` (Sublime 4200, SumatraPDF 3.5.2, TeX Live 2025) are reproducible and known to work, but they go stale. To refresh:
 
 1. Edit the `$Downloads` hashtable at the top of `tools/install.ps1`.
 2. For `Type = "Static"` entries, recompute the hash:
@@ -121,7 +121,7 @@ TeX Live's `texlive` entry uses `Type = "Dynamic"` — it fetches the upstream h
 
 ## Pre-staging downloads (for testing or offline installs)
 
-If you drop the component ZIP files (e.g. `sublime_text_build_4180_x64.zip`) at the repo/release root (next to `install.bat`, *not* inside `tools/`) before running it, the installer uses those local copies (after hash-verifying them) instead of re-downloading. Useful for repeated test installs without burning bandwidth.
+If you drop the component ZIP files (e.g. `sublime_text_build_4200_x64.zip`) at the repo/release root (next to `install.bat`, *not* inside `tools/`) before running it, the installer uses those local copies (after hash-verifying them) instead of re-downloading. Useful for repeated test installs without burning bandwidth.
 
 ## Hacking on the installer
 
