@@ -153,7 +153,7 @@ param(
 # =============================================================================
 # 0. INSTALLER METADATA
 # =============================================================================
-$InstallerVersion = "0.9.4"
+$InstallerVersion = "0.9.5"
 $InstallerRepo    = "https://github.com/landonfox00/TeXLib-Installer"
 $ReleasesApi      = "https://api.github.com/repos/landonfox00/TeXLib-Installer/releases/latest"
 
@@ -590,10 +590,17 @@ $TempDir = "$env:TEMP\TeXLib_Install"
 # Pinned component versions.
 $Downloads = @{
     "sublime" = @{
-        "Url"  = "https://download.sublimetext.com/sublime_text_build_4180_x64.zip"
-        "File" = "sublime_text_build_4180_x64.zip"
+        # Bumped 4180 -> 4200 in 0.9.5. The pin exists so the installer knows
+        # exactly which bytes it ran, NOT because TeXLib needs an old build: 4200
+        # still ships plugin_host-3.8.exe + python38.dll, so LaTeXTools'
+        # .python-version = 3.8 and the cp38 regex wheel below are unaffected.
+        # Verified before pinning, per 0.6.4: the archive really contains build
+        # 4200 (sublime_text.exe FileVersion 4200) and the hash is stable across
+        # repeated downloads, so this is a real bump and not a repackage.
+        "Url"  = "https://download.sublimetext.com/sublime_text_build_4200_x64.zip"
+        "File" = "sublime_text_build_4200_x64.zip"
         "Type" = "Static"
-        "Hash" = "A8855CC1834F644CD3B74E5B90B73AE5CDA60F0172284B979B99A6B5A1E0A912"
+        "Hash" = "D20456BBEFCD626C7C89A4A2E95C326A0C570DF2FD7626FC35091E43AE5BFF9F"
     }
     "sumatra" = @{
         "Url"  = "https://www.sumatrapdfreader.org/dl/rel/3.5.2/SumatraPDF-3.5.2-64.zip"
@@ -2355,6 +2362,36 @@ try {
         Write-Host "  Removed a stale Package Control settings file (Package Control is not installed)" -ForegroundColor Gray
     } elseif ($PkgCtrlInstalled) {
         Write-Host "  [note] Package Control is installed here; leaving it and its settings alone." -ForegroundColor Gray
+    }
+
+    # 16b-1b. Purge the library's dev-only test suite from Packages\User.
+    #
+    # Same shape of bug as 16b-1, different file. The library's Sublime\ folder
+    # is the AUTHOR's working directory: alongside the four deployables it holds
+    # `_testkit.py` and seventeen `test_*.py`. deploy.ps1 copies an explicit
+    # allowlist, so the author's own machine never sees them in Packages\User --
+    # but make-release bundles Sublime\ wholesale (git archive of HEAD), and the
+    # settings junction makes that folder Packages\User verbatim. Sublime loads
+    # every top-level .py in Packages\User as a plugin, so on a bundle install
+    # the test suite runs inside plugin_host-3.8. Two ways it dies there:
+    #   - 9 of them call _testkit.stub_sublime() at module scope, which does
+    #     sys.modules["sublime"] = <stub> and sys.modules["sublime_plugin"] =
+    #     <stub> -- replacing, in the live host, the very module Sublime
+    #     dispatches commands and event listeners through.
+    #   - test_texlib_build / _runner / _texam end in a module-scope sys.exit().
+    #     SystemExit is a BaseException, so the plugin loader's `except
+    #     Exception` never sees it and it takes the host process with it.
+    # That is "plugin_host-3.8 has exited unexpectedly" -- the same symptom
+    # 0.8.0 chased to Package Control, from the same folder, still armed.
+    #
+    # 0.9.5+ bundles carry no test suite. This purge is for libraries an older
+    # installer already deployed; the pattern is the signature, and it leaves a
+    # user's own plugins in Packages\User alone.
+    $DevOnlyPy = @(Get-ChildItem -Path $SublimeUserSync -File -ErrorAction SilentlyContinue |
+                   Where-Object { $_.Name -like "test_*.py" -or $_.Name -eq "_testkit.py" })
+    if ($DevOnlyPy.Count -gt 0) {
+        foreach ($f in $DevOnlyPy) { Remove-Item $f.FullName -Force -ErrorAction SilentlyContinue }
+        Write-Host "  Removed $($DevOnlyPy.Count) dev-only test file(s) from Packages\User (they crash plugin_host-3.8)" -ForegroundColor Gray
     }
 
     # 16b-2. Deploy the native TeXLib Sublime package.

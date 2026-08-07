@@ -156,6 +156,32 @@ if (Test-Path $PkgCtrlState) {
     Write-Host "  Excluded the author's Package Control.sublime-settings from the bundle." -ForegroundColor Gray
 }
 
+# Nor does the author's test suite. Sublime\ is the author's working directory
+# and it is bundled wholesale (git archive of HEAD), but on an installed machine
+# that same folder IS Packages\User via the settings junction -- and Sublime
+# loads every top-level .py in Packages\User as a plugin. The test modules call
+# _testkit.stub_sublime() at import (replacing sys.modules["sublime_plugin"] in
+# the live host) and three of them end in a module-scope sys.exit() (SystemExit
+# escapes the plugin loader's `except Exception`), so they killed plugin_host-3.8
+# on first launch. deploy.ps1 has always deployed an allowlist for exactly this
+# reason; the bundle now honours the same contract.
+#
+# Allowlist, not a test_* denylist: anything new and top-level in Sublime\ is a
+# Packages\User plugin on every coworker's machine, so the deployables are named
+# and everything else stays home. Sublime\texlib\ is untouched -- it ships as a
+# real package to Packages\TeXLib, and Sublime does not auto-load .py from a
+# subfolder.
+$SublimeStage = Join-Path $TexLibStage "Sublime"
+$DeployablePy = @("texlib_builder.py", "texlib_pdfpost.py")   # == deploy.ps1's $pyfiles
+if (Test-Path $SublimeStage) {
+    $Strays = @(Get-ChildItem -Path $SublimeStage -File -Filter "*.py" |
+                Where-Object { $DeployablePy -notcontains $_.Name })
+    foreach ($s in $Strays) { Remove-Item $s.FullName -Force }
+    if ($Strays.Count -gt 0) {
+        Write-Host "  Excluded $($Strays.Count) dev-only Python file(s) from the bundle's Sublime\ folder." -ForegroundColor Gray
+    }
+}
+
 # Record the exact TeXLib state bundled, for traceability. The bundle is a
 # git-archive of HEAD, so this pins which TeXLib commit shipped -- the source
 # path alone never told you that.

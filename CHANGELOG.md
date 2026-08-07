@@ -4,6 +4,71 @@ All notable changes to TeXLib-Installer are recorded here. Format follows [Keep 
 
 ## [Unreleased]
 
+## [0.9.5] — 2026-08-07
+
+`plugin_host-3.8 has exited unexpectedly` again, on a work machine, from a clean
+v0.9.4 install. 0.8.0 found one landmine in the library's `Sublime\` folder and
+removed it; this is the rest of the minefield. Also answers the update prompt
+that showed up next to it, by moving the pin rather than defending it.
+
+### Changed
+
+- **Sublime Text pinned to build 4200** (was 4180). The pin has never meant
+  "TeXLib needs an old Sublime" — it means the installer knows which bytes it
+  ran, fails closed on a hash mismatch, and can tell you via `-Verify` when
+  something drifted. Answering the in-app "Update Ready: 4180 → 4200" prompt
+  gets none of that: Sublime patches itself in place from
+  `sublime_text_windows_x64_4200.pak.xz`, rewriting a tree the MANIFEST covers
+  with bytes nothing verified, so `-Verify` then reports drift across the whole
+  `Sublime Text\` folder and the uninstaller no longer matches what is on disk.
+  The answer is to move the pin, which is cheap. Checked before pinning:
+  - build 4200 still ships `plugin_host-3.8.exe` and `python38.dll`, so
+    LaTeXTools' `.python-version = 3.8` and the cp38 `regex` wheel are
+    unaffected — the ABI that matters here did not move;
+  - the archive really contains build 4200 (`sublime_text.exe` FileVersion
+    4200) and its SHA256 is stable across repeated downloads, so this is a
+    genuine bump and not the in-place repackage that bit 0.6.4.
+
+  `"update_check": false` stays. It is not there to keep you on an old build,
+  it is there so the build changes when the installer says so.
+
+### Fixed
+
+- **The author's test suite shipped into `Packages\User` and crashed the plugin
+  host.** `Sublime\` is the author's working directory — the four deployables
+  next to `_testkit.py` and seventeen `test_*.py`. `deploy.ps1` copies an
+  explicit allowlist, so the author's own machine never sees the tests in
+  `Packages\User`; `make-release.ps1` bundled the folder wholesale
+  (`git archive` of HEAD), and the settings junction makes that folder
+  `Packages\User` verbatim. Sublime loads every top-level `.py` in
+  `Packages\User` as a plugin, so on a bundle install the test suite ran inside
+  `plugin_host-3.8`. Two independent kills:
+  - Nine of them call `_testkit.stub_sublime()` at *module scope*, which does
+    `sys.modules["sublime"] = <stub>` and
+    `sys.modules["sublime_plugin"] = <stub>` — replacing, in the live host, the
+    module Sublime dispatches commands and event listeners through.
+  - `test_texlib_build`, `test_texlib_runner` and `test_texlib_texam` end in a
+    module-scope `sys.exit()`. `SystemExit` is a `BaseException`, so the plugin
+    loader's `except Exception` never sees it and it takes the process with it.
+
+  The bundle now honours `deploy.ps1`'s contract. It is an **allowlist**
+  (`texlib_builder.py`, `texlib_pdfpost.py`), not a `test_*` denylist: anything
+  new and top-level in `Sublime\` becomes a plugin on every coworker's machine,
+  so the deployables are named and everything else stays home.
+  `Sublime\texlib\` is untouched — it ships as a real package to
+  `Packages\TeXLib`, and Sublime does not auto-load `.py` from a subfolder.
+- **An install now disarms a library an older release already deployed.** The
+  bundle fix does nothing for the machines that have the files on disk, so
+  section 16b-1b removes `test_*.py` / `_testkit.py` from `Packages\User` on
+  every run, alongside the 0.8.0 Package Control purge it is modelled on. The
+  pattern is the signature; a user's own plugins are left alone.
+
+### Added
+
+- **`package-integrity` asserts no non-deployable `.py` at the top level of the
+  bundle's `Sublime\`**, by the same allowlist. The 0.8.0 assertion named one
+  file, so it only ever caught the one file; this catches the class.
+
 ## [0.9.4] — 2026-08-06
 
 ### Changed
