@@ -52,6 +52,48 @@ console to install a text editor.
   containing `[ ] * ?` safe by default; CI fails the build if `-like` comes
   back.
 
+### Fixed — found by actually clicking the thing
+
+Four more, none of which any static check would have caught. Worth recording
+because each one came from a first hands-on run, not from review.
+
+- **A blank console window sat on screen for the whole install.**
+  `Start-Process -RedirectStandardOutput` forces `UseShellExecute = $false`,
+  and `-WindowStyle Hidden` is **silently ignored** when `UseShellExecute` is
+  `$false`. The child got a real console, blank because its output had been
+  redirected away, and on a full install it would have sat there for 40 to 90
+  minutes. `CreateNoWindow` is the only flag that actually suppresses it, and
+  it is reachable only through `ProcessStartInfo`. Now measured: zero console
+  windows appear, sampled every 100 ms across a launch.
+- **Every character in the log pane was separated by a space** --
+  `C : \ U s e r s`. PowerShell 5.1's `*>` redirection writes **UTF-16LE**;
+  the tailer decodes UTF-8, so the `0x00` after each ASCII byte rendered as a
+  gap. Confirmed at byte level: the file began `FF FE 43 00 3A 00 5C 00`. The
+  child's raw pipe bytes are copied to the file instead, which are single-byte
+  and read back correctly. The same mangling was also breaking lines in the
+  middle, which is why `Mode:` and `DRY RUN` appeared on separate lines.
+- **`ProcessStartInfo.ArgumentList` does not exist on .NET Framework.** It is
+  .NET Core / .NET 5+, so on the Windows PowerShell 5.1 that `install.bat`
+  launches, `$psi.ArgumentList.Add(...)` throws "You cannot call a method on a
+  null-valued expression." Arguments are now quoted by hand for
+  `CommandLineToArgvW`, verified by round-tripping through that API: paths with
+  spaces, paths with trailing backslashes (a real hazard, since the user types
+  the install location into a text box), and embedded quotes all survive.
+- **`-Command` loses the child's exit code.** A script's `exit N` becomes the
+  process exit code under `-File`; under `-Command` it does not survive the
+  call, and a child that really exited 3 came back as 1. The launch uses
+  `-File`. This is the third time in this release that getting an exit code
+  wrong would have reported a failed install as a good one.
+
+- **An error inside the progress timer killed the window outright.** An
+  exception escaping a `DispatcherTimer` handler goes to WPF's
+  unhandled-exception path, which tears the process down -- the window simply
+  vanished mid-run with no message and nothing to diagnose, which is the exact
+  failure `boot_wrapper.ps1` exists to prevent on the console side. The tick is
+  now fully trapped, there is a dispatcher-level handler behind it, and the
+  window writes a session log to `%TEMP%\TeXLib-gui-session-*.log` from the
+  moment it starts, so a crash leaves evidence either way.
+
 ## [0.9.5] — 2026-08-07
 
 `plugin_host-3.8 has exited unexpectedly` again, on a work machine, from a clean

@@ -51,6 +51,17 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+# Diagnostic log, opened before anything else can fail. boot_wrapper.ps1 exists
+# because a console window that closes on error leaves nothing to diagnose; a
+# GUI window that vanishes is the same failure with less warning, so the same
+# rule applies here. Every unhandled error lands in this file whether or not
+# the window survives long enough to show it.
+$GuiLog = Join-Path $env:TEMP ("TeXLib-gui-session-" + (Get-Date -Format "yyyyMMdd-HHmmss") + ".log")
+function Write-GuiLog([string]$Text) {
+    try { Add-Content -Path $GuiLog -Value ("[{0}] {1}" -f (Get-Date -Format "HH:mm:ss"), $Text) -Encoding UTF8 } catch { $null = $_ }
+}
+Write-GuiLog "install-gui starting (PID $PID)"
+
 Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase, System.Xaml, System.Windows.Forms
 
 $ScriptDir   = $PSScriptRoot
@@ -275,8 +286,10 @@ $CmbScheme.SelectedIndex = @{ 'full' = 0; 'medium' = 1; 'basic' = 2 }[$TexLiveSc
 # handler's next invocation the way a mutable object's members do.
 $S = @{
     Proc      = $null
-    OutFile   = ""
+    OutStream = $null
+    ErrStream = $null
     ErrFile   = ""
+    OutFile   = ""
     Offset    = 0
     Timer     = $null
     Running   = $false
@@ -322,10 +335,30 @@ function Set-Phase([string]$Label, [int]$Pct) {
     }
 }
 
+function ConvertTo-Arg([string]$Value) {
+    # Quote one argument the way CommandLineToArgvW will parse it back.
+    # ProcessStartInfo.ArgumentList would do this for us, but that property is
+    # .NET Core / .NET 5+; on the .NET Framework that Windows PowerShell 5.1
+    # runs on it does not exist at all, and `$psi.ArgumentList.Add(...)` throws
+    # "You cannot call a method on a null-valued expression." So we build the
+    # single Arguments string by hand. Paths matter here: a release extracted
+    # to "Downloads\TeXLib Installer" has a space in the -File path, and a user
+    # can type a trailing backslash into the install-location box, which would
+    # otherwise escape the closing quote and swallow the next argument.
+    if ($Value -eq "") { return '""' }
+    if ($Value -notmatch '[\s"]') { return $Value }
+    $escaped = $Value -replace '(\\*)"', '$1$1\"'      # backslashes before a quote, then the quote
+    $escaped = $escaped -replace '(\\+)$', '$1$1'      # backslashes before the closing quote
+    return '"' + $escaped + '"'
+}
+
 function Read-NewOutput {
     # Tail whatever the child appended since last tick. Opened shared so the
-    # running process keeps writing while we read.
+    # copy task keeps writing while we read.
     if (-not (Test-Path $S.OutFile)) { return "" }
+    # CopyToAsync writes through a buffered FileStream, so without this the
+    # newest lines sit in memory and the pane lags behind the install.
+    try { if ($S.OutStream) { $S.OutStream.Flush() } } catch { $null = $_ }
     $chunk = ""
     try {
         $fs = [IO.File]::Open($S.OutFile, 'Open', 'Read', 'ReadWrite')
@@ -400,23 +433,50 @@ function Start-Install {
     }
 
     $scheme = @('full', 'medium', 'basic')[$CmbScheme.SelectedIndex]
-
-    $argList = @(
-        "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "`"$InstallPs1`"",
-        "-Silent", "-InstallPath", "`"$installTo`"", "-TexLiveScheme", $scheme
-    )
-    if ($TxtLibPath.Text.Trim()) { $argList += @("-TeXLibPath", "`"$($TxtLibPath.Text.Trim())`"") }
-    if ($ChkHideJunction.IsChecked) { $argList += "-HideJunction" }
     $S.DryRun = [bool]$ChkDryRun.IsChecked
-    if ($S.DryRun) { $argList += "-DryRun" }
 
     $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
     $S.OutFile = Join-Path $env:TEMP "TeXLib-gui-$stamp.out.log"
-    $S.ErrFile = Join-Path $env:TEMP "TeXLib-gui-$stamp.err.log"
     $S.LogPath = $S.OutFile
     $S.Offset  = 0
     $S.Cancelled = $false
     $S.Started = Get-Date
+
+    $S.ErrFile = Join-Path $env:TEMP "TeXLib-gui-$stamp.err.log"
+
+    # Launched through ProcessStartInfo rather than Start-Process, for two
+    # reasons that pull in the same direction:
+    #
+    #   1. Start-Process -RedirectStandardOutput forces UseShellExecute=$false,
+    #      and -WindowStyle Hidden is silently IGNORED when UseShellExecute is
+    #      $false. CreateNoWindow is the only flag that actually suppresses the
+    #      child's console, and it is reachable only from ProcessStartInfo.
+    #   2. -File, not -Command. A script's `exit N` becomes the process exit
+    #      code under -File; under -Command it does not survive the call, and a
+    #      child that really exited 3 was observed coming back as 1. Getting the
+    #      exit code wrong is how a failed install gets reported as a good one,
+    #      which this file has already been bitten by once.
+    #
+    # ProcessStartInfo cannot redirect to a FILE, only to a pipe -- so .NET
+    # copies each pipe to a file for us. CopyToAsync is pure .NET and needs no
+    # PowerShell event handler, which matters because Register-ObjectEvent
+    # handlers do not run while ShowDialog is pumping the message loop.
+    $argList = @(
+        "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $InstallPs1,
+        "-Silent", "-InstallPath", $installTo, "-TexLiveScheme", $scheme
+    )
+    if ($TxtLibPath.Text.Trim())    { $argList += @("-TeXLibPath", $TxtLibPath.Text.Trim()) }
+    if ($ChkHideJunction.IsChecked) { $argList += "-HideJunction" }
+    if ($S.DryRun)                  { $argList += "-DryRun" }
+
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName               = "powershell.exe"
+    $psi.Arguments              = (($argList | ForEach-Object { ConvertTo-Arg $_ }) -join " ")
+    $psi.UseShellExecute        = $false
+    $psi.CreateNoWindow         = $true
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError  = $true
+    $psi.WorkingDirectory       = $ReleaseRoot
 
     $PageOptions.Visibility  = 'Collapsed'
     $PageProgress.Visibility = 'Visible'
@@ -429,17 +489,28 @@ function Start-Install {
     Add-Log ("> install.ps1 " + (($argList | Select-Object -Skip 5) -join " ") + "`r`n`r`n")
 
     try {
-        $S.Proc = Start-Process -FilePath "powershell.exe" -ArgumentList $argList `
-            -RedirectStandardOutput $S.OutFile -RedirectStandardError $S.ErrFile `
-            -WindowStyle Hidden -PassThru
-        # Touch .Handle while the process is still alive. Without this the
-        # object returned by Start-Process -PassThru reports $null for
-        # .ExitCode once it exits -- even after WaitForExit() -- because
-        # nothing kept the process handle open for .NET to read the code from.
-        # $null coerces to 0 through Complete-Run's [int] parameter, so a
-        # FAILED install would have been reported as a successful one.
+        Write-GuiLog ("starting child: " + ($argList -join " "))
+        $S.Proc = [System.Diagnostics.Process]::Start($psi)
+        # Touch .Handle while the process is still alive. A Process object that
+        # has not kept the handle open reports $null for .ExitCode once the
+        # child exits -- even after WaitForExit() -- and $null coerces to 0
+        # through Complete-Run's [int] parameter, so a FAILED install would be
+        # reported as a successful one.
         $null = $S.Proc.Handle
+
+        # Copy each pipe straight to a file, bytes as they come. Deliberately
+        # NOT PowerShell's own redirection (`*>` / Out-File): in Windows
+        # PowerShell 5.1 those default to UTF-16LE, which puts a 0x00 after
+        # every ASCII character, and the tailer below -- reading UTF-8 -- then
+        # renders "C:\Users" as "C : \ U s e r s". Raw pipe bytes from a
+        # console child are single-byte and read back correctly as UTF-8, which
+        # install.ps1's ASCII-only output is a subset of.
+        $S.OutStream = [IO.File]::Open($S.OutFile, 'Create', 'Write', 'ReadWrite')
+        $S.ErrStream = [IO.File]::Open($S.ErrFile, 'Create', 'Write', 'ReadWrite')
+        $null = $S.Proc.StandardOutput.BaseStream.CopyToAsync($S.OutStream)
+        $null = $S.Proc.StandardError.BaseStream.CopyToAsync($S.ErrStream)
     } catch {
+        Write-GuiLog "failed to start child: $_"
         Add-Log "Could not start the installer: $_`r`n"
         Complete-Run 11
         return
@@ -448,7 +519,14 @@ function Start-Install {
     $S.Running = $true
     $S.Timer = New-Object Windows.Threading.DispatcherTimer
     $S.Timer.Interval = [TimeSpan]::FromMilliseconds(400)
+    # EVERYTHING in the tick is wrapped. An exception escaping a DispatcherTimer
+    # handler goes to WPF's unhandled-exception path, which tears the process
+    # down -- the window simply vanishes mid-install with no message and no
+    # trace, which is the exact failure boot_wrapper.ps1 was written to prevent
+    # on the console side. A trapped error stops the run, says so, and is
+    # written to the session log.
     $S.Timer.Add_Tick({
+      try {
         $chunk = Read-NewOutput
         if ($chunk) {
             Add-Log $chunk
@@ -466,19 +544,38 @@ function Start-Install {
             }
         }
         if ($S.Proc.HasExited) {
-            Start-Sleep -Milliseconds 150      # let the last buffered write land
+            Start-Sleep -Milliseconds 250      # let the copy tasks drain the pipes
             Add-Log (Read-NewOutput)
+            foreach ($st in @($S.OutStream, $S.ErrStream)) {
+                if ($st) { try { $st.Flush(); $st.Dispose() } catch { $null = $_ } }
+            }
+            $S.OutStream = $null; $S.ErrStream = $null
+            Add-Log (Read-NewOutput)           # anything the final flush released
             try {
                 if ((Test-Path $S.ErrFile) -and (Get-Item $S.ErrFile).Length -gt 0) {
-                    Add-Log "`r`n--- stderr ---`r`n"
+                    Add-Log "`r`n--- error output ---`r`n"
                     Add-Log ([IO.File]::ReadAllText($S.ErrFile))
                 }
             } catch { $null = $_ }
             # Belt and braces: if the handle trick above ever fails us, report
             # an unknown code rather than silently calling a failure a success.
             $code = if ($null -ne $S.Proc.ExitCode) { [int]$S.Proc.ExitCode } else { -1 }
+            Write-GuiLog "child exited with $code"
             Complete-Run $code
         }
+      } catch {
+        Write-GuiLog "TICK ERROR: $($_.Exception.GetType().Name): $($_.Exception.Message)"
+        Write-GuiLog $_.ScriptStackTrace
+        try { $S.Timer.Stop() } catch { $null = $_ }
+        $S.Running = $false
+        Add-Log "`r`n=== The installer window hit an internal error ===`r`n$($_.Exception.Message)`r`n`r`nThe install itself may still have completed -- check the log.`r`nDetails: $GuiLog`r`n"
+        $BtnCancel.Visibility = 'Collapsed'
+        $BtnLog.Visibility = 'Visible'
+        $BtnPrimary.Content = "Close"
+        $BtnPrimary.IsEnabled = $true
+        $LblPhase.Text = "Interrupted by an internal error"
+        $Bar.IsIndeterminate = $false
+      }
     })
     $S.Timer.Start()
 }
@@ -506,16 +603,37 @@ $BtnLog.Add_Click({
 
 # Closing the window mid-install must not orphan a 6 GB download.
 $Win.Add_Closing({
-    param($sender, $e)
+    # Not named $sender/$e: $sender is an automatic variable, and shadowing it
+    # inside an event handler is the kind of thing that works until it doesn't.
+    param($EventSource, $CancelArgs)
+    $null = $EventSource
     if ($S.Running) {
         $ans = [Windows.MessageBox]::Show(
             "The install is still running. Close and stop it?",
             "TeXLib Installer", 'YesNo', 'Warning')
-        if ($ans -ne 'Yes') { $e.Cancel = $true; return }
+        if ($ans -ne 'Yes') { $CancelArgs.Cancel = $true; return }
         $S.Cancelled = $true
         Stop-Child
     }
 })
 
 $HeaderSub.Text = "Sublime Text, SumatraPDF and TeX Live, configured for the TeXLib library."
+
+# Last line of defence. Anything that still escapes to the dispatcher would
+# otherwise close the window with no message at all; this turns it into
+# something the user can read and report, and leaves it in the session log.
+$Win.Dispatcher.Add_UnhandledException({
+    param($EventSource, $ErrorArgs)
+    $null = $EventSource
+    Write-GuiLog "UNHANDLED: $($ErrorArgs.Exception.GetType().Name): $($ErrorArgs.Exception.Message)"
+    try {
+        [Windows.MessageBox]::Show(
+            "The installer window hit an unexpected error.`n`n$($ErrorArgs.Exception.Message)`n`nDetails were written to:`n$GuiLog",
+            "TeXLib Installer", 'OK', 'Error') | Out-Null
+    } catch { $null = $_ }
+    $ErrorArgs.Handled = $true      # keep the window alive so the log stays reachable
+})
+
+Write-GuiLog "showing window"
 $null = $Win.ShowDialog()
+Write-GuiLog "window closed"
