@@ -83,7 +83,7 @@ param(
     [switch]$RemoveJunction
 )
 
-$UninstallerVersion = "0.9.2"   # keep in lockstep with install.ps1 $InstallerVersion
+$UninstallerVersion = "0.9.3"   # keep in lockstep with install.ps1 $InstallerVersion
 $InstallerRepo      = "https://github.com/landonfox00/TeXLib-Installer"
 
 $BaseDir = if ($InstallPath) { $InstallPath } else { "$env:LOCALAPPDATA\TeXLib" }

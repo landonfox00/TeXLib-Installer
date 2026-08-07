@@ -4,6 +4,36 @@ All notable changes to TeXLib-Installer are recorded here. Format follows [Keep 
 
 ## [Unreleased]
 
+## [0.9.3] — 2026-08-06
+
+### Fixed
+
+- **v0.9.2 failed every TeX Live install, including successful ones. Upgrade
+  past it.** The output redirection added in 0.9.2 changed how PowerShell starts
+  `install-tl`, and the object `Start-Process -PassThru` returns then reports
+  `ExitCode` as `$null` — *always*, on success as much as failure, and calling
+  `WaitForExit()` first does not change it (measured in isolation, not assumed).
+  The existing check was `if ($TLProc.ExitCode -ne 0)`, and `$null -ne 0` is
+  true, so a perfectly good 25-minute install was reported as
+  "did not install cleanly" and the run aborted at exit 5.
+  - The check is now the **outcome**: does `pdflatex.exe` exist? That is the
+    thing the step exists to produce, it cannot be null, and it is true exactly
+    when the install is usable. An exit code is reported only if some future
+    PowerShell starts supplying one, and a non-zero code with `pdflatex.exe`
+    present is a warning rather than grounds for discarding a working install.
+  - Caught because the 0.9.2 diagnostics it shipped alongside worked: the
+    captured log showed `install-tl`'s ordinary *success* epilogue, and the
+    preserved scratch showed a complete tree. Without those two additions this
+    would have looked exactly like the transient failure it was pretending to be.
+
+### Notes
+
+- **`-TexLiveScheme medium` works.** It completed in **25.5 minutes** (~2.5 GB).
+  The earlier 37-minute failure was a genuine transient — a mirror that dropped
+  mid-transfer, leaving 0.08 GB and no `pdflatex.exe` — and not a defect in the
+  scheme handling. Time remains dominated by the mirror, which is why the
+  installer quotes size rather than minutes.
+
 ## [0.9.2] — 2026-08-06
 
 ### Fixed

@@ -153,7 +153,7 @@ param(
 # =============================================================================
 # 0. INSTALLER METADATA
 # =============================================================================
-$InstallerVersion = "0.9.2"
+$InstallerVersion = "0.9.3"
 $InstallerRepo    = "https://github.com/landonfox00/TeXLib-Installer"
 $ReleasesApi      = "https://api.github.com/repos/landonfox00/TeXLib-Installer/releases/latest"
 
@@ -2066,19 +2066,38 @@ option_src 0
             }
             Remove-Item $TLErrLog -Force -ErrorAction SilentlyContinue
 
-            # Don't trust "it finished" -- verify install-tl actually succeeded.
-            # Without this, a dropped connection mid-install reports success and
-            # the broken tree is only caught (as a non-fatal WARN) much later.
-            if ($TLProc.ExitCode -ne 0) {
+            # Judge the install by its OUTCOME. The exit code is not available.
+            #
+            # Measured, not assumed: once -RedirectStandardOutput is in play,
+            # the object Start-Process -PassThru hands back reports ExitCode as
+            # $null -- always, on success as well as failure, and calling
+            # WaitForExit() first does NOT change that. A bare `-ne 0` therefore
+            # reads every run as failed, which is precisely what v0.9.2 shipped:
+            # it turned a perfectly good 25-minute TeX Live install into "did
+            # not install cleanly".
+            #
+            # So the presence of pdflatex.exe is the criterion. It is the thing
+            # the install exists to produce, it cannot be null, and it is true
+            # exactly when the install is usable. The exit code is reported only
+            # if some future PowerShell starts supplying one.
+            $TLProc.WaitForExit()   # ensures the tree is fully flushed before we look
+            $TLExit = $null
+            try { $TLExit = $TLProc.ExitCode } catch { $TLExit = $null }
+            $TLExitText = if ($null -eq $TLExit) { "unknown" } else { "$TLExit" }
+
+            if (-not (Test-Path "$TexBinPath\pdflatex.exe")) {
                 Write-Host ""
                 Write-Host "  install-tl said (last 20 lines of $TLLog):" -ForegroundColor Yellow
                 Get-Content $TLLog -Tail 20 -ErrorAction SilentlyContinue |
                     ForEach-Object { Write-Host "    $_" -ForegroundColor Gray }
                 Write-Host ""
-                throw "install-tl exited with code $($TLProc.ExitCode); TeX Live did not install cleanly. Full log: $TLLog"
+                throw "install-tl finished (exit code $TLExitText) but pdflatex.exe is missing at $TexBinPath; TeX Live did not install cleanly. Full log: $TLLog"
             }
-            if (-not (Test-Path "$TexBinPath\pdflatex.exe")) {
-                throw "install-tl finished but pdflatex.exe is missing at $TexBinPath."
+            if ($null -ne $TLExit -and $TLExit -ne 0) {
+                # Installed what we need, but grumbled on the way out. Worth
+                # saying; not worth throwing away a working install over.
+                Write-Host "  [warn] install-tl exited $TLExit but pdflatex.exe is present, so the install looks good." -ForegroundColor Yellow
+                Write-Host "         If something misbehaves later, the log is at $TLLog" -ForegroundColor Gray
             }
         } catch {
             Write-Host "TeX Live install failed: $_" -ForegroundColor Red
