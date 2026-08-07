@@ -4,6 +4,39 @@ All notable changes to TeXLib-Installer are recorded here. Format follows [Keep 
 
 ## [Unreleased]
 
+## [0.9.1] — 2026-08-06
+
+### Changed
+
+- **Stopped advertising TeX Live install times the installer cannot predict.**
+  `scheme-basic` was claimed at "2-5 min" and measured **~12 minutes** on a fast
+  connection; `scheme-medium` was claimed at "5-15 min" and ran past that. The
+  install is dominated by downloading from whichever CTAN mirror the redirector
+  hands you, so the scheme barely determines the wall clock. Every message now
+  quotes the **size** — which is stable and real — and says plainly that the
+  time depends on the mirror. `scheme-full` keeps its "typically 30-60 minutes"
+  (measured 52 min on real hardware, ~38 in CI), now qualified rather than
+  stated as fact.
+- **The docs say outright that `basic` is not viable for TeXLib.** It is missing
+  30 of the 50 packages the library requires — a fact the Doctor already
+  reports, but which belongs in front of anyone choosing a scheme rather than
+  behind a diagnostic they run afterwards.
+
+### Testing
+
+- **New `upgrade-from-old-release` CI job.** It downloads the real published
+  **v0.6.4** ZIP, installs from it, removes that install with the **current**
+  uninstaller, then installs the current version over the top and runs
+  `-Verify`. Every other job installs and uninstalls the same version, so none
+  of them could ask the question that actually matters to a returning user:
+  does today's uninstaller understand yesterday's on-disk layout? v0.6.4 is the
+  right baseline — it predates the Sublime plugin deploy, the manifest, the
+  Installed Apps entry, and the removal of Package Control.
+  - Verified locally against both real released ZIPs before being encoded as a
+    job: v0.6.4 installs, the v0.9.0 uninstaller unlinks the `Packages\User`
+    junction and removes the root with no warnings, and a fresh v0.9.0 install
+    then passes `-Verify` with no Package Control anywhere.
+
 ## [0.9.0] — 2026-08-03
 
 First of three batches of the over-engineering list.

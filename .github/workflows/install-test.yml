@@ -1472,6 +1472,148 @@ jobs:
           Write-Host "OK: our shortcuts went, the user's stayed." -ForegroundColor Green
 
   # ---------------------------------------------------------------------------
+  # 4h. upgrade-from-old-release — FAST. The sequence a returning user actually
+  #     performs: an install made by an OLD published release, removed by the
+  #     CURRENT uninstaller, then re-installed with the current installer. Both
+  #     halves are real released ZIPs downloaded from GitHub, not simulations,
+  #     because the interesting question is whether today's uninstaller
+  #     understands yesterday's on-disk layout -- a thing every other job, which
+  #     installs and uninstalls the same version, cannot ask.
+  #
+  #     v0.6.4 is the baseline: it predates the Sublime plugin deploy, the
+  #     manifest, the Installed Apps entry and the dropping of Package Control,
+  #     so it exercises the widest gap.
+  # ---------------------------------------------------------------------------
+  upgrade-from-old-release:
+    if: github.event_name != 'schedule'
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install v0.6.4 from its published ZIP
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $ProgressPreference = 'SilentlyContinue'
+          $sand = Join-Path $env:RUNNER_TEMP 'upgrade'
+          $root = Join-Path $sand 'root'
+          "UPG_SAND=$sand" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "UPG_ROOT=$root" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          New-Item -ItemType Directory -Force -Path $sand | Out-Null
+
+          $zip = Join-Path $sand 'v064.zip'
+          Invoke-WebRequest -UseBasicParsing -TimeoutSec 120 `
+            -Uri 'https://github.com/landonfox00/TeXLib-Installer/releases/download/v0.6.4/TeXLib-Installer-v0.6.4.zip' `
+            -OutFile $zip
+          Expand-Archive -Path $zip -DestinationPath (Join-Path $sand 'v064')
+
+          # Seed component dirs so both installers take their already-installed
+          # path. Downloading TeX Live twice would make this a 90-minute job to
+          # test something that has nothing to do with TeX Live.
+          New-Item -ItemType Directory -Force -Path `
+            (Join-Path $root 'Sublime Text\Data\Packages\LaTeXTools'), `
+            (Join-Path $root 'Sublime Text\Data\Lib\python38\regex'), `
+            (Join-Path $root 'Sumatra'), `
+            (Join-Path $root 'TexLive\2025\bin\windows') | Out-Null
+          Set-Content -Encoding UTF8 -Path (Join-Path $root 'Sublime Text\Data\Lib\python38\regex\__init__.py') -Value '# seed'
+          Set-Content -Encoding UTF8 -Path (Join-Path $root 'Sublime Text\sublime_text.exe') -Value 'seed'
+          Set-Content -Encoding UTF8 -Path (Join-Path $root 'Sumatra\SumatraPDF-3.5.2-64.exe') -Value 'seed'
+
+          $env:TEXLIB_INSTALLER_WRAPPED = '1'
+          $env:OneDrive = ''; $env:OneDriveCommercial = ''; $env:OneDriveConsumer = ''
+          & powershell.exe -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $sand 'v064\tools\install.ps1') -Silent -Sandbox -InstallPath $root
+          $rc = $LASTEXITCODE
+          if ($rc -ne 0) { Write-Host "FAIL: the v0.6.4 installer exited $rc." -ForegroundColor Red; exit $rc }
+
+          $v = Get-Content (Join-Path $root 'VERSION') -Raw
+          if ($v -notmatch 'installer_version=0\.6\.4') {
+            Write-Host "FAIL: the seeded install is not v0.6.4." -ForegroundColor Red; exit 1
+          }
+          Write-Host "OK: a genuine v0.6.4 install is in place." -ForegroundColor Green
+
+      - name: Remove it with the CURRENT uninstaller
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $env:TEXLIB_INSTALLER_WRAPPED = '1'
+          $out = & powershell.exe -NoProfile -ExecutionPolicy Bypass `
+            -File .\tools\uninstall.ps1 -All -Silent -InstallPath $env:UPG_ROOT 2>&1 | Out-String
+          $rc = $LASTEXITCODE
+          Write-Host $out
+          if ($rc -ne 0) { Write-Host "FAIL: uninstall exited $rc." -ForegroundColor Red; exit $rc }
+          if (Test-Path $env:UPG_ROOT) {
+            Write-Host "FAIL: the v0.6.4 install root survived." -ForegroundColor Red; exit 1
+          }
+          # The 0.6.3 fix, on a layout built by a version that predates it:
+          # Packages\User is a junction into the library, and WinPS 5.1's
+          # Remove-Item -Recurse follows those. Unlink first or the removal
+          # throws partway and leaves Sublime/Sumatra/TeXLive behind.
+          if ($out -notmatch 'Unlinked junction') {
+            Write-Host "FAIL: no junction was unlinked before the removal." -ForegroundColor Red; exit 1
+          }
+          if ($out -match '\[WARN\]') {
+            Write-Host "FAIL: the uninstall warned about something." -ForegroundColor Red; exit 1
+          }
+          Write-Host "OK: today's uninstaller fully removed a v0.6.4 install." -ForegroundColor Green
+
+      - name: Install the current version onto the cleaned machine
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $root = $env:UPG_ROOT
+          New-Item -ItemType Directory -Force -Path `
+            (Join-Path $root 'Sublime Text\Data\Packages\LaTeXTools'), `
+            (Join-Path $root 'Sublime Text\Data\Lib\python38\regex'), `
+            (Join-Path $root 'Sumatra'), `
+            (Join-Path $root 'TexLive\2025\bin\windows') | Out-Null
+          Set-Content -Encoding UTF8 -Path (Join-Path $root 'Sublime Text\Data\Lib\python38\regex\__init__.py') -Value '# seed'
+          Set-Content -Encoding UTF8 -Path (Join-Path $root 'Sublime Text\sublime_text.exe') -Value 'seed'
+          Set-Content -Encoding UTF8 -Path (Join-Path $root 'Sumatra\SumatraPDF-3.5.2-64.exe') -Value 'seed'
+
+          # The repo carries no texlib\ bundle, so stage a stub one.
+          New-Item -ItemType Directory -Force -Path 'texlib\Sublime\texlib' | Out-Null
+          Set-Content -Encoding UTF8 -Path 'texlib\CHANGELOG.md' -Value "# Changelog`r`n`r`n## [Unreleased]`r`n- CI stub."
+          foreach ($p in 'course-metadata','texlib-build','basic-utilities') {
+            Set-Content -Encoding UTF8 -Path ("texlib\{0}.sty" -f $p) -Value '\endinput'
+          }
+          Set-Content -Encoding UTF8 -Path 'texlib\Sublime\texlib_builder.py' -Value '# stub'
+          Set-Content -Encoding UTF8 -Path 'texlib\Sublime\texlib\texlib.py'  -Value '# stub'
+
+          $env:TEXLIB_INSTALLER_WRAPPED = '1'
+          $env:OneDrive = ''; $env:OneDriveCommercial = ''; $env:OneDriveConsumer = ''
+          $out = & powershell.exe -NoProfile -ExecutionPolicy Bypass `
+            -File .\tools\install.ps1 -Silent -Sandbox -InstallPath $root 2>&1 | Out-String
+          $rc = $LASTEXITCODE
+          Write-Host $out
+          if ($rc -ne 0) { Write-Host "FAIL: the current installer exited $rc." -ForegroundColor Red; exit $rc }
+
+          $fail = 0
+          if (-not (Test-Path (Join-Path $root 'MANIFEST'))) {
+            Write-Host "FAIL: no MANIFEST after the upgrade." -ForegroundColor Red; $fail++
+          }
+          if (-not (Test-Path (Join-Path $root 'Sublime Text\Data\Packages\TeXLib\texlib.py'))) {
+            Write-Host "FAIL: the Sublime plugin was not deployed." -ForegroundColor Red; $fail++
+          }
+          # Assert on the ACT, not the word -- the completion notes legitimately
+          # mention Package Control to say the user may install it themselves.
+          if ($out -match 'Downloading Package Control') {
+            Write-Host "FAIL: Package Control came back." -ForegroundColor Red; $fail++
+          }
+          if (Test-Path (Join-Path $root 'Library\Sublime\Package Control.sublime-settings')) {
+            Write-Host "FAIL: the author's Package Control settings were deployed." -ForegroundColor Red; $fail++
+          }
+          if ($fail) { exit 1 }
+
+          & powershell.exe -NoProfile -ExecutionPolicy Bypass `
+            -File .\tools\install.ps1 -Silent -Verify -InstallPath $root | Out-Null
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "FAIL: -Verify did not pass on the upgraded install." -ForegroundColor Red; exit 1
+          }
+          Write-Host "OK: v0.6.4 -> current upgrade path is clean." -ForegroundColor Green
+
+  # ---------------------------------------------------------------------------
   # 5. package-integrity — FAST. Builds an actual release bundle with
   #    make-release.ps1 and asserts it contains every file install.bat /
   #    uninstall.bat invoke, catching packaging gaps the other jobs miss because

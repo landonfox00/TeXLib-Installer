@@ -49,8 +49,9 @@
     Leave the SumatraPDF install in place.
 
 .PARAMETER KeepTeXLive
-    Leave the TeX Live tree in place. Worth considering: re-installing it costs
-    30-60 minutes, and a later install.bat run detects it and offers to skip.
+    Leave the TeX Live tree in place. Worth considering: re-installing means
+    re-downloading ~6 GB from CTAN, typically 30-60 minutes, and a later
+    install.bat run detects it and offers to skip.
 
 .PARAMETER Force
     Close running Sublime Text / SumatraPDF processes belonging to this install
@@ -82,7 +83,7 @@ param(
     [switch]$RemoveJunction
 )
 
-$UninstallerVersion = "0.9.0"   # keep in lockstep with install.ps1 $InstallerVersion
+$UninstallerVersion = "0.9.1"   # keep in lockstep with install.ps1 $InstallerVersion
 $InstallerRepo      = "https://github.com/landonfox00/TeXLib-Installer"
 
 $BaseDir = if ($InstallPath) { $InstallPath } else { "$env:LOCALAPPDATA\TeXLib" }

@@ -60,7 +60,7 @@ The `.ps1` files live in `tools/` on purpose: an extracted release folder should
 | `-OnlyTeXLib` | Refresh only the TeXLib library bundle + Sublime builder files. Skips Sublime / Sumatra / TeX Live install entirely. Use after pulling a newer installer release whose only change is the library. |
 | `-Repair` | Re-apply configuration to an existing install: settings junction, builder files, Sublime package, app settings, file associations (with the stale Open With purge), shortcuts. No downloads, no components, library untouched. Works offline. |
 | `-Update` | Fetch the newest release, verify it against its `SHA256SUMS`, and hand off to it. All your other arguments are forwarded. |
-| `-TexLiveScheme full\|medium\|basic` | TeX Live size/time tradeoff. `full` (default, ~6 GB, 30-60 min) is what TeXLib is tested against; `medium` (~2.5 GB) and `basic` (~0.6 GB) are much faster. `-Doctor` checks TeXLib's actual package requirements either way. |
+| `-TexLiveScheme full\|medium\|basic` | TeX Live size. `full` (default, ~6 GB) is what TeXLib is tested against; `medium` ~2.5 GB, `basic` ~0.6 GB. Saves disk reliably, time much less so — the install is dominated by CTAN mirror speed. **`basic` is missing 30 of the 50 packages TeXLib needs**, so run `-Doctor` after any non-full install. |
 | `-Verify` | Check the install against the manifest written when it was made; reports files missing, changed, or added. Exit 22 if anything is missing or changed. |
 
 A `texlib.config.json` next to `install.bat` presets any of these — useful for lab deployment. Explicit command-line arguments always win:
@@ -85,7 +85,7 @@ Combine as needed (e.g. `-OnlyTeXLib -Silent` for unattended library refreshes o
 | `-All` | Remove everything with no per-component prompts. Implies `-RemoveLibrary` and `-RemoveJunction`. |
 | `-InstallPath C:\path` | Uninstall an install rooted somewhere other than `%LOCALAPPDATA%\TeXLib`. |
 | `-RemoveLibrary` | Answer yes to the library question up front. Only changes anything for a library *outside* the install root (a pre-0.6.3 `Documents\TeXLib`) — the one case that defaults to staying. |
-| `-KeepSublime` / `-KeepSumatra` / `-KeepTeXLive` | Leave that component in place. Keeping TeX Live saves a 30-60 minute reinstall. |
+| `-KeepSublime` / `-KeepSumatra` / `-KeepTeXLive` | Leave that component in place. Keeping TeX Live saves re-downloading ~6 GB, which is typically 30-60 minutes. |
 | `-Force` | Close running Sublime / SumatraPDF without asking (they hold locks that would otherwise fail the removal). |
 | `-RemoveJunction` | Remove `%USERPROFILE%\TeXLib` even when the installer cannot prove it created it. Check where it points first. |
 

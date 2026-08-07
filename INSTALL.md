@@ -61,7 +61,7 @@ A console window opens and the installer walks through these phases:
 1. **Pre-flight checks** — Windows version, free disk space, internet, etc. If anything fails, the installer aborts before touching your system.
 2. **Sublime Text** — downloads + extracts (~10 seconds).
 3. **SumatraPDF** — downloads + extracts (~10 seconds).
-4. **TeX Live** — downloads installer + runs full install. **This takes 30-60 minutes.** It looks frozen sometimes; that's normal. Go grab a coffee.
+4. **TeX Live** — downloads installer + runs full install. **Typically 30-60 minutes**, though it's almost all download time, so a slow CTAN mirror can stretch it. It looks frozen sometimes; that's normal, and the installer prints a progress line every 30 seconds. Go grab a coffee.
 5. **TeXLib library** — copies into `%LOCALAPPDATA%\TeXLib\Library`, alongside the other components. If you're upgrading, your old library is found first and your Sublime settings are carried across.
 6. **PATH update** — adds TeX Live's `bin` directory so commands work from any terminal.
 7. **Sublime sync setup** — junctions Sublime's user packages folder to the library's `Sublime\` folder, so your settings survive re-installs.
@@ -170,7 +170,7 @@ A few details worth knowing:
 | `install.bat -Doctor` | Diagnose an existing install (see Troubleshooting). |
 | `install.bat -Verify` | Check that the install is still what the installer put there — lists anything missing, changed, or added since. |
 | `install.bat -Version` | Print installer version + bundled TeXLib version. |
-| `install.bat -TexLiveScheme medium` | Install a smaller TeX Live (~2.5 GB, 5-15 min instead of ~6 GB, 30-60 min). Faster, but less coverage — run `-Doctor` afterwards, which checks every package TeXLib needs. |
+| `install.bat -TexLiveScheme medium` | Install a smaller TeX Live (~2.5 GB instead of ~6 GB). Saves disk; saves less time than you'd expect, since most of the wait is downloading from CTAN. Run `-Doctor` afterwards — it names any package TeXLib needs that the smaller scheme left out. **Don't use `basic`:** it's missing 30 of the 50 packages the library requires. |
 | `install.bat -DryRun` | Run pre-flight checks and print what would happen, without installing anything. Safe to run on a fresh machine to confirm prerequisites. |
 | `install.bat -OnlyTeXLib` | Refresh just the TeXLib library. |
 | `install.bat -InstallPath C:\Tools\TeXLib` | Install to a non-default location (e.g. if `%LOCALAPPDATA%` is on a small SSD). The library follows it, to `C:\Tools\TeXLib\Library`. |
@@ -194,7 +194,7 @@ Remove the TeXLib library (...)?  (Y/n)
 
 Nothing is exempt from the question, and each prompt names the folder that actually gets deleted. Only the *default* differs: the library defaults to going when it's inside the install root, and to staying when it's a pre-0.6.3 `Documents\TeXLib` that may have your own materials next to it.
 
-Keeping TeX Live is worth considering — it's ~6 GB and takes 30-60 minutes to reinstall, and a later `install.bat` run detects it and offers to skip it.
+Keeping TeX Live is worth considering — it's ~6 GB to re-download, typically 30-60 minutes, and a later `install.bat` run detects it and offers to skip it.
 
 Whatever you choose, the uninstaller also:
 
