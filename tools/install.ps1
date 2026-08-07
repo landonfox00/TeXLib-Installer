@@ -153,7 +153,7 @@ param(
 # =============================================================================
 # 0. INSTALLER METADATA
 # =============================================================================
-$InstallerVersion = "0.9.1"
+$InstallerVersion = "0.9.2"
 $InstallerRepo    = "https://github.com/landonfox00/TeXLib-Installer"
 $ReleasesApi      = "https://api.github.com/repos/landonfox00/TeXLib-Installer/releases/latest"
 
@@ -230,12 +230,21 @@ function Stop-Installer {
     # early-exit paths (e.g. -Version, or a junction failure before logging
     # starts), so swallow it deliberately.
     try { Stop-Transcript | Out-Null } catch { $null = $_ }
-    # Always clear the (possibly multi-GB) download scratch on the way out, so a
-    # failed run doesn't leave %TEMP%\TeXLib_Install behind. The success path
-    # cleans it in section 21; this covers every non-success Stop-Installer exit.
+    # The download scratch holds install-tl's working directory and its own
+    # logs. Clearing it on SUCCESS is right -- it can be multi-GB and is then
+    # worthless. Clearing it on FAILURE, which is what happened until 0.9.2,
+    # destroys the evidence at exactly the moment someone needs it: a
+    # scheme-medium run died 37 minutes in and left nothing to diagnose from.
+    # So: keep it when we are exiting non-zero, and say where it is.
     # ($TempDir is $null on the very early junction failure paths -> guarded.)
     if ($TempDir -and (Test-Path $TempDir)) {
-        Remove-Item $TempDir -Recurse -Force -ErrorAction SilentlyContinue
+        if ($ExitCode -eq 0) {
+            Remove-Item $TempDir -Recurse -Force -ErrorAction SilentlyContinue
+        } else {
+            Write-Host ""
+            Write-Host "Kept the download scratch for diagnosis: $TempDir" -ForegroundColor Yellow
+            Write-Host "  It may be large. Delete it once you no longer need it." -ForegroundColor Gray
+        }
     }
     # When launched via install.bat -> tools\boot_wrapper.ps1, the wrapper
     # owns the pause-on-failure prompt and the exit-code surfacing. Skip our
@@ -2030,15 +2039,43 @@ option_src 0
             Write-Host "STARTING TEX LIVE INSTALL (scheme-$TexLiveScheme, $($SchemeSize[$TexLiveScheme]))..." -ForegroundColor Cyan
             Write-Host "  Most of this is download time, so it depends on the CTAN mirror you get" -ForegroundColor Gray
             Write-Host "  more than on the scheme. Progress is reported every 30 seconds." -ForegroundColor Gray
+            # Capture install-tl's own output. This is the longest and by far the
+            # most failure-prone step -- it downloads gigabytes from a CTAN
+            # mirror chosen by a redirector -- and until 0.9.2 every word it said
+            # was thrown away, so a failure produced exactly one line: "exited
+            # with code 1". Nothing to act on, nothing to paste into a bug
+            # report, and the scratch directory holding its own logs was deleted
+            # on the way out (see Stop-Installer). Observed for real on a
+            # scheme-medium run that died 37 minutes in.
+            $TLLog    = "$LogDir\texlive-install-$(Get-Date -Format 'yyyyMMdd-HHmmss').log"
+            $TLErrLog = "$TLLog.err"
+            Write-Host "  install-tl output -> $TLLog" -ForegroundColor Gray
             $TLProc = Start-Process -FilePath "$InstallerRoot\install-tl-windows.bat" `
                 -ArgumentList "-no-gui -profile texlive.profile" `
-                -WorkingDirectory $InstallerRoot -PassThru
+                -WorkingDirectory $InstallerRoot -PassThru `
+                -RedirectStandardOutput $TLLog -RedirectStandardError $TLErrLog
             Wait-WithHeartbeat -Process $TLProc -IntervalSec 30 -Label "TeX Live"
+
+            # Fold stderr into the main log so a bug report needs one file, and
+            # surface the tail immediately -- the reason is nearly always in the
+            # last few lines, and asking a user to go open a log to find out why
+            # their 40-minute install died is a poor way to treat them.
+            if ((Test-Path $TLErrLog) -and (Get-Item $TLErrLog).Length -gt 0) {
+                Add-Content -Path $TLLog -Value "`r`n--- stderr ---"
+                Get-Content $TLErrLog | Add-Content -Path $TLLog
+            }
+            Remove-Item $TLErrLog -Force -ErrorAction SilentlyContinue
+
             # Don't trust "it finished" -- verify install-tl actually succeeded.
             # Without this, a dropped connection mid-install reports success and
             # the broken tree is only caught (as a non-fatal WARN) much later.
             if ($TLProc.ExitCode -ne 0) {
-                throw "install-tl exited with code $($TLProc.ExitCode); TeX Live did not install cleanly."
+                Write-Host ""
+                Write-Host "  install-tl said (last 20 lines of $TLLog):" -ForegroundColor Yellow
+                Get-Content $TLLog -Tail 20 -ErrorAction SilentlyContinue |
+                    ForEach-Object { Write-Host "    $_" -ForegroundColor Gray }
+                Write-Host ""
+                throw "install-tl exited with code $($TLProc.ExitCode); TeX Live did not install cleanly. Full log: $TLLog"
             }
             if (-not (Test-Path "$TexBinPath\pdflatex.exe")) {
                 throw "install-tl finished but pdflatex.exe is missing at $TexBinPath."
