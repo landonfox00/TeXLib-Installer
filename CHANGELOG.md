@@ -4,6 +4,29 @@ All notable changes to TeXLib-Installer are recorded here. Format follows [Keep 
 
 ## [Unreleased]
 
+## [0.9.2] — 2026-08-06
+
+### Fixed
+
+- **A failed TeX Live install destroyed its own evidence.** Two compounding
+  problems, found when a real `-TexLiveScheme medium` run died 37 minutes in:
+  - `install-tl`'s output was never captured. It is the longest and most
+    failure-prone step in the whole installer — gigabytes pulled from whichever
+    CTAN mirror a redirector picks — and every word it said was discarded, so a
+    failure produced exactly one line: `install-tl exited with code 1`. Nothing
+    to act on, nothing to paste into a bug report. Its stdout and stderr now go
+    to `<InstallPath>\Logs\texlive-install-<timestamp>.log`, stderr is folded
+    in so a report needs one file, and **the last 20 lines are printed straight
+    to the console on failure** — the reason is nearly always there, and making
+    someone go hunting through a log to find out why their 40-minute install
+    died is a poor way to treat them.
+  - `Stop-Installer` then deleted the download scratch on *every* exit path,
+    including failures — taking `install-tl`'s working directory and its own
+    logs with it, at precisely the moment they were needed. The scratch is now
+    kept when the installer exits non-zero, and its location is printed.
+    Success still cleans it up, because then it is worthless and can be
+    multi-gigabyte.
+
 ## [0.9.1] — 2026-08-06
 
 ### Changed
