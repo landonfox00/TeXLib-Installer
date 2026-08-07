@@ -153,7 +153,7 @@ param(
 # =============================================================================
 # 0. INSTALLER METADATA
 # =============================================================================
-$InstallerVersion = "0.9.5"
+$InstallerVersion = "0.10.0"
 $InstallerRepo    = "https://github.com/landonfox00/TeXLib-Installer"
 $ReleasesApi      = "https://api.github.com/repos/landonfox00/TeXLib-Installer/releases/latest"
 

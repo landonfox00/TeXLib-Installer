@@ -1,0 +1,521 @@
+<#
+.SYNOPSIS
+    WPF front-end for install.ps1. Collects options, then runs the real
+    installer and shows its progress.
+
+.DESCRIPTION
+    This is a FRONT-END, not a second installer. It builds an argument list,
+    launches `install.ps1 -Silent` as a child process, and tails that process's
+    output into a log pane. Every decision about what to install, what to
+    verify, and what to write to the machine stays in install.ps1, which is
+    still the only thing CI exercises. If the two ever disagree, install.ps1 is
+    right.
+
+    Why -Silent rather than driving the interactive prompts: the prompts exist
+    to ask a console user questions the GUI has already answered in its options
+    panel, and there is no supported way to feed Read-Host from a parent
+    process without a pty. -Silent takes the documented safe defaults (skip any
+    component already installed, abort on hash mismatch), which is exactly what
+    the GUI wants.
+
+    Why the output is tailed from a FILE rather than read from an event:
+    Register-ObjectEvent handlers do not run while a WPF message loop is
+    pumping (ShowDialog blocks the runspace, and PowerShell events need the
+    pipeline to be idle to fire), so the usual OutputDataReceived pattern
+    silently delivers nothing until the window closes. Redirecting the child's
+    stdout to a temp file and reading the new bytes on a DispatcherTimer sits
+    entirely inside the UI thread and has no such failure mode.
+
+.PARAMETER InstallPath
+    Pre-seed the install location field. Same meaning as install.ps1's.
+
+.PARAMETER TeXLibPath
+    Pre-seed the library location field. Same meaning as install.ps1's.
+
+.PARAMETER TexLiveScheme
+    Pre-select the TeX Live scheme. Same meaning as install.ps1's.
+
+.NOTES
+    ASCII-only on purpose. install.bat launches Windows PowerShell 5.1, which
+    decodes a BOM-less UTF-8 script as Windows-1252 -- the bug that shipped in
+    v0.5.0. Keeping this file ASCII means the question never arises. CI's
+    encoding-guard covers it.
+#>
+[CmdletBinding()]
+param(
+    [string]$InstallPath = "",
+    [string]$TeXLibPath = "",
+    [ValidateSet('full', 'medium', 'basic')]
+    [string]$TexLiveScheme = 'full'
+)
+
+$ErrorActionPreference = "Stop"
+
+Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase, System.Xaml, System.Windows.Forms
+
+$ScriptDir   = $PSScriptRoot
+$InstallPs1  = Join-Path $ScriptDir "install.ps1"
+$ReleaseRoot = Split-Path $ScriptDir -Parent
+
+if (-not (Test-Path $InstallPs1)) {
+    [Windows.MessageBox]::Show(
+        "Could not find install.ps1 next to this script.`n`nExpected: $InstallPs1`n`nThe release folder is incomplete -- re-extract the ZIP.",
+        "TeXLib Installer", 'OK', 'Error') | Out-Null
+    exit 11
+}
+
+# Read the version out of install.ps1 rather than carrying a second copy that
+# can drift. A miss is cosmetic, so it fails soft.
+$InstallerVersion = "?"
+try {
+    $m = Select-String -Path $InstallPs1 -Pattern '^\$InstallerVersion\s*=\s*"([^"]+)"' | Select-Object -First 1
+    if ($m) { $InstallerVersion = $m.Matches[0].Groups[1].Value }
+} catch { $null = $_ }
+
+if (-not $InstallPath) { $InstallPath = Join-Path $env:LOCALAPPDATA "TeXLib" }
+
+# -----------------------------------------------------------------------------
+# Phase table
+# -----------------------------------------------------------------------------
+# Maps a line install.ps1 prints to the label and bar position it means. These
+# are matched as substrings against the child's stdout, so they must stay in
+# step with install.ps1's Write-Host banners. A marker that stops matching
+# costs a progress update, never correctness -- the install itself is driven
+# entirely by the child process.
+#
+# TeX Live gets no percentage on purpose. It is the overwhelming majority of
+# the wall clock and its duration depends on which CTAN mirror you are handed,
+# so any bar position would be invented. 0.9.1 removed the last invented time
+# estimates from this project; the bar goes indeterminate instead and reports
+# the elapsed minutes install.ps1 is already printing.
+#
+# Most markers are printed literally by install.ps1, so CI can assert they are
+# still there. Four are composed at runtime from a variable and so appear
+# nowhere in install.ps1's source; those carry an `Emit` naming the construct
+# that prints them, which is what CI checks instead. Adding a marker without
+# either property means CI cannot police it, so don't.
+$Phases = @(
+    @{ Match = "Running pre-flight checks";      Label = "Running pre-flight checks";              Pct = 3 },
+    @{ Match = "Setting up TeXLib";              Label = "Preparing folders";                      Pct = 6 },
+    @{ Match = "Downloading sublime_text";       Label = "Downloading Sublime Text";               Pct = 8;
+       Emit  = 'Write-Host "Downloading $($Info.File)..."' },
+    @{ Match = "Downloading SumatraPDF";         Label = "Downloading SumatraPDF";                 Pct = 10;
+       Emit  = 'Write-Host "Downloading $($Info.File)..."' },
+    @{ Match = "Downloading install-tl";         Label = "Downloading the TeX Live installer";     Pct = 12;
+       Emit  = 'Write-Host "Downloading $($Info.File)..."' },
+    @{ Match = "STARTING TEX LIVE INSTALL";      Label = "Installing TeX Live";                    Pct = -1 },
+    @{ Match = "[TeX Live] finished";            Label = "TeX Live installed";                     Pct = 78;
+       Emit  = '[$Label] finished after' },
+    @{ Match = "Deploying TeXLib library";       Label = "Deploying the TeXLib library";           Pct = 82 },
+    @{ Match = "Configuring environment";        Label = "Configuring environment";                Pct = 85 },
+    @{ Match = "Wiring up Sublime settings";     Label = "Wiring up Sublime settings";             Pct = 87 },
+    @{ Match = "Writing program configurations"; Label = "Writing program configuration";          Pct = 90 },
+    @{ Match = "Registering file associations";  Label = "Registering file associations";          Pct = 94 },
+    @{ Match = "Creating shortcuts";             Label = "Creating shortcuts";                     Pct = 96 },
+    @{ Match = "Registering in Installed Apps";  Label = "Registering in Installed Apps";          Pct = 97 },
+    @{ Match = "Verifying install with a tiny";  Label = "Verifying with a test compile";          Pct = 98 },
+    @{ Match = "Cleaning up temp files";         Label = "Cleaning up";                            Pct = 99 }
+)
+
+# install.ps1's Stop-Installer codes, so a failure names the step that failed
+# instead of a bare number. Anything not listed falls through to the generic
+# message plus the log path, which is always the real answer anyway.
+$ExitMeanings = @{
+    1  = "Pre-flight checks failed. The report in the log names what is missing."
+    2  = "Could not create the install folders. Check the location is writable."
+    3  = "The Sublime Text download or extraction failed."
+    4  = "The SumatraPDF download or extraction failed."
+    5  = "The TeX Live install failed. This is usually a dropped connection to the CTAN mirror."
+    7  = "Deploying the TeXLib library failed."
+    8  = "Updating your user PATH failed."
+    9  = "Setting up the Sublime settings junction failed."
+    10 = "Writing the program configuration files failed."
+    12 = "The install path contains a space or comma that the library path cannot tolerate."
+    13 = "Could not create the %USERPROFILE%\TeXLib junction."
+    14 = "Conflicting options were passed to the installer."
+    20 = "A pinned download no longer matches its recorded hash."
+    22 = "The install no longer matches the manifest written when it was made."
+    99 = "The installer crashed before it could report a specific failure."
+}
+
+# -----------------------------------------------------------------------------
+# Window
+# -----------------------------------------------------------------------------
+$Xaml = @'
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="TeXLib Installer" Width="760" Height="620"
+        WindowStartupLocation="CenterScreen" ResizeMode="CanResize"
+        Background="#FFF7F7F9" FontFamily="Segoe UI" FontSize="13">
+  <Grid Margin="0">
+    <Grid.RowDefinitions>
+      <RowDefinition Height="Auto"/>
+      <RowDefinition Height="*"/>
+      <RowDefinition Height="Auto"/>
+    </Grid.RowDefinitions>
+
+    <Border Grid.Row="0" Background="#FF1F2933" Padding="20,16">
+      <StackPanel>
+        <TextBlock Text="TeXLib" Foreground="White" FontSize="24" FontWeight="SemiBold"/>
+        <TextBlock x:Name="HeaderSub" Foreground="#FFB6C2CF" Margin="0,2,0,0"
+                   Text="Sublime Text, SumatraPDF and TeX Live, configured for the TeXLib library."/>
+      </StackPanel>
+    </Border>
+
+    <!-- OPTIONS -->
+    <ScrollViewer x:Name="PageOptions" Grid.Row="1" VerticalScrollBarVisibility="Auto" Padding="20,18">
+      <StackPanel>
+        <TextBlock Text="Install location" FontWeight="SemiBold" Margin="0,0,0,4"/>
+        <Grid>
+          <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="*"/>
+            <ColumnDefinition Width="Auto"/>
+          </Grid.ColumnDefinitions>
+          <TextBox x:Name="TxtInstallPath" Grid.Column="0" Padding="6,5" VerticalContentAlignment="Center"/>
+          <Button x:Name="BtnBrowse" Grid.Column="1" Content="Browse..." Margin="8,0,0,0" Padding="14,5"/>
+        </Grid>
+        <TextBlock Foreground="#FF5A6672" TextWrapping="Wrap" Margin="0,5,0,16"
+                   Text="Everything is installed here, for your user only. No administrator rights are needed and nothing outside this folder is replaced."/>
+
+        <TextBlock Text="TeX Live scheme" FontWeight="SemiBold" Margin="0,0,0,4"/>
+        <ComboBox x:Name="CmbScheme" Padding="6,5">
+          <ComboBoxItem Content="full - everything TeXLib is tested against (about 6 GB)"/>
+          <ComboBoxItem Content="medium - a smaller subset (about 1.3 GB)"/>
+          <ComboBoxItem Content="basic - minimal (about 0.6 GB)"/>
+        </ComboBox>
+        <TextBlock x:Name="SchemeNote" Foreground="#FF5A6672" TextWrapping="Wrap" Margin="0,5,0,16"/>
+
+        <Expander x:Name="ExpAdvanced" Header="Advanced" Margin="0,0,0,8">
+          <StackPanel Margin="0,10,0,0">
+            <TextBlock Text="TeXLib library location" FontWeight="SemiBold" Margin="0,0,0,4"/>
+            <TextBox x:Name="TxtLibPath" Padding="6,5" VerticalContentAlignment="Center"/>
+            <TextBlock Foreground="#FF5A6672" TextWrapping="Wrap" Margin="0,5,0,12"
+                       Text="Leave blank to keep the library inside the install folder, which is what you want unless you are deliberately sharing one library between installs."/>
+            <CheckBox x:Name="ChkHideJunction" Content="Hide the %USERPROFILE%\TeXLib junction if one is needed"/>
+            <TextBlock Foreground="#FF5A6672" TextWrapping="Wrap" Margin="22,4,0,0"
+                       Text="Only applies when the chosen path contains a space or comma. A visible junction is easier to find later, so this is off by default."/>
+          </StackPanel>
+        </Expander>
+
+        <CheckBox x:Name="ChkDryRun" Content="Dry run - check this machine and report, but change nothing" Margin="0,0,0,4"/>
+        <TextBlock Foreground="#FF5A6672" TextWrapping="Wrap" Margin="22,0,0,16"
+                   Text="Runs the pre-flight checks and summarises what a real install would do, without downloading or writing anything. Takes seconds. Worth doing first on a machine you have not installed on before."/>
+
+        <Border Background="#FFFFF4CE" BorderBrush="#FFE8C86B" BorderThickness="1" Padding="12,10" CornerRadius="3">
+          <TextBlock TextWrapping="Wrap" Foreground="#FF5C4813"
+                     Text="A full install downloads about 6 GB from a CTAN mirror and commonly takes 40 to 90 minutes. Most of that is download time, so it depends on which mirror you are handed more than on your machine. You can keep working while it runs."/>
+        </Border>
+      </StackPanel>
+    </ScrollViewer>
+
+    <!-- PROGRESS -->
+    <Grid x:Name="PageProgress" Grid.Row="1" Margin="20,18" Visibility="Collapsed">
+      <Grid.RowDefinitions>
+        <RowDefinition Height="Auto"/>
+        <RowDefinition Height="Auto"/>
+        <RowDefinition Height="Auto"/>
+        <RowDefinition Height="*"/>
+      </Grid.RowDefinitions>
+      <TextBlock x:Name="LblPhase" Grid.Row="0" FontWeight="SemiBold" FontSize="15" Text="Starting..."/>
+      <ProgressBar x:Name="Bar" Grid.Row="1" Height="18" Margin="0,10,0,0" Minimum="0" Maximum="100" Value="0"/>
+      <TextBlock x:Name="LblElapsed" Grid.Row="2" Foreground="#FF5A6672" Margin="0,6,0,10" Text=""/>
+      <Border Grid.Row="3" BorderBrush="#FFD8DCE2" BorderThickness="1" Background="White">
+        <ScrollViewer x:Name="LogScroller" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto">
+          <TextBox x:Name="TxtLog" IsReadOnly="True" BorderThickness="0" Background="White"
+                   FontFamily="Consolas" FontSize="12" TextWrapping="NoWrap" Padding="8"/>
+        </ScrollViewer>
+      </Border>
+    </Grid>
+
+    <Border Grid.Row="2" Background="#FFEFF1F4" BorderBrush="#FFD8DCE2" BorderThickness="0,1,0,0" Padding="20,12">
+      <Grid>
+        <TextBlock x:Name="LblFooter" VerticalAlignment="Center" Foreground="#FF5A6672"/>
+        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+          <Button x:Name="BtnLog" Content="Open log" Padding="14,6" Margin="0,0,8,0" Visibility="Collapsed"/>
+          <Button x:Name="BtnCancel" Content="Cancel" Padding="16,6" Margin="0,0,8,0"/>
+          <Button x:Name="BtnPrimary" Content="Install" Padding="24,6" FontWeight="SemiBold"/>
+        </StackPanel>
+      </Grid>
+    </Border>
+  </Grid>
+</Window>
+'@
+
+$reader = New-Object System.Xml.XmlNodeReader ([xml]$Xaml)
+$Win    = [Windows.Markup.XamlReader]::Load($reader)
+
+$TxtInstallPath  = $Win.FindName("TxtInstallPath")
+$BtnBrowse       = $Win.FindName("BtnBrowse")
+$CmbScheme       = $Win.FindName("CmbScheme")
+$SchemeNote      = $Win.FindName("SchemeNote")
+$TxtLibPath      = $Win.FindName("TxtLibPath")
+$ChkHideJunction = $Win.FindName("ChkHideJunction")
+$ChkDryRun       = $Win.FindName("ChkDryRun")
+$PageOptions     = $Win.FindName("PageOptions")
+$PageProgress    = $Win.FindName("PageProgress")
+$LblPhase        = $Win.FindName("LblPhase")
+$Bar             = $Win.FindName("Bar")
+$LblElapsed      = $Win.FindName("LblElapsed")
+$TxtLog          = $Win.FindName("TxtLog")
+$LogScroller     = $Win.FindName("LogScroller")
+$BtnPrimary      = $Win.FindName("BtnPrimary")
+$BtnCancel       = $Win.FindName("BtnCancel")
+$BtnLog          = $Win.FindName("BtnLog")
+$LblFooter       = $Win.FindName("LblFooter")
+$HeaderSub       = $Win.FindName("HeaderSub")
+
+$Win.Title = "TeXLib Installer $InstallerVersion"
+$LblFooter.Text = "Version $InstallerVersion"
+$TxtInstallPath.Text = $InstallPath
+$TxtLibPath.Text = $TeXLibPath
+$CmbScheme.SelectedIndex = @{ 'full' = 0; 'medium' = 1; 'basic' = 2 }[$TexLiveScheme]
+
+# Shared state for the timer callback. A hashtable because a script-scope
+# variable assigned inside an event handler does not survive back to the
+# handler's next invocation the way a mutable object's members do.
+$S = @{
+    Proc      = $null
+    OutFile   = ""
+    ErrFile   = ""
+    Offset    = 0
+    Timer     = $null
+    Running   = $false
+    Cancelled = $false
+    LogPath   = ""
+    Started   = $null
+    DryRun    = $false
+}
+
+function Set-SchemeNote {
+    switch ($CmbScheme.SelectedIndex) {
+        1 { $SchemeNote.Text = "Smaller on disk, but it saves less time than the size suggests -- the install is dominated by download speed. Run the Doctor afterwards; it names any package TeXLib needs and cannot find." }
+        2 { $SchemeNote.Text = "Not viable for TeXLib: basic is missing 30 of the 50 packages the library requires. Pick this only if you intend to add them yourself with tlmgr." }
+        default { $SchemeNote.Text = "Recommended. This is what TeXLib is tested against, and it avoids missing-package surprises months from now." }
+    }
+}
+Set-SchemeNote
+$CmbScheme.Add_SelectionChanged({ Set-SchemeNote })
+
+$BtnBrowse.Add_Click({
+    $dlg = New-Object System.Windows.Forms.FolderBrowserDialog
+    $dlg.Description = "Choose where TeXLib should be installed"
+    $dlg.ShowNewFolderButton = $true
+    if (Test-Path $TxtInstallPath.Text) { $dlg.SelectedPath = $TxtInstallPath.Text }
+    if ($dlg.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
+        $TxtInstallPath.Text = $dlg.SelectedPath
+    }
+})
+
+function Add-Log([string]$Text) {
+    if (-not $Text) { return }
+    $TxtLog.AppendText($Text)
+    $LogScroller.ScrollToEnd()
+}
+
+function Set-Phase([string]$Label, [int]$Pct) {
+    $LblPhase.Text = $Label
+    if ($Pct -lt 0) {
+        $Bar.IsIndeterminate = $true
+    } else {
+        $Bar.IsIndeterminate = $false
+        if ($Pct -gt $Bar.Value) { $Bar.Value = $Pct }
+    }
+}
+
+function Read-NewOutput {
+    # Tail whatever the child appended since last tick. Opened shared so the
+    # running process keeps writing while we read.
+    if (-not (Test-Path $S.OutFile)) { return "" }
+    $chunk = ""
+    try {
+        $fs = [IO.File]::Open($S.OutFile, 'Open', 'Read', 'ReadWrite')
+        try {
+            if ($fs.Length -gt $S.Offset) {
+                $null = $fs.Seek($S.Offset, 'Begin')
+                $buf = New-Object byte[] ($fs.Length - $S.Offset)
+                $read = $fs.Read($buf, 0, $buf.Length)
+                $S.Offset += $read
+                $chunk = [Text.Encoding]::UTF8.GetString($buf, 0, $read)
+            }
+        } finally { $fs.Dispose() }
+    } catch { $null = $_ }
+    return $chunk
+}
+
+function Stop-Child {
+    # Kill the whole tree: install.ps1 spawns install-tl / tlmgr, and killing
+    # only powershell.exe leaves a multi-GB download running with nothing
+    # watching it.
+    if ($S.Proc -and -not $S.Proc.HasExited) {
+        try { & taskkill.exe /PID $S.Proc.Id /T /F 2>&1 | Out-Null } catch { $null = $_ }
+    }
+}
+
+function Complete-Run([int]$Code) {
+    $S.Running = $false
+    if ($S.Timer) { $S.Timer.Stop() }
+    $Bar.IsIndeterminate = $false
+    $BtnCancel.Visibility = 'Collapsed'
+    $BtnLog.Visibility = 'Visible'
+    $BtnPrimary.Content = "Close"
+    $BtnPrimary.IsEnabled = $true
+
+    if ($S.Cancelled) {
+        $Bar.Value = 0
+        $LblPhase.Text = "Cancelled"
+        $LblFooter.Text = "Cancelled -- the install is incomplete"
+        Add-Log "`r`n=== Cancelled. Run uninstall.bat to clear a partial install. ===`r`n"
+        return
+    }
+    if ($Code -eq 0) {
+        $Bar.Value = 100
+        if ($S.DryRun) {
+            $LblPhase.Text = "Dry run complete"
+            $LblElapsed.Text = "Nothing was downloaded or written. The report below is what a real install would do on this machine."
+        } else {
+            $LblPhase.Text = "Installation complete"
+            $LblElapsed.Text = "Open a NEW terminal before using the tex commands -- the updated PATH is not visible to any window that was already open."
+        }
+        $LblFooter.Text = "Done"
+    } else {
+        $Bar.Value = 0
+        $what = if ($S.DryRun) { "Dry run failed" } else { "Installation failed" }
+        if ($Code -lt 0) {
+            $LblPhase.Text = "$what (exit code could not be read)"
+            $LblElapsed.Text = "The installer stopped but did not report a code. The log below is the reliable account of what happened."
+            $LblFooter.Text = "Failed"
+        } else {
+            $LblPhase.Text = "$what (exit code $Code)"
+            $LblElapsed.Text = if ($ExitMeanings.ContainsKey($Code)) { $ExitMeanings[$Code] } else { "See the log below for what went wrong." }
+            $LblFooter.Text = "Failed -- exit code $Code"
+        }
+    }
+}
+
+function Start-Install {
+    $installTo = $TxtInstallPath.Text.Trim()
+    if (-not $installTo) {
+        [Windows.MessageBox]::Show("Choose an install location first.", "TeXLib Installer", 'OK', 'Warning') | Out-Null
+        return
+    }
+
+    $scheme = @('full', 'medium', 'basic')[$CmbScheme.SelectedIndex]
+
+    $argList = @(
+        "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "`"$InstallPs1`"",
+        "-Silent", "-InstallPath", "`"$installTo`"", "-TexLiveScheme", $scheme
+    )
+    if ($TxtLibPath.Text.Trim()) { $argList += @("-TeXLibPath", "`"$($TxtLibPath.Text.Trim())`"") }
+    if ($ChkHideJunction.IsChecked) { $argList += "-HideJunction" }
+    $S.DryRun = [bool]$ChkDryRun.IsChecked
+    if ($S.DryRun) { $argList += "-DryRun" }
+
+    $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
+    $S.OutFile = Join-Path $env:TEMP "TeXLib-gui-$stamp.out.log"
+    $S.ErrFile = Join-Path $env:TEMP "TeXLib-gui-$stamp.err.log"
+    $S.LogPath = $S.OutFile
+    $S.Offset  = 0
+    $S.Cancelled = $false
+    $S.Started = Get-Date
+
+    $PageOptions.Visibility  = 'Collapsed'
+    $PageProgress.Visibility = 'Visible'
+    $BtnPrimary.IsEnabled = $false
+    $BtnPrimary.Content = if ($S.DryRun) { "Checking..." } else { "Installing..." }
+    $BtnCancel.Content = "Cancel"
+    Set-Phase $(if ($S.DryRun) { "Checking this machine" } else { "Starting the installer" }) 1
+    # Skip 5: the first five entries are the powershell.exe bootstrap
+    # (-NoProfile -ExecutionPolicy Bypass -File <path>), not installer options.
+    Add-Log ("> install.ps1 " + (($argList | Select-Object -Skip 5) -join " ") + "`r`n`r`n")
+
+    try {
+        $S.Proc = Start-Process -FilePath "powershell.exe" -ArgumentList $argList `
+            -RedirectStandardOutput $S.OutFile -RedirectStandardError $S.ErrFile `
+            -WindowStyle Hidden -PassThru
+        # Touch .Handle while the process is still alive. Without this the
+        # object returned by Start-Process -PassThru reports $null for
+        # .ExitCode once it exits -- even after WaitForExit() -- because
+        # nothing kept the process handle open for .NET to read the code from.
+        # $null coerces to 0 through Complete-Run's [int] parameter, so a
+        # FAILED install would have been reported as a successful one.
+        $null = $S.Proc.Handle
+    } catch {
+        Add-Log "Could not start the installer: $_`r`n"
+        Complete-Run 11
+        return
+    }
+
+    $S.Running = $true
+    $S.Timer = New-Object Windows.Threading.DispatcherTimer
+    $S.Timer.Interval = [TimeSpan]::FromMilliseconds(400)
+    $S.Timer.Add_Tick({
+        $chunk = Read-NewOutput
+        if ($chunk) {
+            Add-Log $chunk
+            foreach ($line in ($chunk -split "`r?`n")) {
+                foreach ($p in $Phases) {
+                    # .Contains, NOT -like: install.ps1 prints "[TeX Live] finished",
+                    # and -like would read "[TeX Live]" as a wildcard character class,
+                    # so that marker could never match. Plain substring matching also
+                    # keeps any future marker containing [ ] * ? safe by default.
+                    if ($line.Contains($p.Match)) { Set-Phase $p.Label $p.Pct }
+                }
+                if ($line -match '\[TeX Live\] still going\.\.\. ([\d.]+) min elapsed') {
+                    $LblElapsed.Text = "TeX Live: $($Matches[1]) minutes elapsed. Most of this is download time from the CTAN mirror."
+                }
+            }
+        }
+        if ($S.Proc.HasExited) {
+            Start-Sleep -Milliseconds 150      # let the last buffered write land
+            Add-Log (Read-NewOutput)
+            try {
+                if ((Test-Path $S.ErrFile) -and (Get-Item $S.ErrFile).Length -gt 0) {
+                    Add-Log "`r`n--- stderr ---`r`n"
+                    Add-Log ([IO.File]::ReadAllText($S.ErrFile))
+                }
+            } catch { $null = $_ }
+            # Belt and braces: if the handle trick above ever fails us, report
+            # an unknown code rather than silently calling a failure a success.
+            $code = if ($null -ne $S.Proc.ExitCode) { [int]$S.Proc.ExitCode } else { -1 }
+            Complete-Run $code
+        }
+    })
+    $S.Timer.Start()
+}
+
+$BtnPrimary.Add_Click({
+    if ($S.Running) { return }
+    if ($BtnPrimary.Content -eq "Close") { $Win.Close(); return }
+    Start-Install
+})
+
+$BtnCancel.Add_Click({
+    if (-not $S.Running) { $Win.Close(); return }
+    $ans = [Windows.MessageBox]::Show(
+        "Stop the install?`n`nWhatever has been written so far stays on disk. Run uninstall.bat afterwards to clear it out.",
+        "TeXLib Installer", 'YesNo', 'Warning')
+    if ($ans -eq 'Yes') {
+        $S.Cancelled = $true
+        Stop-Child
+    }
+})
+
+$BtnLog.Add_Click({
+    if ($S.LogPath -and (Test-Path $S.LogPath)) { Start-Process notepad.exe $S.LogPath }
+})
+
+# Closing the window mid-install must not orphan a 6 GB download.
+$Win.Add_Closing({
+    param($sender, $e)
+    if ($S.Running) {
+        $ans = [Windows.MessageBox]::Show(
+            "The install is still running. Close and stop it?",
+            "TeXLib Installer", 'YesNo', 'Warning')
+        if ($ans -ne 'Yes') { $e.Cancel = $true; return }
+        $S.Cancelled = $true
+        Stop-Child
+    }
+})
+
+$HeaderSub.Text = "Sublime Text, SumatraPDF and TeX Live, configured for the TeXLib library."
+$null = $Win.ShowDialog()

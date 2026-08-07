@@ -1645,15 +1645,16 @@ jobs:
 
           # Every file install.bat / uninstall.bat invoke must ship, or the .bat
           # flashes open and dies (PowerShell -File on a missing script).
-          $required = @('install.bat','uninstall.bat',
+          $required = @('install.bat','install-gui.bat','uninstall.bat',
                         'tools\boot_wrapper.ps1','tools\install.ps1','tools\uninstall.ps1',
+                        'tools\install-gui.ps1',
                         'texlib','templates')
           $missing = $required | Where-Object { -not (Test-Path (Join-Path $stage $_)) }
           if ($missing) { Write-Host "FAIL: bundle missing: $($missing -join ', ')" -ForegroundColor Red; exit 1 }
           # And the .ps1 files must NOT be at the release root: the whole point
-          # of tools\ is that a user opening the folder sees only the two .bat
+          # of tools\ is that a user opening the folder sees only the .bat
           # files, with nothing beside them to mis-click.
-          foreach ($r in 'install.ps1','uninstall.ps1') {
+          foreach ($r in 'install.ps1','uninstall.ps1','install-gui.ps1') {
             if (Test-Path (Join-Path $stage $r)) {
               Write-Host "FAIL: $r is at the bundle root; it belongs in tools\" -ForegroundColor Red; exit 1
             }
@@ -1701,6 +1702,94 @@ jobs:
           [void][System.Management.Automation.Language.Parser]::ParseFile((Join-Path $stage 'tools\boot_wrapper.ps1'), [ref]$null, [ref]$werr)
           if ($werr) { Write-Host "FAIL: shipped boot_wrapper.ps1 has parse errors" -ForegroundColor Red; exit 1 }
           Write-Host "OK: release bundle contains every file install.bat needs." -ForegroundColor Green
+
+  # ---------------------------------------------------------------------------
+  # 5b. gui — FAST. install-gui.ps1 is a front-end that reads install.ps1's
+  #     console output to drive its progress display, so the coupling that can
+  #     rot silently is the PHASE MARKERS: rename a Write-Host banner in
+  #     install.ps1 and the GUI still installs correctly but shows a bar that
+  #     never moves. Nothing else in CI would notice. This job also loads the
+  #     XAML for real (a typo there is a crash on launch, not a warning) and
+  #     checks every FindName target resolves.
+  # ---------------------------------------------------------------------------
+  gui:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: install-gui.ps1 parses and is ASCII
+        shell: powershell
+        run: |
+          $e = $null
+          [void][System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path .\tools\install-gui.ps1), [ref]$null, [ref]$e)
+          if ($e) { $e | ForEach-Object { Write-Host "  $($_.Message)" -ForegroundColor Red }; Write-Host "FAIL: install-gui.ps1 has parse errors" -ForegroundColor Red; exit 1 }
+          $bytes = [IO.File]::ReadAllBytes((Resolve-Path .\tools\install-gui.ps1))
+          $n = 0; foreach ($b in $bytes) { if ($b -gt 0x7F) { $n++ } }
+          if ($n -gt 0) { Write-Host "FAIL: install-gui.ps1 has $n non-ASCII bytes (see encoding-guard)" -ForegroundColor Red; exit 1 }
+          Write-Host "OK: parses, ASCII-only." -ForegroundColor Green
+
+      - name: XAML loads and every FindName target resolves
+        shell: powershell
+        run: |
+          $code = @'
+          Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase, System.Xaml
+          $gui = Get-Content .\tools\install-gui.ps1 -Raw
+          $s = $gui.IndexOf('<Window'); $e = $gui.IndexOf('</Window>')
+          if ($s -lt 0 -or $e -lt 0) { Write-Host "FAIL: no XAML block found" -ForegroundColor Red; exit 1 }
+          $win = [Windows.Markup.XamlReader]::Load((New-Object System.Xml.XmlNodeReader ([xml]$gui.Substring($s, $e - $s + 9))))
+          $names = [regex]::Matches($gui, '\$Win\.FindName\("([^"]+)"\)') | ForEach-Object { $_.Groups[1].Value } | Sort-Object -Unique
+          $missing = @($names | Where-Object { $null -eq $win.FindName($_) })
+          if ($missing.Count) { Write-Host "FAIL: FindName targets absent from the XAML: $($missing -join ', ')" -ForegroundColor Red; exit 1 }
+          Write-Host "OK: XAML loads; all $($names.Count) FindName targets resolve." -ForegroundColor Green
+          '@
+          Set-Content -Path "$env:RUNNER_TEMP\gui-xaml.ps1" -Value $code -Encoding UTF8
+          # -STA: XamlReader needs a single-threaded apartment.
+          powershell.exe -STA -NoProfile -ExecutionPolicy Bypass -File "$env:RUNNER_TEMP\gui-xaml.ps1"
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
+      - name: Phase markers still appear in install.ps1
+        shell: powershell
+        run: |
+          $gui = Get-Content .\tools\install-gui.ps1 -Raw
+          $inst = Get-Content .\tools\install.ps1 -Raw
+          $ps = $gui.IndexOf('$Phases = @('); $pe = $gui.IndexOf("`n)", $ps)
+          if ($ps -lt 0 -or $pe -lt 0) { Write-Host "FAIL: could not find the `$Phases table" -ForegroundColor Red; exit 1 }
+          $phases = Invoke-Expression ($gui.Substring($ps, $pe - $ps + 2) -replace '^\$Phases\s*=\s*', '')
+          if (-not $phases -or $phases.Count -eq 0) { Write-Host "FAIL: `$Phases table is empty" -ForegroundColor Red; exit 1 }
+          # A marker install.ps1 prints literally is checked as a substring. A
+          # marker it composes at runtime ("Downloading $($Info.File)...") is
+          # nowhere in the source, so those declare an Emit naming the
+          # construct that prints them and we check that instead.
+          $stale = @($phases | Where-Object {
+            $probe = if ($_.Emit) { $_.Emit } else { $_.Match }
+            -not $inst.Contains($probe)
+          })
+          if ($stale.Count) {
+            Write-Host "FAIL: these GUI phase markers no longer track install.ps1 --" -ForegroundColor Red
+            $stale | ForEach-Object {
+              $probe = if ($_.Emit) { "emitter '$($_.Emit)'" } else { "marker '$($_.Match)'" }
+              Write-Host "  $probe  (label: $($_.Label))" -ForegroundColor Red
+            }
+            Write-Host "The GUI would still install correctly but its progress bar would stall." -ForegroundColor Red
+            exit 1
+          }
+          # The three download markers only match because the pinned file names
+          # start with these strings. Re-pin to a differently-named artifact and
+          # the marker silently stops firing, which is exactly the rot this job
+          # exists to catch.
+          foreach ($prefix in 'sublime_text', 'SumatraPDF', 'install-tl') {
+            if ($inst -notmatch [regex]::Escape("`"File`"") + '\s*=\s*"' + [regex]::Escape($prefix)) {
+              Write-Host "FAIL: no pinned download whose File starts with '$prefix'; the GUI's 'Downloading $prefix' marker is dead" -ForegroundColor Red
+              exit 1
+            }
+          }
+          # Markers are matched with .Contains, never -like: install.ps1 prints
+          # "[TeX Live] finished", and -like would read the brackets as a
+          # wildcard character class so that marker could never fire.
+          if ($gui -match '\$line\s+-like') {
+            Write-Host "FAIL: phase matching uses -like; use .Contains (brackets in markers)" -ForegroundColor Red; exit 1
+          }
+          Write-Host "OK: all $($phases.Count) phase markers still present in install.ps1." -ForegroundColor Green
 
   # ---------------------------------------------------------------------------
   # 6. full-install — SLOW, GATED. Real -Silent install on a clean throwaway VM,

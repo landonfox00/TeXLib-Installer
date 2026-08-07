@@ -4,6 +4,54 @@ All notable changes to TeXLib-Installer are recorded here. Format follows [Keep 
 
 ## [Unreleased]
 
+## [0.10.0] — 2026-08-07
+
+A graphical installer, for handing to someone who should not have to read a
+console to install a text editor.
+
+### Added
+
+- **`install-gui.bat` — a WPF installer window.** Pick the install location and
+  the TeX Live scheme, optionally set the library path and the junction
+  attribute under Advanced, then watch a progress bar and a live log. On
+  failure it names the step that failed rather than printing a bare exit code,
+  and offers the log in one click.
+
+  It is a **front-end, not a second installer**: it builds an argument list,
+  runs `install.ps1 -Silent` as a child process, and tails that process's
+  output. Nothing about what gets installed or written lives in the GUI, so
+  `install.ps1` remains the single implementation and the only thing the
+  install jobs in CI exercise. `install.bat` is unchanged and is still the
+  scriptable surface — the GUI is an addition, not a replacement, because
+  quietly changing what a double-click does is how you surprise the person who
+  has been using the console one for a year.
+- **A dry-run tick box.** Maps to the existing `-DryRun`: runs the pre-flight
+  checks and reports what a real install would do, without downloading or
+  writing anything. Seconds, not an hour, and the natural first thing to do on
+  an unfamiliar machine.
+- **`gui` CI job.** The GUI reads `install.ps1`'s console banners to drive its
+  progress bar, which is a coupling that rots silently — rename a banner and
+  the install still works perfectly behind a bar that never moves. The job
+  asserts every phase marker still tracks `install.ps1`, loads the XAML for
+  real (a typo there is a crash on launch, not a warning), checks every
+  `FindName` target resolves, and holds the file to the same ASCII rule as
+  `install.ps1`.
+
+### Fixed
+
+- **Found while building the above: `Start-Process -PassThru` reports `$null`
+  for `.ExitCode`**, even after `WaitForExit()`, unless something kept the
+  process handle open. `$null` coerces to `0` through an `[int]` parameter, so
+  the first draft of the GUI would have reported a **failed install as a
+  successful one**. Touching `.Handle` while the child is alive fixes it;
+  verified against exit codes 0, 5 and 7, and there is a fallback that reports
+  an unknown code rather than assuming success.
+- **The `[TeX Live] finished` phase marker could never have matched.** It was
+  compared with `-like`, which reads `[TeX Live]` as a wildcard character
+  class. Matching is now plain `.Contains`, which also keeps any future marker
+  containing `[ ] * ?` safe by default; CI fails the build if `-like` comes
+  back.
+
 ## [0.9.5] — 2026-08-07
 
 `plugin_host-3.8 has exited unexpectedly` again, on a work machine, from a clean
