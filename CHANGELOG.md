@@ -4,6 +4,126 @@ All notable changes to TeXLib-Installer are recorded here. Format follows [Keep 
 
 ## [Unreleased]
 
+## [0.10.1] — 2026-08-08
+
+### Added
+
+- **`uninstall-gui.bat` — a graphical uninstaller.** It shows what is actually
+  installed at a location, with folder sizes, and gives you a tick box per
+  component so you can drop the editor and keep the 6 GB TeX Live tree. That
+  choice is not new — `uninstall.ps1` has confirmed each component separately
+  at the console since 0.6.x — but nothing put a window on it, and the console
+  is not what you hand a colleague.
+
+  Front-end only, same as the installer: it maps boxes to the switches that
+  choice already had (`-KeepSublime`, `-KeepSumatra`, `-KeepTeXLive`,
+  `-RemoveLibrary`, `-RemoveJunction`, `-Force`) and runs
+  `uninstall.ps1 -Silent`.
+
+  The boxes say "remove X" while the switches say "keep X", and that inversion
+  is where a bug would quietly delete something someone meant to keep — so CI
+  asserts the wiring, and a case table covers all 16 tick combinations plus the
+  ticked-but-not-installed case. A component that is absent is shown disabled
+  and can never contribute a switch.
+
+  **Nothing is pre-ticked.** The console's own defaults do remove the programs,
+  and the form followed them at first, but a window that opens with a 6 GB tree
+  already marked for deletion is a different proposition from one you opt into
+  — and the two mistakes do not cost the same. An unticked box you meant to
+  tick costs a second run; a ticked box you failed to notice costs a
+  multi-hour re-download. CI fails the build if anything pre-ticks again.
+
+  Two bugs found by running it for real rather than by reading it:
+  - `foreach ($s in @($S.OutStream, $S.ErrStream))` — **PowerShell variable
+    names are case-insensitive**, so `$s` *is* `$S`, and the loop rebound the
+    state hashtable the whole file hangs off to a `FileStream`. Everything
+    after it in that branch threw, the catch fired, and a **successful
+    uninstall was reported as a failure**. `install-gui.ps1` had used `$st` and
+    was unaffected; CI now rejects `$s` in both.
+  - The phase table named four banners `uninstall.ps1` does not print. They are
+    composed from a `-Label` parameter, so they carry an `Emit` now, and the
+    progress bar actually advances.
+
+  Verified end to end on a throwaway install: ticking everything except TeX
+  Live produced exactly `-KeepTeXLive -RemoveLibrary`, removed Sublime Text,
+  SumatraPDF and the library, left the TeX Live tree on disk, left Desktop
+  shortcuts pointing elsewhere alone, and exited 0.
+- **`-Reinstall <components>` — replace some components, keep the rest.**
+  `-Silent` was all-or-nothing skip, so there was no way to say "replace
+  Sublime, keep the 6 GB TeX Live tree" without a human at the keyboard. That
+  also meant the **GUI was a downgrade from the console** on this exact point:
+  it drives `-Silent`, so it could not offer the `[S]kip or [R]einstall` choice
+  the interactive prompt has always had.
+
+      install.bat -Silent -Reinstall Sublime
+      install.bat -Silent -Reinstall Sublime,SumatraPDF
+      install.bat -Silent -Reinstall All
+
+  It is a comma-separated **string**, not a `[string[]]` with a `ValidateSet`,
+  and that is deliberate: `powershell.exe -File install.ps1 -Reinstall
+  Sublime,TeXLive` — exactly how the GUI invokes it — does no array parsing and
+  hands the whole value over as one token, which a `[string[]]` parameter then
+  rejects. Caught while testing the GUI path, which is the only path where it
+  shows. Tokens are split on commas, semicolons or whitespace, matched
+  case-insensitively, and an unknown one fails with the offending token named.
+- **The GUI detects what is already installed** under the chosen location and
+  offers a tick box per component, with folder sizes, defaulting to leaving
+  everything alone. Sizing is capped at 1.2 s and silently gives up rather than
+  freezing the window on a 100k-file TeX Live tree. Boxes for components that
+  are not present are cleared as well as hidden, so a path change cannot leave
+  a stale tick behind that silently re-downloads several GB.
+- **`unit-helpers` covers the parsing and the skip/reinstall decisions**,
+  including an assertion that `-Reinstall` is still a `[string]` — the
+  `[string[]]` regression is invisible until someone actually runs the GUI.
+
+### Fixed
+
+- **A TeXLib git checkout was detected as a pre-0.6.3 library and copied into
+  the install root.** `Test-TeXLibLibraryDir` asks only whether the core
+  `.sty` files are present, and the library's own source repo obviously has
+  them — while `Documents\TeXLib` is *both* the default checkout location and
+  the default pre-0.6.3 install location, so on a maintainer's machine the two
+  collide exactly. Migrating a checkout is wrong in both directions: the copy
+  is a detached snapshot, so later commits never reach the install and edits to
+  the install never reach the repo. A candidate carrying `.git` is now skipped
+  with a note naming `-TeXLibPath` as the way to install against a checkout on
+  purpose, and the "this is the GitHub source download" pre-flight failure
+  grows a maintainer-specific variant — telling someone with a perfectly good
+  library checkout on disk to go download a release zip was wrong advice.
+- **The library-copy paths carried the dev-only test suite.** A legacy
+  migration and the Sublime settings carry-over both copy a folder straight off
+  the user's disk, and that folder's `Sublime\` becomes `Packages\User` through
+  the settings junction — so they reintroduced exactly what 0.9.5 removed from
+  the bundle, by a different door. 16b-1b purged it afterwards so no plugin
+  host died, but not copying it beats cleaning up after it. One shared
+  exclusion list (`.git`, `.github`, `__pycache__`, `test_*.py`, `_testkit.py`)
+  now covers both, and the bundle deploy uses it too: `-OnlyTeXLib` run from an
+  *older* release folder deploys that older, unfiltered bundle.
+
+### Removed
+
+- **`"update_check": false` — it never did anything.** The setting went into
+  the Preferences template in 0.7.2 to stop Sublime's "Update Available"
+  dialog on the pinned portable build. `update_check` is a **command**, not a
+  preference: it is the Help -> Check for Updates menu item, defined in
+  `Default.sublime-package`'s `Default.sublime-commands` and `Main.sublime-menu`.
+  Sublime 4200's own default `Preferences.sublime-settings` documents 196
+  settings keys and `update_check` is not among them, and unrecognised keys are
+  silently ignored. Verified against the shipped 4200 build.
+
+  It was inert for three releases while two CHANGELOG entries and a template
+  comment asserted otherwise; all three now say so. The update prompt seen on a
+  work machine on 2026-08-07 was correct behaviour, not a mystery -- nothing
+  was ever disabling the check. **No supported mechanism for suppressing it has
+  been found**, and rather than ship another guess the template now records
+  what was ruled out. The pin bump remains the real answer: the prompt returns
+  only when Sublime ships something newer than what we pin.
+- **The `config-artifacts` assertion that rubber-stamped it.** It checked that
+  the string `"update_check": false` appeared in the deployed preferences --
+  that a string was in a file, not that it had any effect -- and was green
+  throughout. It now asserts `build_system` still pins Ctrl+B to TeXLib's build
+  (a real, checkable behaviour) and fails if `update_check` ever comes back.
+
 ## [0.10.0] — 2026-08-07
 
 A graphical installer, for handing to someone who should not have to read a
@@ -128,6 +248,10 @@ that showed up next to it, by moving the pin rather than defending it.
 
   `"update_check": false` stays. It is not there to keep you on an old build,
   it is there so the build changes when the installer says so.
+
+  **Correction (0.10.1):** that last sentence is wrong, and so is the v0.7.2
+  entry it rests on. `update_check` is a *command*, not a preference, so the
+  setting never did anything. See 0.10.1.
 
 ### Fixed
 
@@ -443,6 +567,9 @@ From reading a real install log on a returning work machine.
   what the installer configured around it. `"update_check": false` is now in the
   Preferences template; updates arrive with a new installer release instead
   (`install.bat -Update`).
+  - **This fix did not work and was removed in 0.10.1.** `update_check` is a
+    command, not a preference. The setting was inert from the day it shipped,
+    and the update prompt it claimed to stop kept appearing.
 
 ## [0.7.1] — 2026-08-03
 

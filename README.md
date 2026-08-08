@@ -22,6 +22,7 @@ Everything lands under one root, which is what makes uninstall a single director
 .
 ├── install-gui.bat              # graphical installer -- what to hand a colleague
 ├── install.bat                  # console installer -- scriptable surface, what CI drives
+├── uninstall-gui.bat            # graphical uninstaller -- pick what goes
 ├── uninstall.bat
 ├── templates/                   # config templates with {{...}} placeholders
 │   ├── LaTeXTools.sublime-settings
@@ -30,6 +31,7 @@ Everything lands under one root, which is what makes uninstall a single director
 ├── tools/
 │   ├── install.ps1              # main installer (runs end-to-end install)
 │   ├── install-gui.ps1          # WPF front-end: collects options, runs install.ps1 -Silent, shows progress
+│   ├── uninstall-gui.ps1        # WPF front-end: pick components, runs uninstall.ps1 -Silent
 │   ├── uninstall.ps1            # reverses install.ps1
 │   ├── boot_wrapper.ps1         # boot-log + always-pause wrapper for install.bat / uninstall.bat
 │   ├── make-release.ps1         # builds the release ZIP (installer + TeXLib bundle)   [not shipped]
@@ -51,7 +53,9 @@ The `.ps1` files live in `tools/` on purpose: an extracted release folder should
 
 `install-gui.bat` → `tools/install-gui.ps1` is a **front-end, not a second installer**. It builds an argument list, runs `install.ps1 -Silent` as a child process, and tails that process's output into a log pane. Every decision about what to install and what to write stays in `install.ps1`, which is still the only thing the install jobs in CI exercise — if the two ever disagree, `install.ps1` is right.
 
-The coupling that can rot silently is the GUI's phase table: it recognises `install.ps1`'s console banners to drive its progress bar, so renaming a banner leaves an install that works correctly behind a bar that never moves. The `gui` CI job asserts every marker still tracks `install.ps1` — literally for the ones printed as constants, and via a declared `Emit` construct for the four composed at runtime.
+`uninstall-gui.bat` → `tools/uninstall-gui.ps1` is the same arrangement over `uninstall.ps1`. Per-component removal is not new — the console has confirmed Sublime Text, SumatraPDF, TeX Live and the library separately since 0.6.x — the window just puts a form over the `-Keep*` switches that choice already had. Note the polarity: the tick boxes say **remove**, the switches say **keep**, so the GUI inverts them in one place and CI asserts the wiring, because getting it backwards deletes a 6 GB tree someone meant to keep.
+
+The coupling that can rot silently is each GUI's phase table: they recognise the console banners to drive their progress bars, so renaming a banner leaves a run that works correctly behind a bar that never moves. The `gui` CI job asserts every marker still tracks its script — literally for the ones printed as constants, and via a declared `Emit` construct for those composed at runtime (`"Downloading $($Info.File)..."`, `"Removing $Label ($Path)..."`).
 
 ## Installer flags
 
@@ -68,6 +72,7 @@ The coupling that can rot silently is the GUI's phase table: it recognises `inst
 | `-Update` | Fetch the newest release, verify it against its `SHA256SUMS`, and hand off to it. All your other arguments are forwarded. |
 | `-TexLiveScheme full\|medium\|basic` | TeX Live size. `full` (default, about 6 GB) is what TeXLib is tested against; `medium` measured **1.3 GB / 25.5 min** here, `basic` about 0.6 GB. Saves disk reliably, time much less so — the install is dominated by CTAN mirror speed. **`basic` is missing 30 of the 50 packages TeXLib needs**, so run `-Doctor` after any non-full install. |
 | `-Verify` | Check the install against the manifest written when it was made; reports files missing, changed, or added. Exit 22 if anything is missing or changed. |
+| `-Reinstall Sublime\|SumatraPDF\|TeXLive\|All` | Replace the named components even though they are already installed; anything not named is still left alone. Comma-separated. This is what makes a *partial* reinstall possible without a human at the keyboard — `-Silent` on its own skips every installed component. A plain string, not a `[string[]]`: `powershell.exe -File install.ps1 -Reinstall Sublime,TeXLive` does no array parsing, and that is how the GUI invokes it. |
 
 A `texlib.config.json` next to `install.bat` presets any of these — useful for lab deployment. Explicit command-line arguments always win:
 

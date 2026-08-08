@@ -246,6 +246,72 @@ jobs:
           if ($bad) { Write-Host "$bad case(s) failed." -ForegroundColor Red; exit 1 }
           Write-Host "OK: all $($cases.Count) version-comparison cases passed." -ForegroundColor Green
 
+      - name: Read-SkipOrReinstall / -Reinstall case table (extracted from install.ps1)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # -Reinstall is a comma-separated STRING, not a [string[]] with a
+          # ValidateSet, because `powershell.exe -File install.ps1 -Reinstall
+          # Sublime,TeXLive` -- exactly how install-gui.ps1 invokes it -- does
+          # no array parsing and hands the whole value over as one token. A
+          # [string[]] parameter then fails validation. That regressed once
+          # already; this table is what keeps it from regressing again.
+          $ast = [System.Management.Automation.Language.Parser]::ParseFile(
+                   (Resolve-Path .\tools\install.ps1), [ref]$null, [ref]$null)
+          foreach ($n in 'Get-ReinstallList','Test-ReinstallRequested','Read-SkipOrReinstall') {
+            $fn = $ast.FindAll({
+                    param($x)
+                    $x -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+                    $x.Name -eq $n }, $true)
+            if ($fn.Count -ne 1) {
+              Write-Host "FAIL: expected exactly 1 $n in install.ps1, found $($fn.Count)." -ForegroundColor Red; exit 1
+            }
+            . ([scriptblock]::Create($fn[0].Extent.Text))
+          }
+          $bad = 0
+          # The parameter must still be a plain [string]; a [string[]] here is
+          # the regression, and it is invisible until someone runs the GUI.
+          $param = $ast.ParamBlock.Parameters | Where-Object { $_.Name.VariablePath.UserPath -eq 'Reinstall' }
+          if (-not $param) { Write-Host "FAIL: install.ps1 has no -Reinstall parameter." -ForegroundColor Red; exit 1 }
+          if ($param.StaticType.Name -ne 'String') {
+            Write-Host "FAIL: -Reinstall is [$($param.StaticType.Name)]; it must be [string] so -File invocation works." -ForegroundColor Red; $bad++
+          }
+          foreach ($c in @(
+            @{ Raw = 'Sublime,TeXLive'; Err = $false; List = @('Sublime','TeXLive') },
+            @{ Raw = 'sublime, texlive'; Err = $false; List = @('Sublime','TeXLive') },
+            @{ Raw = 'Sublime;SumatraPDF'; Err = $false; List = @('Sublime','SumatraPDF') },
+            @{ Raw = 'All'; Err = $false; List = @('All') },
+            @{ Raw = 'Emacs'; Err = $true;  List = @() }
+          )) {
+            $p = Get-ReinstallList $c.Raw
+            if ($c.Err) {
+              if (-not $p.Error) { Write-Host "FAIL: '$($c.Raw)' should be rejected." -ForegroundColor Red; $bad++ }
+              else { "PASS  '$($c.Raw)' rejected on '$($p.Error)'" }
+            } else {
+              if (($p.List -join ',') -ne ($c.List -join ',')) {
+                Write-Host "FAIL: '$($c.Raw)' -> '$($p.List -join ',')', expected '$($c.List -join ',')'" -ForegroundColor Red; $bad++
+              } else { "PASS  '$($c.Raw)' -> $($p.List -join '|')" }
+            }
+          }
+          # -Silent alone must still skip EVERYTHING; that default is what the
+          # unattended and lab-deployment paths rely on.
+          $Silent = $true
+          foreach ($c in @(
+            @{ R = @();                     C = 'Sublime Text'; Want = $false },
+            @{ R = @('Sublime');            C = 'Sublime Text'; Want = $true  },
+            @{ R = @('Sublime');            C = 'TeX Live';     Want = $false },
+            @{ R = @('Sublime','TeXLive');  C = 'TeX Live';     Want = $true  },
+            @{ R = @('All');                C = 'SumatraPDF';   Want = $true  }
+          )) {
+            $ReinstallList = $c.R
+            $got = Read-SkipOrReinstall -ComponentName $c.C 6>$null
+            if ($got -ne $c.Want) {
+              Write-Host "FAIL: -Reinstall [$($c.R -join ',')] vs '$($c.C)' -> $got, expected $($c.Want)" -ForegroundColor Red; $bad++
+            } else { "PASS  -Reinstall [$($c.R -join ',')] vs '$($c.C)' -> $got" }
+          }
+          if ($bad) { Write-Host "$bad case(s) failed." -ForegroundColor Red; exit 1 }
+          Write-Host "OK: -Reinstall parsing and skip/reinstall decisions all correct." -ForegroundColor Green
+
       - name: Get-MissingTexPackage case table (extracted from install.ps1)
         shell: pwsh
         run: |
@@ -1326,8 +1392,25 @@ jobs:
 
           # --- editor preferences --------------------------------------------
           $prefs = Get-Content (Join-Path $env:LIB_ROOT 'Sublime\Preferences.sublime-settings') -Raw
-          if ($prefs -notmatch '"update_check"\s*:\s*false') {
-            Write-Host "FAIL: deployed Preferences do not disable Sublime's update check." -ForegroundColor Red; $fail++
+          # Assert the setting that actually DOES something. build_system pins
+          # Ctrl+B to TeXLib's build; LaTeXTools ships a "Compile to PDF" build
+          # with the same text.tex.latex selector, so losing this line makes the
+          # pick ambiguous and only TeXLib's build exposes the Ctrl+Shift+B mode
+          # variants. That is a real, checkable behaviour.
+          if ($prefs -notmatch '"build_system"\s*:\s*"Packages/User/TeXLib\.sublime-build"') {
+            Write-Host "FAIL: deployed Preferences do not pin Ctrl+B to the TeXLib build system." -ForegroundColor Red; $fail++
+          }
+          # And assert the dead setting stays dead. Until 0.10.1 this job
+          # asserted "update_check": false was PRESENT -- which tested that a
+          # string was in a file, not that it did anything, and was green for
+          # three releases while the thing it claimed to verify never worked.
+          # update_check is a COMMAND (Help -> Check for Updates), not a
+          # preference; Sublime 4200's defaults document 196 keys and it is not
+          # one of them, and unknown keys are silently ignored.
+          # Anchored to the start of a line so it catches a real settings entry
+          # and not the template's own comment explaining why it is gone.
+          if ($prefs -match '(?m)^\s*"update_check"\s*:') {
+            Write-Host "FAIL: 'update_check' is back as a setting in the deployed Preferences. It is a command, not a preference, and does nothing there." -ForegroundColor Red; $fail++
           }
 
           # --- Start Menu group ----------------------------------------------
@@ -1645,16 +1728,16 @@ jobs:
 
           # Every file install.bat / uninstall.bat invoke must ship, or the .bat
           # flashes open and dies (PowerShell -File on a missing script).
-          $required = @('install.bat','install-gui.bat','uninstall.bat',
+          $required = @('install.bat','install-gui.bat','uninstall.bat','uninstall-gui.bat',
                         'tools\boot_wrapper.ps1','tools\install.ps1','tools\uninstall.ps1',
-                        'tools\install-gui.ps1',
+                        'tools\install-gui.ps1','tools\uninstall-gui.ps1',
                         'texlib','templates')
           $missing = $required | Where-Object { -not (Test-Path (Join-Path $stage $_)) }
           if ($missing) { Write-Host "FAIL: bundle missing: $($missing -join ', ')" -ForegroundColor Red; exit 1 }
           # And the .ps1 files must NOT be at the release root: the whole point
           # of tools\ is that a user opening the folder sees only the .bat
           # files, with nothing beside them to mis-click.
-          foreach ($r in 'install.ps1','uninstall.ps1','install-gui.ps1') {
+          foreach ($r in 'install.ps1','uninstall.ps1','install-gui.ps1','uninstall-gui.ps1') {
             if (Test-Path (Join-Path $stage $r)) {
               Write-Host "FAIL: $r is at the bundle root; it belongs in tools\" -ForegroundColor Red; exit 1
             }
@@ -1717,30 +1800,64 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: install-gui.ps1 parses and is ASCII
+      - name: Both GUI scripts parse and are ASCII
         shell: powershell
         run: |
-          $e = $null
-          [void][System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path .\tools\install-gui.ps1), [ref]$null, [ref]$e)
-          if ($e) { $e | ForEach-Object { Write-Host "  $($_.Message)" -ForegroundColor Red }; Write-Host "FAIL: install-gui.ps1 has parse errors" -ForegroundColor Red; exit 1 }
-          $bytes = [IO.File]::ReadAllBytes((Resolve-Path .\tools\install-gui.ps1))
-          $n = 0; foreach ($b in $bytes) { if ($b -gt 0x7F) { $n++ } }
-          if ($n -gt 0) { Write-Host "FAIL: install-gui.ps1 has $n non-ASCII bytes (see encoding-guard)" -ForegroundColor Red; exit 1 }
-          Write-Host "OK: parses, ASCII-only." -ForegroundColor Green
+          $bad = 0
+          foreach ($f in '.\tools\install-gui.ps1', '.\tools\uninstall-gui.ps1') {
+            $e = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $f), [ref]$null, [ref]$e)
+            if ($e) { $e | ForEach-Object { Write-Host "  $($_.Message)" -ForegroundColor Red }; Write-Host "FAIL: $f has parse errors" -ForegroundColor Red; $bad++ }
+            $bytes = [IO.File]::ReadAllBytes((Resolve-Path $f))
+            $n = 0; foreach ($b in $bytes) { if ($b -gt 0x7F) { $n++ } }
+            if ($n -gt 0) { Write-Host "FAIL: $f has $n non-ASCII bytes (see encoding-guard)" -ForegroundColor Red; $bad++ }
+          }
+          # Both GUIs hang all their mutable state off $S. PowerShell variable
+          # names are case-INSENSITIVE, so any loop or assignment using $s
+          # silently rebinds that hashtable -- which is exactly how a successful
+          # uninstall came to be reported as a failure: `foreach ($s in ...)`
+          # turned $S into a FileStream mid-tick, the rest of the branch threw,
+          # and the catch reported an unknown exit code.
+          # The [^#] guards matter: both files EXPLAIN this trap in a comment
+          # that necessarily contains the offending text, and a naive match
+          # flags the explanation instead of the code. (The update_check
+          # assertion tripped over exactly this, one job over.)
+          foreach ($f in '.\tools\install-gui.ps1', '.\tools\uninstall-gui.ps1') {
+            $src = Get-Content $f -Raw
+            if ($src -match '(?m)^[^#\r\n]*foreach\s*\(\s*\$s\s+in\s') {
+              Write-Host "FAIL: $f binds `$s in a foreach; that IS `$S (case-insensitive) and clobbers the state hashtable. Use `$st." -ForegroundColor Red
+              $bad++
+            }
+            # -cmatch, case-SENSITIVE, on purpose. Case-insensitively there is
+            # no difference between the accident and the legitimate `$S = @{...}`
+            # declaration this file must make exactly once -- they are the same
+            # variable, which is the whole hazard. A lowercase `$s = ` is the
+            # one form that is always a mistake.
+            if ($src -cmatch '(?m)^[^#\r\n]*(?<![\w.])\$s\s*=\s') {
+              Write-Host "FAIL: $f assigns to lowercase `$s; that IS `$S and clobbers the state hashtable." -ForegroundColor Red
+              $bad++
+            }
+          }
+          if ($bad) { exit 1 }
+          Write-Host "OK: both parse, ASCII-only, no `$s/`$S collision." -ForegroundColor Green
 
       - name: XAML loads and every FindName target resolves
         shell: powershell
         run: |
           $code = @'
           Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase, System.Xaml
-          $gui = Get-Content .\tools\install-gui.ps1 -Raw
-          $s = $gui.IndexOf('<Window'); $e = $gui.IndexOf('</Window>')
-          if ($s -lt 0 -or $e -lt 0) { Write-Host "FAIL: no XAML block found" -ForegroundColor Red; exit 1 }
-          $win = [Windows.Markup.XamlReader]::Load((New-Object System.Xml.XmlNodeReader ([xml]$gui.Substring($s, $e - $s + 9))))
-          $names = [regex]::Matches($gui, '\$Win\.FindName\("([^"]+)"\)') | ForEach-Object { $_.Groups[1].Value } | Sort-Object -Unique
-          $missing = @($names | Where-Object { $null -eq $win.FindName($_) })
-          if ($missing.Count) { Write-Host "FAIL: FindName targets absent from the XAML: $($missing -join ', ')" -ForegroundColor Red; exit 1 }
-          Write-Host "OK: XAML loads; all $($names.Count) FindName targets resolve." -ForegroundColor Green
+          $bad = 0
+          foreach ($f in '.\tools\install-gui.ps1', '.\tools\uninstall-gui.ps1') {
+            $gui = Get-Content $f -Raw
+            $s = $gui.IndexOf('<Window'); $e = $gui.IndexOf('</Window>')
+            if ($s -lt 0 -or $e -lt 0) { Write-Host "FAIL: no XAML block in $f" -ForegroundColor Red; $bad++; continue }
+            $win = [Windows.Markup.XamlReader]::Load((New-Object System.Xml.XmlNodeReader ([xml]$gui.Substring($s, $e - $s + 9))))
+            $names = [regex]::Matches($gui, '\$Win\.FindName\("([^"]+)"\)') | ForEach-Object { $_.Groups[1].Value } | Sort-Object -Unique
+            $missing = @($names | Where-Object { $null -eq $win.FindName($_) })
+            if ($missing.Count) { Write-Host "FAIL: $f FindName targets absent from its XAML: $($missing -join ', ')" -ForegroundColor Red; $bad++ }
+            else { Write-Host "OK: $f XAML loads; all $($names.Count) FindName targets resolve." -ForegroundColor Green }
+          }
+          if ($bad) { exit 1 }
           '@
           Set-Content -Path "$env:RUNNER_TEMP\gui-xaml.ps1" -Value $code -Encoding UTF8
           # -STA: XamlReader needs a single-threaded apartment.
@@ -1790,6 +1907,63 @@ jobs:
             Write-Host "FAIL: phase matching uses -like; use .Contains (brackets in markers)" -ForegroundColor Red; exit 1
           }
           Write-Host "OK: all $($phases.Count) phase markers still present in install.ps1." -ForegroundColor Green
+
+      - name: Uninstaller phase markers still appear in uninstall.ps1
+        shell: powershell
+        run: |
+          $gui = Get-Content .\tools\uninstall-gui.ps1 -Raw
+          $un  = Get-Content .\tools\uninstall.ps1 -Raw
+          $ps = $gui.IndexOf('$Phases = @('); $pe = $gui.IndexOf("`n)", $ps)
+          if ($ps -lt 0 -or $pe -lt 0) { Write-Host "FAIL: could not find the `$Phases table" -ForegroundColor Red; exit 1 }
+          $phases = Invoke-Expression ($gui.Substring($ps, $pe - $ps + 2) -replace '^\$Phases\s*=\s*', '')
+          if (-not $phases -or $phases.Count -eq 0) { Write-Host "FAIL: `$Phases table is empty" -ForegroundColor Red; exit 1 }
+          $stale = @($phases | Where-Object { $probe = if ($_.Emit) { $_.Emit } else { $_.Match }; -not $un.Contains($probe) })
+          if ($stale.Count) {
+            Write-Host "FAIL: these uninstaller phase markers no longer track uninstall.ps1 --" -ForegroundColor Red
+            $stale | ForEach-Object { Write-Host "  '$($_.Match)' (label: $($_.Label))" -ForegroundColor Red }
+            exit 1
+          }
+          if ($gui -match '\$line\s+-like') {
+            Write-Host "FAIL: phase matching uses -like; use .Contains" -ForegroundColor Red; exit 1
+          }
+          Write-Host "OK: all $($phases.Count) uninstaller phase markers still present." -ForegroundColor Green
+
+      - name: The GUI uninstaller inverts remove/keep correctly
+        shell: powershell
+        run: |
+          # The tick boxes say "remove X"; the switches say "keep X". Getting
+          # that inversion backwards deletes a 6 GB tree someone meant to keep,
+          # so it is asserted rather than trusted. Mirrors Start-Uninstall.
+          $gui = Get-Content .\tools\uninstall-gui.ps1 -Raw
+          foreach ($pair in @(
+            @{ Box = 'ChkSublime'; Switch = '-KeepSublime' },
+            @{ Box = 'ChkSumatra'; Switch = '-KeepSumatra' },
+            @{ Box = 'ChkTexLive'; Switch = '-KeepTeXLive' }
+          )) {
+            # must be guarded by -not, i.e. UNticked adds the Keep switch
+            $rx = 'if \(-not \(\$' + $pair.Box + '\.IsChecked[^)]*\)\)\s*\{\s*\$argList \+= "' + [regex]::Escape($pair.Switch) + '"'
+            if ($gui -notmatch $rx) {
+              Write-Host "FAIL: $($pair.Box) does not map to $($pair.Switch) via -not (remove/keep inversion)" -ForegroundColor Red; exit 1
+            }
+          }
+          # The library box is the opposite polarity: ticked ADDS -RemoveLibrary.
+          if ($gui -notmatch 'if \(\$ChkLibrary\.IsChecked[^)]*\)\s*\{\s*\$argList \+= "-RemoveLibrary"') {
+            Write-Host "FAIL: ChkLibrary does not map to -RemoveLibrary when ticked" -ForegroundColor Red; exit 1
+          }
+          # Nothing may be pre-ticked. A window that opens with a 6 GB tree
+          # already marked for deletion is a different thing from one you opt
+          # into, and the two mistakes do not cost the same: an unticked box you
+          # meant to tick costs a second run; a ticked box you failed to notice
+          # costs a multi-hour re-download.
+          $s = $gui.IndexOf('<Window'); $e2 = $gui.IndexOf('</Window>')
+          $xaml = $gui.Substring($s, $e2 - $s + 9)
+          if ($xaml -match 'IsChecked\s*=\s*"[Tt]rue"') {
+            Write-Host "FAIL: a checkbox is pre-ticked in the uninstaller XAML." -ForegroundColor Red; exit 1
+          }
+          if ($gui -match '\$pair\.Box\.IsChecked\s*=\s*\$pair\.Has') {
+            Write-Host "FAIL: Update-Detection pre-ticks whatever is installed." -ForegroundColor Red; exit 1
+          }
+          Write-Host "OK: remove/keep inversion wired correctly; nothing pre-ticked." -ForegroundColor Green
 
   # ---------------------------------------------------------------------------
   # 6. full-install — SLOW, GATED. Real -Silent install on a clean throwaway VM,

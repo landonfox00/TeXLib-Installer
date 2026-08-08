@@ -94,7 +94,7 @@ Write-Host "Copying installer files..." -ForegroundColor Cyan
 # them in 0.10.0 -- install.bat stays the console/scriptable surface (it is
 # what CI drives), and the GUI is the one to hand a colleague.
 $InstallerFiles = @(
-    "install.bat", "install-gui.bat", "uninstall.bat",
+    "install.bat", "install-gui.bat", "uninstall.bat", "uninstall-gui.bat",
     "INSTALL.md", "README.md", "LICENSE", "CHANGELOG.md"
 )
 foreach ($f in $InstallerFiles) {
@@ -111,7 +111,7 @@ Copy-Item (Join-Path $RepoRoot "templates") $StageRoot -Recurse -Force
 # shipped three are present and the other two are not.
 $ToolsStage = Join-Path $StageRoot "tools"
 New-Item -ItemType Directory -Force -Path $ToolsStage | Out-Null
-foreach ($w in @("boot_wrapper.ps1", "install.ps1", "uninstall.ps1", "install-gui.ps1")) {
+foreach ($w in @("boot_wrapper.ps1", "install.ps1", "uninstall.ps1", "install-gui.ps1", "uninstall-gui.ps1")) {
     Copy-Item (Join-Path $RepoRoot "tools\$w") $ToolsStage -Force
 }
 

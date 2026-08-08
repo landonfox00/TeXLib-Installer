@@ -208,6 +208,18 @@ $Xaml = @'
           </StackPanel>
         </Expander>
 
+        <Border x:Name="PanelDetected" Background="#FFEAF3FB" BorderBrush="#FFA8C9E4" BorderThickness="1"
+                Padding="12,10" CornerRadius="3" Margin="0,0,0,16" Visibility="Collapsed">
+          <StackPanel>
+            <TextBlock Text="Already installed here" FontWeight="SemiBold" Margin="0,0,0,2"/>
+            <TextBlock Foreground="#FF3C566E" TextWrapping="Wrap" Margin="0,0,0,8"
+                       Text="These are left alone unless you tick them. Reinstalling Sublime Text keeps your settings (they live in the library, reached through the Packages\User junction) and re-fetches the binary plus LaTeXTools."/>
+            <CheckBox x:Name="ChkReSublime" Visibility="Collapsed" Margin="0,2,0,0"/>
+            <CheckBox x:Name="ChkReSumatra" Visibility="Collapsed" Margin="0,2,0,0"/>
+            <CheckBox x:Name="ChkReTexLive" Visibility="Collapsed" Margin="0,2,0,0"/>
+          </StackPanel>
+        </Border>
+
         <CheckBox x:Name="ChkDryRun" Content="Dry run - check this machine and report, but change nothing" Margin="0,0,0,4"/>
         <TextBlock Foreground="#FF5A6672" TextWrapping="Wrap" Margin="22,0,0,16"
                    Text="Runs the pre-flight checks and summarises what a real install would do, without downloading or writing anything. Takes seconds. Worth doing first on a machine you have not installed on before."/>
@@ -266,6 +278,10 @@ $SchemeNote      = $Win.FindName("SchemeNote")
 $TxtLibPath      = $Win.FindName("TxtLibPath")
 $ChkHideJunction = $Win.FindName("ChkHideJunction")
 $ChkDryRun       = $Win.FindName("ChkDryRun")
+$PanelDetected   = $Win.FindName("PanelDetected")
+$ChkReSublime    = $Win.FindName("ChkReSublime")
+$ChkReSumatra    = $Win.FindName("ChkReSumatra")
+$ChkReTexLive    = $Win.FindName("ChkReTexLive")
 $PageOptions     = $Win.FindName("PageOptions")
 $PageProgress    = $Win.FindName("PageProgress")
 $LblPhase        = $Win.FindName("LblPhase")
@@ -303,6 +319,67 @@ $S = @{
     DryRun    = $false
 }
 
+# Which components already exist under a given install root, and how big they
+# are. The probes mirror install.ps1's own layout ($BaseDir\Sublime Text,
+# \Sumatra, \TexLive\<year>) -- if that layout ever moves, these move with it.
+# Detection only decides what to OFFER; install.ps1 still decides what to do.
+function Get-InstalledComponent {
+    param([string]$Root)
+    $sublime = Join-Path $Root "Sublime Text\sublime_text.exe"
+    $sumatra = Join-Path $Root "Sumatra"
+    $texlive = Join-Path $Root "TexLive"
+    $texYear = $null
+    if (Test-Path $texlive) {
+        $texYear = Get-ChildItem $texlive -Directory -ErrorAction SilentlyContinue |
+                   Sort-Object Name -Descending | Select-Object -First 1
+    }
+    [pscustomobject]@{
+        Sublime = (Test-Path $sublime)
+        Sumatra = ((Test-Path $sumatra) -and @(Get-ChildItem $sumatra -Filter "SumatraPDF*.exe" -ErrorAction SilentlyContinue).Count -gt 0)
+        TexLive = ($null -ne $texYear -and (Test-Path (Join-Path $texYear.FullName "bin\windows")))
+        TexLiveLabel = if ($texYear) { $texYear.Name } else { "" }
+    }
+}
+
+function Get-FolderSizeText {
+    # Best-effort, and deliberately capped: measuring a 6 GB TeX Live tree of
+    # 100k+ files takes real time, and this runs on the UI thread. If it is
+    # slow enough to notice, say nothing rather than freeze the window.
+    param([string]$Path)
+    if (-not (Test-Path $Path)) { return "" }
+    try {
+        $sw = [Diagnostics.Stopwatch]::StartNew()
+        $bytes = 0
+        foreach ($f in [IO.Directory]::EnumerateFiles($Path, '*', 'AllDirectories')) {
+            $bytes += (New-Object IO.FileInfo $f).Length
+            if ($sw.ElapsedMilliseconds -gt 1200) { return "" }
+        }
+        if ($bytes -ge 1GB) { return (" ({0:N1} GB)" -f ($bytes / 1GB)) }
+        return (" ({0:N0} MB)" -f ($bytes / 1MB))
+    } catch { return "" }
+}
+
+function Update-Detection {
+    $root = $TxtInstallPath.Text.Trim()
+    if (-not $root) { $PanelDetected.Visibility = 'Collapsed'; return }
+    $found = Get-InstalledComponent $root
+
+    $ChkReSublime.Visibility = if ($found.Sublime) { 'Visible' } else { 'Collapsed' }
+    $ChkReSumatra.Visibility = if ($found.Sumatra) { 'Visible' } else { 'Collapsed' }
+    $ChkReTexLive.Visibility = if ($found.TexLive) { 'Visible' } else { 'Collapsed' }
+    if ($found.Sublime) { $ChkReSublime.Content = "Reinstall Sublime Text$(Get-FolderSizeText (Join-Path $root 'Sublime Text'))" }
+    if ($found.Sumatra) { $ChkReSumatra.Content = "Reinstall SumatraPDF$(Get-FolderSizeText (Join-Path $root 'Sumatra'))" }
+    if ($found.TexLive) { $ChkReTexLive.Content = "Reinstall TeX Live $($found.TexLiveLabel) - re-downloads several GB from CTAN" }
+
+    # A component that is no longer shown must not keep a stale tick, or the
+    # user would silently reinstall something they cannot see on the form.
+    if (-not $found.Sublime) { $ChkReSublime.IsChecked = $false }
+    if (-not $found.Sumatra) { $ChkReSumatra.IsChecked = $false }
+    if (-not $found.TexLive) { $ChkReTexLive.IsChecked = $false }
+
+    $PanelDetected.Visibility = if ($found.Sublime -or $found.Sumatra -or $found.TexLive) { 'Visible' } else { 'Collapsed' }
+}
+
 function Set-SchemeNote {
     switch ($CmbScheme.SelectedIndex) {
         1 { $SchemeNote.Text = "Smaller on disk, but it saves less time than the size suggests -- the install is dominated by download speed. Run the Doctor afterwards; it names any package TeXLib needs and cannot find." }
@@ -322,6 +399,11 @@ $BtnBrowse.Add_Click({
         $TxtInstallPath.Text = $dlg.SelectedPath
     }
 })
+
+# Re-probe whenever the target changes: what is already installed is a property
+# of the path, so the offer has to follow it.
+$TxtInstallPath.Add_LostFocus({ Update-Detection })
+Update-Detection
 
 function Add-Log([string]$Text) {
     if (-not $Text) { return }
@@ -472,6 +554,16 @@ function Start-Install {
     if ($TxtLibPath.Text.Trim())    { $argList += @("-TeXLibPath", $TxtLibPath.Text.Trim()) }
     if ($ChkHideJunction.IsChecked) { $argList += "-HideJunction" }
     if ($S.DryRun)                  { $argList += "-DryRun" }
+
+    # Only components the form is actually SHOWING can be reinstalled -- a
+    # hidden checkbox is one the user cannot see to untick, and Update-Detection
+    # clears them anyway; belt and braces, because silently reinstalling a 6 GB
+    # TeX Live tree is not a mistake worth risking.
+    $reinstall = @()
+    if ($ChkReSublime.IsChecked -and $ChkReSublime.Visibility -eq 'Visible') { $reinstall += 'Sublime' }
+    if ($ChkReSumatra.IsChecked -and $ChkReSumatra.Visibility -eq 'Visible') { $reinstall += 'SumatraPDF' }
+    if ($ChkReTexLive.IsChecked -and $ChkReTexLive.Visibility -eq 'Visible') { $reinstall += 'TeXLive' }
+    if ($reinstall.Count -gt 0)     { $argList += @("-Reinstall", ($reinstall -join ",")) }
 
     $psi = New-Object System.Diagnostics.ProcessStartInfo
     $psi.FileName               = "powershell.exe"
