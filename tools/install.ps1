@@ -85,6 +85,24 @@
     deliberate, so the installer does not second-guess it. Pair with -Sandbox
     for a throwaway run on a machine you care about.
 
+.PARAMETER Reinstall
+    Replace the named components even though they are already installed, without
+    being asked: Sublime, SumatraPDF, TeXLive, or All. Anything not named keeps
+    the existing default of being left alone.
+
+    This is what makes a partial reinstall possible without a human at the
+    keyboard. -Silent alone skips EVERY already-installed component, so there
+    was no way to say "replace Sublime, keep the 6 GB TeX Live tree" from a
+    script -- or from the GUI, which drives -Silent and so could not offer the
+    choice the interactive console prompt has always had.
+
+      install.bat -Silent -Reinstall Sublime
+      install.bat -Silent -Reinstall Sublime,SumatraPDF
+
+    Reinstalling Sublime preserves your settings (they live in the library via
+    the Packages\User junction); it re-fetches the binary and LaTeXTools.
+    Reinstalling TeXLive re-downloads several GB from CTAN.
+
 .PARAMETER Sandbox
     Skip every write that lands outside -InstallPath / -TeXLibPath: the user
     PATH entry, the HKCU file associations, and the Desktop / Start Menu
@@ -147,13 +165,22 @@ param(
     [switch]$Sandbox,
     [switch]$HideJunction,
     [switch]$VerifyDownloads,
-    [switch]$Verify
+    [switch]$Verify,
+    # A comma-separated STRING, not a [string[]] with a ValidateSet, because
+    # this script is reached three different ways and only a plain string
+    # behaves the same through all of them. `powershell.exe -File install.ps1
+    # -Reinstall Sublime,TeXLive` tokenises the value as ONE string -- -File
+    # mode does no array parsing -- so a [string[]] parameter receives
+    # "Sublime,TeXLive" as a single element and ValidateSet rejects it. That is
+    # exactly how install-gui.ps1 invokes it. Parsed and validated by hand
+    # below, which also lets the error name the bad token.
+    [string]$Reinstall = ""
 )
 
 # =============================================================================
 # 0. INSTALLER METADATA
 # =============================================================================
-$InstallerVersion = "0.10.0"
+$InstallerVersion = "0.10.1"
 $InstallerRepo    = "https://github.com/landonfox00/TeXLib-Installer"
 $ReleasesApi      = "https://api.github.com/repos/landonfox00/TeXLib-Installer/releases/latest"
 
@@ -365,6 +392,67 @@ if ($Repair -and $OnlyTeXLib) {
 $InstallComponents = (-not $OnlyTeXLib) -and (-not $Repair)   # section 12
 $DeployLibrary     = (-not $Repair)                           # section 13
 
+# What must never ride along when this installer copies a library tree it did
+# not build -- a legacy migration, or the Sublime settings carry-over. A release
+# bundle is already filtered by make-release.ps1, but these paths copy a folder
+# straight off the user's disk, and that folder's Sublime\ becomes Packages\User
+# through the settings junction. The author's dev-only test suite living there
+# is what killed plugin_host-3.8 in 0.9.5; section 16b-1b purges it afterwards,
+# but not copying it in the first place is better than cleaning up after.
+$LibraryCopyExclude = @(".git", ".github", "__pycache__", "test_*.py", "_testkit.py")
+
+function Get-ReinstallList {
+    # Split -Reinstall on commas / semicolons / whitespace and canonicalise the
+    # case, so "sublime, texlive" and "Sublime,TeXLive" mean the same thing.
+    # Returns $null for an unrecognised token so the caller can name it.
+    param([string]$Raw)
+    $Valid = @('Sublime', 'SumatraPDF', 'TeXLive', 'All')
+    $Out = @()
+    foreach ($Tok in ($Raw -split '[,;\s]+')) {
+        if (-not $Tok) { continue }
+        $Match = $Valid | Where-Object { $_ -ieq $Tok }
+        if (-not $Match) { return @{ Error = $Tok; Valid = $Valid } }
+        $Out += $Match
+    }
+    return @{ List = $Out; Valid = $Valid }
+}
+
+function Test-ReinstallRequested {
+    # Does -Reinstall name this component? Matching is on the SHORT token the
+    # parameter accepts, not the display name the prompt uses, so the two can
+    # differ ("TeXLive" vs "TeX Live") without the caller having to know.
+    # 'All' matches everything.
+    param([string]$ComponentName)
+    if (-not $ReinstallList) { return $false }
+    if ($ReinstallList -contains 'All') { return $true }
+    $Token = switch -Regex ($ComponentName) {
+        '^Sublime'  { 'Sublime';    break }
+        '^Sumatra'  { 'SumatraPDF'; break }
+        '^TeX Live' { 'TeXLive';    break }
+        default     { $null }
+    }
+    if (-not $Token) { return $false }
+    return ($ReinstallList -contains $Token)
+}
+
+# Parse -Reinstall HERE, immediately below the function that does it: an
+# earlier home (up with the -Repair/-OnlyTeXLib conflict check, where it reads
+# more naturally) runs before the function is defined, and PowerShell executes
+# top to bottom, so it died with "Get-ReinstallList is not recognized".
+$ReinstallList = @()
+if ($Reinstall) {
+    $Parsed = Get-ReinstallList $Reinstall
+    if ($Parsed.Error) {
+        Write-Host ""
+        Write-Host "FATAL: -Reinstall does not know '$($Parsed.Error)'." -ForegroundColor Red
+        Write-Host "       Valid components: $($Parsed.Valid -join ', ')" -ForegroundColor Red
+        Write-Host "       Example: install.bat -Silent -Reinstall Sublime,SumatraPDF" -ForegroundColor Red
+        Write-Host ""
+        Stop-Installer 14
+    }
+    $ReinstallList = $Parsed.List
+}
+
 function Test-TeXLibLibraryDir {
     # A directory counts as a TeXLib library only when the core .sty files are
     # actually in it -- the same probe pre-flight 7i and the Doctor use, so an
@@ -490,6 +578,7 @@ function Get-StampedValue {
 $PriorTeXLibRoot = Get-StampedValue -VersionFile "$BaseDir\VERSION" -Key "texlib_root"
 
 $LegacyTeXLibDir = $null
+$LegacyRepoCheckout = $null
 if (-not $ExplicitTeXLibPath) {
     $LegacyCandidates = @()
     if ($PriorTeXLibRoot) { $LegacyCandidates += $PriorTeXLibRoot }
@@ -498,7 +587,25 @@ if (-not $ExplicitTeXLibPath) {
     $LegacyCandidates += "$env:USERPROFILE\TeXLib"
     foreach ($Candidate in $LegacyCandidates) {
         if ($Candidate.TrimEnd('\') -ieq $TeXLibDir.TrimEnd('\')) { continue }
-        if (Test-TeXLibLibraryDir $Candidate) { $LegacyTeXLibDir = $Candidate; break }
+        if (-not (Test-TeXLibLibraryDir $Candidate)) { continue }
+        # A git working copy is NOT a pre-0.6.3 deployed library, however much
+        # it looks like one -- Test-TeXLibLibraryDir only asks whether the core
+        # .sty files are present, and the library's own source repo obviously
+        # has them. Documents\TeXLib is the default checkout location AND the
+        # default pre-0.6.3 install location, so on a maintainer's machine the
+        # two collide exactly.
+        #
+        # Migrating a checkout is the wrong thing in both directions: the copy
+        # is a detached snapshot, so later commits never reach the install and
+        # edits to the install never reach the repo -- and it drags the whole
+        # working tree across, dev-only tests included. Skip it, keep looking,
+        # and say so; -TeXLibPath is how you deliberately point an install at a
+        # checkout.
+        if (Test-Path (Join-Path $Candidate ".git")) {
+            if (-not $LegacyRepoCheckout) { $LegacyRepoCheckout = $Candidate }
+            continue
+        }
+        $LegacyTeXLibDir = $Candidate; break
     }
 }
 
@@ -1543,6 +1650,9 @@ if ($ExplicitTeXLibPath) {
 } else {
     Add-PreflightOK "TeXLib library will live at $TeXLibDir (inside the install root, alongside the Sublime plugin)"
 }
+if ($LegacyRepoCheckout) {
+    Add-PreflightNote "(ignoring the TeXLib git checkout at $LegacyRepoCheckout -- it looks like a library because it is one, but copying a working tree would detach it from the install. Pass -TeXLibPath `"$LegacyRepoCheckout`" to install AGAINST it deliberately.)"
+}
 if ($LegacyTeXLibDir) {
     Add-PreflightNote "(found a pre-0.6.3 library at $LegacyTeXLibDir; your Sublime settings carry over, and that folder is left in place for you to delete)"
 }
@@ -1615,6 +1725,11 @@ if ($Repair) {
                        (Test-Path (Join-Path $ScriptDir ".git"))
     if ($OnlyTeXLib) {
         Add-PreflightFailure "-OnlyTeXLib refreshes the library FROM a bundled texlib\ snapshot, but none is present next to install.ps1. Use a release zip (it contains texlib\), or run a normal install without -OnlyTeXLib to reuse an already-synced library."
+    } elseif ($looksLikeSource -and $LegacyRepoCheckout) {
+        # Maintainer case, not the download-the-wrong-zip case: they are running
+        # from a source checkout AND have a TeXLib library checkout on disk.
+        # Telling them to go download a release zip would be wrong advice.
+        Add-PreflightFailure "This is a source checkout of the installer, so it ships no texlib\ bundle, and the TeXLib library checkout at $LegacyRepoCheckout is deliberately NOT copied (a working tree would be detached from the install the moment you committed to it). Either pass -TeXLibPath `"$LegacyRepoCheckout`" to install against that checkout, or run install.bat from an extracted release zip, which carries its own library bundle."
     } elseif ($looksLikeSource) {
         Add-PreflightFailure "TeXLib bundle is missing because this is the GitHub SOURCE download, which does not include the TeXLib library, and no existing TeXLib library was found at $UserRootJunctionTarget to reuse. Do NOT use 'Code -> Download ZIP' or the release page's 'Source code (zip)'. Download the release zip (TeXLib-Installer-v<version>.zip) from $InstallerRepo/releases, extract it, and run install.bat from inside THAT folder."
     } else {
@@ -1806,6 +1921,15 @@ function Get-SourceFile {
 
 function Read-SkipOrReinstall {
     param ([string]$ComponentName, [string]$ReinstallNote = "")
+    # -Reinstall names components to replace without being asked. It exists
+    # because -Silent was all-or-nothing skip, which left no way to say
+    # "replace Sublime, keep the 6 GB TeX Live tree" from a script -- or from
+    # the GUI, which drives -Silent and so could not offer the choice the
+    # interactive console has always had.
+    if ($ReinstallList -and (Test-ReinstallRequested $ComponentName)) {
+        Write-Host "  [-Reinstall] Reinstalling $ComponentName as requested" -ForegroundColor Yellow
+        return $true
+    }
     if ($Silent) {
         Write-Host "  [silent] Skipping reinstall of $ComponentName" -ForegroundColor Gray
         return $false
@@ -1905,14 +2029,14 @@ if ($LegacyTeXLibDir -and -not $Repair) {
     try {
         if ($MigrateFromLegacy) {
             Write-Host "Migrating TeXLib library from $LegacyTeXLibDir..." -ForegroundColor Cyan
-            Copy-Item "$LegacyTeXLibDir\*" $TeXLibDir -Recurse -Force -Exclude ".git", ".github"
+            Copy-Item "$LegacyTeXLibDir\*" $TeXLibDir -Recurse -Force -Exclude $LibraryCopyExclude
             Write-Host "  Copied to $TeXLibDir" -ForegroundColor Green
         } elseif (-not (Test-Path $SublimeUserSync)) {
             $LegacySublime = Join-Path $LegacyTeXLibDir "Sublime"
             if (Test-Path $LegacySublime) {
                 Write-Host "Carrying Sublime settings over from $LegacySublime..." -ForegroundColor Cyan
                 New-Item -ItemType Directory -Force -Path $SublimeUserSync | Out-Null
-                Copy-Item "$LegacySublime\*" $SublimeUserSync -Recurse -Force
+                Copy-Item "$LegacySublime\*" $SublimeUserSync -Recurse -Force -Exclude $LibraryCopyExclude
                 Write-Host "  Settings copied to $SublimeUserSync" -ForegroundColor Green
             }
         }
@@ -2167,7 +2291,11 @@ if (-not $DeployLibrary) {
         # Mirror the bundle into the library folder. We don't delete extra files
         # here (a migration may have put the user's settings there ahead of us),
         # only overwrite the library bits.
-        Copy-Item "$TexLibBundle\*" $TeXLibDir -Recurse -Force -Exclude ".git", ".github"
+        # Same exclusion list as the migration paths. 0.9.5+ bundles are already
+        # filtered by make-release.ps1, but -OnlyTeXLib run from an OLDER
+        # release folder deploys that older bundle -- tests and all -- and this
+        # is what stops them reaching Packages\User.
+        Copy-Item "$TexLibBundle\*" $TeXLibDir -Recurse -Force -Exclude $LibraryCopyExclude
         Write-Host "  Library deployed to $TeXLibDir" -ForegroundColor Green
     } catch {
         Write-Host "TeXLib deploy failed: $_" -ForegroundColor Red

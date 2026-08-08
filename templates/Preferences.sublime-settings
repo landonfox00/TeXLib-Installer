@@ -10,13 +10,20 @@
 
 	"ignored_packages": ["Vintage"],
 
-	// This Sublime is a PINNED PORTABLE copy that the installer manages: the
-	// build is fixed in install.ps1's $Downloads and hash-verified on the way
-	// in. Left on, Sublime pops an "Update Available" dialog offering a newer
-	// build, and taking it swaps the managed copy for an unmanaged one that no
-	// longer matches what the installer configured around it. Updates come with
-	// a new installer release instead -- `install.bat -Update`.
-	"update_check": false,
+	// NOTE: there is deliberately no "update_check" here. v0.7.2 added
+	// `"update_check": false` believing it suppressed Sublime's "Update
+	// Available" dialog on this pinned portable build. It never did:
+	// update_check is a COMMAND (Help -> Check for Updates, defined in
+	// Default.sublime-package's Default.sublime-commands and Main.sublime-menu),
+	// not a preference. Sublime 4200's own default Preferences documents 196
+	// settings keys and update_check is not among them, and unrecognised keys
+	// are silently ignored. Verified against the shipped 4200 build in 0.10.1.
+	//
+	// This Sublime IS a pinned portable copy the installer manages, and taking
+	// an in-app update still swaps it for an unmanaged one that no longer
+	// matches the manifest -- so update with a new installer release
+	// (`install.bat -Update`). We just cannot stop the prompt from a setting.
+	// If a real mechanism is ever found, it goes here.
 
 	"font_size": 11,
 	"word_wrap": true,
