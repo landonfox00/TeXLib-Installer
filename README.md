@@ -20,7 +20,8 @@ Everything lands under one root, which is what makes uninstall a single director
 
 ```
 .
-├── install.bat                  # the only two things a user should click
+├── install-gui.bat              # graphical installer -- what to hand a colleague
+├── install.bat                  # console installer -- scriptable surface, what CI drives
 ├── uninstall.bat
 ├── templates/                   # config templates with {{...}} placeholders
 │   ├── LaTeXTools.sublime-settings
@@ -28,6 +29,7 @@ Everything lands under one root, which is what makes uninstall a single director
 │   └── SumatraPDF-settings.txt
 ├── tools/
 │   ├── install.ps1              # main installer (runs end-to-end install)
+│   ├── install-gui.ps1          # WPF front-end: collects options, runs install.ps1 -Silent, shows progress
 │   ├── uninstall.ps1            # reverses install.ps1
 │   ├── boot_wrapper.ps1         # boot-log + always-pause wrapper for install.bat / uninstall.bat
 │   ├── make-release.ps1         # builds the release ZIP (installer + TeXLib bundle)   [not shipped]
@@ -45,7 +47,11 @@ Everything lands under one root, which is what makes uninstall a single director
 └── README.md                    # this file
 ```
 
-The `.ps1` files live in `tools/` on purpose: an extracted release folder should offer exactly two things to double-click, and `install.bat` next to `install.ps1` reliably got people running the wrong one. `install.bat` → `tools/boot_wrapper.ps1` → `tools/install.ps1`, and CI asserts that chain plus the absence of a root-level `.ps1`.
+The `.ps1` files live in `tools/` on purpose: an extracted release folder should offer a short list of things to double-click, and `install.bat` next to `install.ps1` reliably got people running the wrong one. `install.bat` → `tools/boot_wrapper.ps1` → `tools/install.ps1`, and CI asserts that chain plus the absence of a root-level `.ps1`.
+
+`install-gui.bat` → `tools/install-gui.ps1` is a **front-end, not a second installer**. It builds an argument list, runs `install.ps1 -Silent` as a child process, and tails that process's output into a log pane. Every decision about what to install and what to write stays in `install.ps1`, which is still the only thing the install jobs in CI exercise — if the two ever disagree, `install.ps1` is right.
+
+The coupling that can rot silently is the GUI's phase table: it recognises `install.ps1`'s console banners to drive its progress bar, so renaming a banner leaves an install that works correctly behind a bar that never moves. The `gui` CI job asserts every marker still tracks `install.ps1` — literally for the ones printed as constants, and via a declared `Emit` construct for the four composed at runtime.
 
 ## Installer flags
 

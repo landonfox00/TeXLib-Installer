@@ -88,11 +88,13 @@ if (Test-Path $StageRoot) {
 New-Item -ItemType Directory -Force -Path $StageRoot | Out-Null
 
 Write-Host "Copying installer files..." -ForegroundColor Cyan
-# Only the two .bat files and the docs sit at the release root: that is the
-# whole point of keeping the .ps1 files in tools\, so a user opening the
-# extracted folder sees exactly two things to double-click.
+# Only the .bat files and the docs sit at the release root: that is the whole
+# point of keeping the .ps1 files in tools\, so a user opening the extracted
+# folder sees a short list of things to double-click. install-gui.bat joined
+# them in 0.10.0 -- install.bat stays the console/scriptable surface (it is
+# what CI drives), and the GUI is the one to hand a colleague.
 $InstallerFiles = @(
-    "install.bat", "uninstall.bat",
+    "install.bat", "install-gui.bat", "uninstall.bat",
     "INSTALL.md", "README.md", "LICENSE", "CHANGELOG.md"
 )
 foreach ($f in $InstallerFiles) {
@@ -109,7 +111,7 @@ Copy-Item (Join-Path $RepoRoot "templates") $StageRoot -Recurse -Force
 # shipped three are present and the other two are not.
 $ToolsStage = Join-Path $StageRoot "tools"
 New-Item -ItemType Directory -Force -Path $ToolsStage | Out-Null
-foreach ($w in @("boot_wrapper.ps1", "install.ps1", "uninstall.ps1")) {
+foreach ($w in @("boot_wrapper.ps1", "install.ps1", "uninstall.ps1", "install-gui.ps1")) {
     Copy-Item (Join-Path $RepoRoot "tools\$w") $ToolsStage -Force
 }
 

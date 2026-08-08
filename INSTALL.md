@@ -34,6 +34,7 @@ Everything — Sublime Text, SumatraPDF, TeX Live, and the TeXLib library itself
 1. Right-click the ZIP file → **Extract All...** → pick a destination (Desktop is fine).
 2. Open the extracted folder. You should see:
    ```
+   install-gui.bat
    install.bat
    uninstall.bat
    templates/
@@ -43,8 +44,12 @@ Everything — Sublime Text, SumatraPDF, TeX Live, and the TeXLib library itself
    INSTALL.md
    ...
    ```
-   There are exactly two things to click here, and `install.bat` is one of them. (The actual scripts live in `tools/`; you never need to open that folder.)
-3. **Double-click `install.bat`.**
+   (The actual scripts live in `tools/`; you never need to open that folder.)
+3. **Double-click `install-gui.bat`.** A window opens where you can pick the install location and the TeX Live scheme, then watch the progress. This is the one to use unless you have a reason not to.
+
+   `install.bat` does exactly the same install in a console window instead, and is what you want for scripting, for `-Silent`, and for every option in the table further down. Both run the same installer underneath — the window is a front-end, not a second implementation.
+
+   If you have not installed on this machine before, tick **Dry run** in the window first. It runs the pre-flight checks and prints what a real install would do, without downloading or writing anything, and takes seconds.
 
 ### The SmartScreen warning
 

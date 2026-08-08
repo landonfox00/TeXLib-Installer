@@ -4,6 +4,103 @@ All notable changes to TeXLib-Installer are recorded here. Format follows [Keep 
 
 ## [Unreleased]
 
+## [0.10.0] — 2026-08-07
+
+A graphical installer, for handing to someone who should not have to read a
+console to install a text editor.
+
+### Added
+
+- **`install-gui.bat` — a WPF installer window.** Pick the install location and
+  the TeX Live scheme, optionally set the library path and the junction
+  attribute under Advanced, then watch a progress bar and a live log. On
+  failure it names the step that failed rather than printing a bare exit code,
+  and offers the log in one click.
+
+  It is a **front-end, not a second installer**: it builds an argument list,
+  runs `install.ps1 -Silent` as a child process, and tails that process's
+  output. Nothing about what gets installed or written lives in the GUI, so
+  `install.ps1` remains the single implementation and the only thing the
+  install jobs in CI exercise. `install.bat` is unchanged and is still the
+  scriptable surface — the GUI is an addition, not a replacement, because
+  quietly changing what a double-click does is how you surprise the person who
+  has been using the console one for a year.
+- **The log pane word-wraps.** Installer output is full of long absolute paths
+  -- 193 characters in a routine dry run -- and reading them meant scrolling
+  sideways. Note for anyone changing this: the enclosing `ScrollViewer` has to
+  be `HorizontalScrollBarVisibility="Disabled"`, not `Auto`. A ScrollViewer
+  that *can* scroll horizontally measures its child with infinite width, so the
+  TextBox is never constrained to the viewport and `TextWrapping="Wrap"` does
+  nothing at all.
+- **A dry-run tick box.** Maps to the existing `-DryRun`: runs the pre-flight
+  checks and reports what a real install would do, without downloading or
+  writing anything. Seconds, not an hour, and the natural first thing to do on
+  an unfamiliar machine.
+- **`gui` CI job.** The GUI reads `install.ps1`'s console banners to drive its
+  progress bar, which is a coupling that rots silently — rename a banner and
+  the install still works perfectly behind a bar that never moves. The job
+  asserts every phase marker still tracks `install.ps1`, loads the XAML for
+  real (a typo there is a crash on launch, not a warning), checks every
+  `FindName` target resolves, and holds the file to the same ASCII rule as
+  `install.ps1`.
+
+### Fixed
+
+- **Found while building the above: `Start-Process -PassThru` reports `$null`
+  for `.ExitCode`**, even after `WaitForExit()`, unless something kept the
+  process handle open. `$null` coerces to `0` through an `[int]` parameter, so
+  the first draft of the GUI would have reported a **failed install as a
+  successful one**. Touching `.Handle` while the child is alive fixes it;
+  verified against exit codes 0, 5 and 7, and there is a fallback that reports
+  an unknown code rather than assuming success.
+- **The `[TeX Live] finished` phase marker could never have matched.** It was
+  compared with `-like`, which reads `[TeX Live]` as a wildcard character
+  class. Matching is now plain `.Contains`, which also keeps any future marker
+  containing `[ ] * ?` safe by default; CI fails the build if `-like` comes
+  back.
+
+### Fixed — found by actually clicking the thing
+
+Four more, none of which any static check would have caught. Worth recording
+because each one came from a first hands-on run, not from review.
+
+- **A blank console window sat on screen for the whole install.**
+  `Start-Process -RedirectStandardOutput` forces `UseShellExecute = $false`,
+  and `-WindowStyle Hidden` is **silently ignored** when `UseShellExecute` is
+  `$false`. The child got a real console, blank because its output had been
+  redirected away, and on a full install it would have sat there for 40 to 90
+  minutes. `CreateNoWindow` is the only flag that actually suppresses it, and
+  it is reachable only through `ProcessStartInfo`. Now measured: zero console
+  windows appear, sampled every 100 ms across a launch.
+- **Every character in the log pane was separated by a space** --
+  `C : \ U s e r s`. PowerShell 5.1's `*>` redirection writes **UTF-16LE**;
+  the tailer decodes UTF-8, so the `0x00` after each ASCII byte rendered as a
+  gap. Confirmed at byte level: the file began `FF FE 43 00 3A 00 5C 00`. The
+  child's raw pipe bytes are copied to the file instead, which are single-byte
+  and read back correctly. The same mangling was also breaking lines in the
+  middle, which is why `Mode:` and `DRY RUN` appeared on separate lines.
+- **`ProcessStartInfo.ArgumentList` does not exist on .NET Framework.** It is
+  .NET Core / .NET 5+, so on the Windows PowerShell 5.1 that `install.bat`
+  launches, `$psi.ArgumentList.Add(...)` throws "You cannot call a method on a
+  null-valued expression." Arguments are now quoted by hand for
+  `CommandLineToArgvW`, verified by round-tripping through that API: paths with
+  spaces, paths with trailing backslashes (a real hazard, since the user types
+  the install location into a text box), and embedded quotes all survive.
+- **`-Command` loses the child's exit code.** A script's `exit N` becomes the
+  process exit code under `-File`; under `-Command` it does not survive the
+  call, and a child that really exited 3 came back as 1. The launch uses
+  `-File`. This is the third time in this release that getting an exit code
+  wrong would have reported a failed install as a good one.
+
+- **An error inside the progress timer killed the window outright.** An
+  exception escaping a `DispatcherTimer` handler goes to WPF's
+  unhandled-exception path, which tears the process down -- the window simply
+  vanished mid-run with no message and nothing to diagnose, which is the exact
+  failure `boot_wrapper.ps1` exists to prevent on the console side. The tick is
+  now fully trapped, there is a dispatcher-level handler behind it, and the
+  window writes a session log to `%TEMP%\TeXLib-gui-session-*.log` from the
+  moment it starts, so a crash leaves evidence either way.
+
 ## [0.9.5] — 2026-08-07
 
 `plugin_host-3.8 has exited unexpectedly` again, on a work machine, from a clean
@@ -843,7 +940,7 @@ Makes a fresh coworker install actually work. Three bugs each blocked the instal
 
 ## [0.5.0] — 2026-06-07
 
-The TEXINPUTS comma trap, finally fixed in code. kpathsea (TeX Live's file resolver) splits `TEXINPUTS` entries on commas and chokes on spaces, so the UNR OneDrive folder ("OneDrive - University of Nevada, Reno") has silently broken every install on a UNR machine since v0.1.0. Landon hand-created a junction at `%USERPROFILE%\TeXLib` to work around it; coworkers didn't know to. v0.2.0's Doctor mode only printed a TEXINPUTS warning — useful diagnosis, no actual repair.
+The TEXINPUTS comma trap, finally fixed in code. kpathsea (TeX Live's file resolver) splits `TEXINPUTS` entries on commas and chokes on spaces, so the UNR OneDrive folder ("OneDrive - University of Nevada, Reno") has silently broken every install on a UNR machine since v0.1.0. The junction at `%USERPROFILE%\TeXLib` was hand-created to work around it; coworkers didn't know to. v0.2.0's Doctor mode only printed a TEXINPUTS warning — useful diagnosis, no actual repair.
 
 ### Added
 
@@ -884,7 +981,7 @@ Bundle release: ships a curated LaTeX-only spell-check dictionary.
 
 ### Added
 
-- **`texlib/Sublime/LaTeX.sublime-settings`** in the TeXLib bundle — a syntax-scoped settings file with ~430 mathematician names + standard math terminology + LaTeX command fragments under `added_words`, and the usual LaTeX layout dimensions under `ignored_words`. Sourced from Landon's accumulated personal list, deduped, alphabetized, augmented with ~110 standard mathematician names and ~280 standard algebra/analysis/topology/geometry terms. Stacks on top of the user's global `Preferences.sublime-settings`, so personal proper nouns (collaborators, lab references, course-internal jargon) still apply when editing `.tex` files. Stuck-suffix artifacts (`ness`, `th`, `ech`, `lder`) intentionally excluded — they mask real typos; the accented forms (`Čech`, `Hölder`) are included instead.
+- **`texlib/Sublime/LaTeX.sublime-settings`** in the TeXLib bundle — a syntax-scoped settings file with ~430 mathematician names + standard math terminology + LaTeX command fragments under `added_words`, and the usual LaTeX layout dimensions under `ignored_words`. Sourced from an accumulated personal list, deduped, alphabetized, augmented with ~110 standard mathematician names and ~280 standard algebra/analysis/topology/geometry terms. Stacks on top of the user's global `Preferences.sublime-settings`, so personal proper nouns (collaborators, lab references, course-internal jargon) still apply when editing `.tex` files. Stuck-suffix artifacts (`ness`, `th`, `ech`, `lder`) intentionally excluded — they mask real typos; the accented forms (`Čech`, `Hölder`) are included instead.
 - **Deploy hook in `install.ps1` section 16b** — `LaTeX.sublime-settings` is now copied to `Packages/User/` alongside `texlib_builder.py`, `TeXLib.sublime-build`, and `Default.sublime-commands`.
 
 ## [0.3.0] — 2026-05-28
