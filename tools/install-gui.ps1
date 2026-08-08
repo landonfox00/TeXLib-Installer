@@ -231,9 +231,13 @@ $Xaml = @'
       <ProgressBar x:Name="Bar" Grid.Row="1" Height="18" Margin="0,10,0,0" Minimum="0" Maximum="100" Value="0"/>
       <TextBlock x:Name="LblElapsed" Grid.Row="2" Foreground="#FF5A6672" Margin="0,6,0,10" Text=""/>
       <Border Grid.Row="3" BorderBrush="#FFD8DCE2" BorderThickness="1" Background="White">
-        <ScrollViewer x:Name="LogScroller" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto">
+        <!-- HorizontalScrollBarVisibility MUST be Disabled, not Auto, for the
+             wrap below to do anything: a ScrollViewer that can scroll
+             horizontally measures its child with infinite width, so the TextBox
+             would never be constrained to the viewport and would never wrap. -->
+        <ScrollViewer x:Name="LogScroller" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
           <TextBox x:Name="TxtLog" IsReadOnly="True" BorderThickness="0" Background="White"
-                   FontFamily="Consolas" FontSize="12" TextWrapping="NoWrap" Padding="8"/>
+                   FontFamily="Consolas" FontSize="12" TextWrapping="Wrap" Padding="8"/>
         </ScrollViewer>
       </Border>
     </Grid>

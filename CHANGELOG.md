@@ -25,6 +25,13 @@ console to install a text editor.
   scriptable surface — the GUI is an addition, not a replacement, because
   quietly changing what a double-click does is how you surprise the person who
   has been using the console one for a year.
+- **The log pane word-wraps.** Installer output is full of long absolute paths
+  -- 193 characters in a routine dry run -- and reading them meant scrolling
+  sideways. Note for anyone changing this: the enclosing `ScrollViewer` has to
+  be `HorizontalScrollBarVisibility="Disabled"`, not `Auto`. A ScrollViewer
+  that *can* scroll horizontally measures its child with infinite width, so the
+  TextBox is never constrained to the viewport and `TextWrapping="Wrap"` does
+  nothing at all.
 - **A dry-run tick box.** Maps to the existing `-DryRun`: runs the pre-flight
   checks and reports what a real install would do, without downloading or
   writing anything. Seconds, not an hour, and the natural first thing to do on
@@ -933,7 +940,7 @@ Makes a fresh coworker install actually work. Three bugs each blocked the instal
 
 ## [0.5.0] — 2026-06-07
 
-The TEXINPUTS comma trap, finally fixed in code. kpathsea (TeX Live's file resolver) splits `TEXINPUTS` entries on commas and chokes on spaces, so the UNR OneDrive folder ("OneDrive - University of Nevada, Reno") has silently broken every install on a UNR machine since v0.1.0. Landon hand-created a junction at `%USERPROFILE%\TeXLib` to work around it; coworkers didn't know to. v0.2.0's Doctor mode only printed a TEXINPUTS warning — useful diagnosis, no actual repair.
+The TEXINPUTS comma trap, finally fixed in code. kpathsea (TeX Live's file resolver) splits `TEXINPUTS` entries on commas and chokes on spaces, so the UNR OneDrive folder ("OneDrive - University of Nevada, Reno") has silently broken every install on a UNR machine since v0.1.0. The junction at `%USERPROFILE%\TeXLib` was hand-created to work around it; coworkers didn't know to. v0.2.0's Doctor mode only printed a TEXINPUTS warning — useful diagnosis, no actual repair.
 
 ### Added
 
@@ -974,7 +981,7 @@ Bundle release: ships a curated LaTeX-only spell-check dictionary.
 
 ### Added
 
-- **`texlib/Sublime/LaTeX.sublime-settings`** in the TeXLib bundle — a syntax-scoped settings file with ~430 mathematician names + standard math terminology + LaTeX command fragments under `added_words`, and the usual LaTeX layout dimensions under `ignored_words`. Sourced from Landon's accumulated personal list, deduped, alphabetized, augmented with ~110 standard mathematician names and ~280 standard algebra/analysis/topology/geometry terms. Stacks on top of the user's global `Preferences.sublime-settings`, so personal proper nouns (collaborators, lab references, course-internal jargon) still apply when editing `.tex` files. Stuck-suffix artifacts (`ness`, `th`, `ech`, `lder`) intentionally excluded — they mask real typos; the accented forms (`Čech`, `Hölder`) are included instead.
+- **`texlib/Sublime/LaTeX.sublime-settings`** in the TeXLib bundle — a syntax-scoped settings file with ~430 mathematician names + standard math terminology + LaTeX command fragments under `added_words`, and the usual LaTeX layout dimensions under `ignored_words`. Sourced from an accumulated personal list, deduped, alphabetized, augmented with ~110 standard mathematician names and ~280 standard algebra/analysis/topology/geometry terms. Stacks on top of the user's global `Preferences.sublime-settings`, so personal proper nouns (collaborators, lab references, course-internal jargon) still apply when editing `.tex` files. Stuck-suffix artifacts (`ness`, `th`, `ech`, `lder`) intentionally excluded — they mask real typos; the accented forms (`Čech`, `Hölder`) are included instead.
 - **Deploy hook in `install.ps1` section 16b** — `LaTeX.sublime-settings` is now copied to `Packages/User/` alongside `texlib_builder.py`, `TeXLib.sublime-build`, and `Default.sublime-commands`.
 
 ## [0.3.0] — 2026-05-28
