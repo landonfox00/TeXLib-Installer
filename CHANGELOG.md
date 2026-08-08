@@ -25,6 +25,29 @@ All notable changes to TeXLib-Installer are recorded here. Format follows [Keep 
   asserts the wiring, and a case table covers all 16 tick combinations plus the
   ticked-but-not-installed case. A component that is absent is shown disabled
   and can never contribute a switch.
+
+  **Nothing is pre-ticked.** The console's own defaults do remove the programs,
+  and the form followed them at first, but a window that opens with a 6 GB tree
+  already marked for deletion is a different proposition from one you opt into
+  — and the two mistakes do not cost the same. An unticked box you meant to
+  tick costs a second run; a ticked box you failed to notice costs a
+  multi-hour re-download. CI fails the build if anything pre-ticks again.
+
+  Two bugs found by running it for real rather than by reading it:
+  - `foreach ($s in @($S.OutStream, $S.ErrStream))` — **PowerShell variable
+    names are case-insensitive**, so `$s` *is* `$S`, and the loop rebound the
+    state hashtable the whole file hangs off to a `FileStream`. Everything
+    after it in that branch threw, the catch fired, and a **successful
+    uninstall was reported as a failure**. `install-gui.ps1` had used `$st` and
+    was unaffected; CI now rejects `$s` in both.
+  - The phase table named four banners `uninstall.ps1` does not print. They are
+    composed from a `-Label` parameter, so they carry an `Emit` now, and the
+    progress bar actually advances.
+
+  Verified end to end on a throwaway install: ticking everything except TeX
+  Live produced exactly `-KeepTeXLive -RemoveLibrary`, removed Sublime Text,
+  SumatraPDF and the library, left the TeX Live tree on disk, left Desktop
+  shortcuts pointing elsewhere alone, and exited 0.
 - **`-Reinstall <components>` — replace some components, keep the rest.**
   `-Silent` was all-or-nothing skip, so there was no way to say "replace
   Sublime, keep the 6 GB TeX Live tree" without a human at the keyboard. That

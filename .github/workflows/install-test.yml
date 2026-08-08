@@ -1812,8 +1812,34 @@ jobs:
             $n = 0; foreach ($b in $bytes) { if ($b -gt 0x7F) { $n++ } }
             if ($n -gt 0) { Write-Host "FAIL: $f has $n non-ASCII bytes (see encoding-guard)" -ForegroundColor Red; $bad++ }
           }
+          # Both GUIs hang all their mutable state off $S. PowerShell variable
+          # names are case-INSENSITIVE, so any loop or assignment using $s
+          # silently rebinds that hashtable -- which is exactly how a successful
+          # uninstall came to be reported as a failure: `foreach ($s in ...)`
+          # turned $S into a FileStream mid-tick, the rest of the branch threw,
+          # and the catch reported an unknown exit code.
+          # The [^#] guards matter: both files EXPLAIN this trap in a comment
+          # that necessarily contains the offending text, and a naive match
+          # flags the explanation instead of the code. (The update_check
+          # assertion tripped over exactly this, one job over.)
+          foreach ($f in '.\tools\install-gui.ps1', '.\tools\uninstall-gui.ps1') {
+            $src = Get-Content $f -Raw
+            if ($src -match '(?m)^[^#\r\n]*foreach\s*\(\s*\$s\s+in\s') {
+              Write-Host "FAIL: $f binds `$s in a foreach; that IS `$S (case-insensitive) and clobbers the state hashtable. Use `$st." -ForegroundColor Red
+              $bad++
+            }
+            # -cmatch, case-SENSITIVE, on purpose. Case-insensitively there is
+            # no difference between the accident and the legitimate `$S = @{...}`
+            # declaration this file must make exactly once -- they are the same
+            # variable, which is the whole hazard. A lowercase `$s = ` is the
+            # one form that is always a mistake.
+            if ($src -cmatch '(?m)^[^#\r\n]*(?<![\w.])\$s\s*=\s') {
+              Write-Host "FAIL: $f assigns to lowercase `$s; that IS `$S and clobbers the state hashtable." -ForegroundColor Red
+              $bad++
+            }
+          }
           if ($bad) { exit 1 }
-          Write-Host "OK: both parse, ASCII-only." -ForegroundColor Green
+          Write-Host "OK: both parse, ASCII-only, no `$s/`$S collision." -ForegroundColor Green
 
       - name: XAML loads and every FindName target resolves
         shell: powershell
@@ -1924,7 +1950,20 @@ jobs:
           if ($gui -notmatch 'if \(\$ChkLibrary\.IsChecked[^)]*\)\s*\{\s*\$argList \+= "-RemoveLibrary"') {
             Write-Host "FAIL: ChkLibrary does not map to -RemoveLibrary when ticked" -ForegroundColor Red; exit 1
           }
-          Write-Host "OK: remove/keep inversion is wired the right way round." -ForegroundColor Green
+          # Nothing may be pre-ticked. A window that opens with a 6 GB tree
+          # already marked for deletion is a different thing from one you opt
+          # into, and the two mistakes do not cost the same: an unticked box you
+          # meant to tick costs a second run; a ticked box you failed to notice
+          # costs a multi-hour re-download.
+          $s = $gui.IndexOf('<Window'); $e2 = $gui.IndexOf('</Window>')
+          $xaml = $gui.Substring($s, $e2 - $s + 9)
+          if ($xaml -match 'IsChecked\s*=\s*"[Tt]rue"') {
+            Write-Host "FAIL: a checkbox is pre-ticked in the uninstaller XAML." -ForegroundColor Red; exit 1
+          }
+          if ($gui -match '\$pair\.Box\.IsChecked\s*=\s*\$pair\.Has') {
+            Write-Host "FAIL: Update-Detection pre-ticks whatever is installed." -ForegroundColor Red; exit 1
+          }
+          Write-Host "OK: remove/keep inversion wired correctly; nothing pre-ticked." -ForegroundColor Green
 
   # ---------------------------------------------------------------------------
   # 6. full-install — SLOW, GATED. Real -Silent install on a clean throwaway VM,

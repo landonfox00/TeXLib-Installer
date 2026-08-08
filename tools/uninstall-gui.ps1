@@ -68,7 +68,7 @@ $Phases = @(
        Emit  = 'Write-Host "Removing $Label ($Path)..."' },
     @{ Match = "Removing TeX Live";      Label = "Removing TeX Live";            Pct = -1;
        Emit  = 'Write-Host "Removing $Label ($Path)..."' },
-    @{ Match = "Removing TeXLib library"; Label = "Removing the TeXLib library"; Pct = 72;
+    @{ Match = "Removing TeXLib library"; Label = "Removing TeXLib library"; Pct = 72;
        Emit  = 'Write-Host "Removing $Label ($Path)..."' },
     @{ Match = "Removing user-root junction"; Label = "Retiring the user-root junction"; Pct = 78 },
     @{ Match = "Installed Apps entry";   Label = "Removing the Installed Apps entry"; Pct = 82 },
@@ -262,15 +262,25 @@ function Update-Detection {
         @{ Box = $ChkSublime; Has = $hasSublime; Text = "Sublime Text$(Get-FolderSizeText (Join-Path $root 'Sublime Text'))" },
         @{ Box = $ChkSumatra; Has = $hasSumatra; Text = "SumatraPDF$(Get-FolderSizeText $sumatra)" },
         @{ Box = $ChkTexLive; Has = $hasTexLive; Text = "TeX Live$(if ($texYear) { " $($texYear.Name)" })$(Get-FolderSizeText $texRoot)" },
-        @{ Box = $ChkLibrary; Has = $hasLibrary; Text = "The TeXLib library$(Get-FolderSizeText $library)" }
+        @{ Box = $ChkLibrary; Has = $hasLibrary; Text = "TeXLib library$(Get-FolderSizeText $library)" }
     )) {
-        $pair.Box.Content    = $pair.Text
-        $pair.Box.IsEnabled  = $pair.Has
-        # Default to removing what is there -- this is an uninstaller, and the
-        # console's own defaults remove the programs and a library inside the
-        # install root. Nothing absent is ever pre-ticked.
-        $pair.Box.IsChecked  = $pair.Has
-        if (-not $pair.Has) { $pair.Box.Content = "$($pair.Text) - not installed here" }
+        $pair.Box.Content   = $pair.Text
+        $pair.Box.IsEnabled = $pair.Has
+        # NOTHING is pre-ticked, deliberately. The console's own defaults do
+        # remove the programs, and this form followed them at first -- but a
+        # window that opens with a 6 GB tree already marked for deletion is a
+        # different risk profile from one you have to opt into, and the cost of
+        # the two mistakes is not symmetric: an unticked box you meant to tick
+        # costs a second run, a ticked box you failed to notice costs a
+        # re-download measured in hours.
+        #
+        # Only ABSENT components are forced off here. A present one keeps
+        # whatever the user set, so re-probing after a path edit cannot silently
+        # discard ticks they just made.
+        if (-not $pair.Has) {
+            $pair.Box.IsChecked = $false
+            $pair.Box.Content   = "$($pair.Text) - not installed here"
+        }
     }
 
     $LblLibraryNote.Text = if ($hasLibrary) {
@@ -292,7 +302,7 @@ function Update-Warning {
     if ($ChkSublime.IsChecked -and $ChkSublime.IsEnabled) { $going += "Sublime Text" }
     if ($ChkSumatra.IsChecked -and $ChkSumatra.IsEnabled) { $going += "SumatraPDF" }
     if ($ChkTexLive.IsChecked -and $ChkTexLive.IsEnabled) { $going += "TeX Live" }
-    if ($ChkLibrary.IsChecked -and $ChkLibrary.IsEnabled) { $going += "the TeXLib library" }
+    if ($ChkLibrary.IsChecked -and $ChkLibrary.IsEnabled) { $going += "TeXLib library" }
 
     if ($going.Count -eq 0) {
         $LblWarn.Text = "Nothing is ticked, so nothing will be removed. The shortcuts, file associations and PATH entry are cleaned up either way."
@@ -414,7 +424,7 @@ function Start-Uninstall {
     if ($ChkSublime.IsChecked -and $ChkSublime.IsEnabled) { $going += "Sublime Text" }
     if ($ChkSumatra.IsChecked -and $ChkSumatra.IsEnabled) { $going += "SumatraPDF" }
     if ($ChkTexLive.IsChecked -and $ChkTexLive.IsEnabled) { $going += "TeX Live" }
-    if ($ChkLibrary.IsChecked -and $ChkLibrary.IsEnabled) { $going += "the TeXLib library" }
+    if ($ChkLibrary.IsChecked -and $ChkLibrary.IsEnabled) { $going += "TeXLib library" }
     $summary = if ($going.Count) { $going -join ", " } else { "nothing (shortcuts, associations and PATH only)" }
     $ans = [Windows.MessageBox]::Show(
         "Remove $summary from`n$root ?`n`nThis cannot be undone.",
@@ -489,8 +499,13 @@ function Start-Uninstall {
         if ($S.Proc.HasExited) {
             Start-Sleep -Milliseconds 150
             Add-Log (Read-NewOutput)
-            foreach ($s in @($S.OutStream, $S.ErrStream)) {
-                if ($s) { try { $s.Dispose() } catch { $null = $_ } }
+            # $st, NOT $s: PowerShell variable names are case-INSENSITIVE, so a
+            # `foreach ($s in ...)` here rebinds $S -- the state hashtable this
+            # whole file hangs off -- to a FileStream. Everything after it in
+            # this branch then threw, the catch below fired, and a SUCCESSFUL
+            # uninstall was reported as a failure. Found in a real run.
+            foreach ($st in @($S.OutStream, $S.ErrStream)) {
+                if ($st) { try { $st.Dispose() } catch { $null = $_ } }
             }
             $S.OutStream = $null; $S.ErrStream = $null
             try {
