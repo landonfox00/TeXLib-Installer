@@ -4,6 +4,86 @@ All notable changes to TeXLib-Installer are recorded here. Format follows [Keep 
 
 ## [Unreleased]
 
+## [0.10.2] — 2026-08-13
+
+### Changed
+
+- **The release root now holds two files you can click, and both are the
+  graphical ones.** `install.bat` and `uninstall.bat` *are* the GUI installer
+  and uninstaller; the console entry points moved to
+  `tools\install-console.bat` and `tools\uninstall-console.bat`.
+
+  0.10.0 and 0.10.1 added the two GUIs but left them named `install-gui.bat` /
+  `uninstall-gui.bat` beside the originals, so the root carried four `.bat`
+  files — and the two with the plainest, most obvious names were the *console*
+  ones. The file a first-time user was likeliest to double-click was the one
+  written for scripting. Naming should follow what people reach for, and
+  nobody reaches for `-gui`.
+
+  Nothing about the console surface changed but its path: same switches, same
+  `boot_wrapper.ps1`, same exit codes, and it is still what CI drives and what
+  `-Repair` / `-Doctor` / `-Verify` / `-Update` / `-Silent` are documented
+  against. The console `.bat` files set their working directory to the release
+  root rather than `tools\`, so `texlib.config.json`, pre-staged component
+  ZIPs, and a relative `-InstallPath` all resolve exactly where they did
+  before.
+
+  CI now pins the layout: exactly two `.bat` files at the bundle root, both
+  launching a `-gui.ps1`, no `.ps1` at the root, and every file the four entry
+  points invoke present in the bundle.
+
+### Fixed
+
+- **Nothing built on a fresh install.** Every TeXLib document failed at
+  `\documentclass` with ``File `didactic.cls' not found`` — every class, every
+  document, on a machine the installer had just reported as good.
+
+  `Ctrl+B` on a `.tex` file runs the **native** `texlib_build` command (the
+  TeXLib package's own keymap has bound it since the 2026-07-10 cutover), not
+  LaTeXTools. The native command reads its `TEXINPUTS` from `texinputs` in
+  `TeXLib.sublime-settings`, and the package default ships that key commented
+  out — *"leave unset to inherit the process environment"*. Sublime inherits no
+  `TEXINPUTS`, and the library deliberately lives outside every TEXMF tree, so
+  unset means unresolvable. The installer wrote a perfectly correct `TEXINPUTS`
+  into `LaTeXTools.sublime-settings`, but only the legacy
+  *Tools > Build With > TeXLib* path ever reads that file.
+
+  So the one file that made the primary build path work was the one file the
+  installer did not write — the author's own copy is even labelled *"Machine-local
+  override for the native TeXLib plugin (NOT shipped)"*, which is exactly why
+  this was invisible from the development machine.
+
+  The installer now writes `Packages/User/TeXLib.sublime-settings` from a
+  template, the same way it already wrote the LaTeXTools one. The search path is
+  **generated**, not hardcoded: the library root plus each immediate
+  subdirectory that actually holds a `.cls`/`.sty`/`.lua`, so adding a module
+  directory to the library needs no installer release. It is explicit rather
+  than recursive (`<root>//` re-walks the tree every pass and lets a stale
+  `.aux` shadow a same-named build), and it ends in the load-bearing empty
+  segment — kpathsea only *appends* its default path at one, and without it
+  `texmf-dist` drops out and builds fatal at startup instead.
+
+  A file you have taken over is left alone: the installer rewrites this one only
+  while it still carries the marker line saying it authored it, and if your own
+  copy sets no `texinputs` it says so and prints the line to paste.
+
+- **The end-of-install check could not have caught the above.** It compiled a
+  plain `article`, which passes on a machine where not one real document
+  builds. It now also asks `kpsewhich`, under precisely the `TEXINPUTS` just
+  written, to resolve every class in the library — one call, and it fails in the
+  same place a user's first `Ctrl+B` would.
+
+- **The TeX Live step no longer opens a console window.** It put one on screen
+  for the whole install — minutes to the better part of an hour — sitting in
+  front of the GUI that was already reporting the same progress. `Start-Process`
+  now passes `-NoNewWindow`, which sets `CreateNoWindow`; `-WindowStyle Hidden`
+  is not the fix and never was, because `-RedirectStandardOutput` forces
+  `UseShellExecute=$false`, under which `WindowStyle` is silently ignored.
+  Measured both ways rather than assumed. Nothing is lost: output was already
+  going to the log, and under `-no-gui` `install-tl-windows.bat` runs `perl
+  install-tl` in-place, so its whole child tree inherits the same hidden console
+  instead of opening windows of its own.
+
 ## [0.10.1] — 2026-08-08
 
 ### Added

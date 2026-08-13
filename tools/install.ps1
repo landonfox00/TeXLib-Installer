@@ -49,7 +49,7 @@
 .PARAMETER Update
     Fetch the latest release from GitHub, verify it against the release's
     SHA256SUMS, and re-run the newer installer in place of this one. Every other
-    argument you pass is forwarded to it, so `install.bat -Update -Silent` does
+    argument you pass is forwarded to it, so `install-console.bat -Update -Silent`
     an unattended update. Without this, a newer release means downloading and
     extracting a ZIP by hand.
 
@@ -96,8 +96,8 @@
     script -- or from the GUI, which drives -Silent and so could not offer the
     choice the interactive console prompt has always had.
 
-      install.bat -Silent -Reinstall Sublime
-      install.bat -Silent -Reinstall Sublime,SumatraPDF
+      tools\install-console.bat -Silent -Reinstall Sublime
+      tools\install-console.bat -Silent -Reinstall Sublime,SumatraPDF
 
     Reinstalling Sublime preserves your settings (they live in the library via
     the Packages\User junction); it re-fetches the binary and LaTeXTools.
@@ -180,7 +180,7 @@ param(
 # =============================================================================
 # 0. INSTALLER METADATA
 # =============================================================================
-$InstallerVersion = "0.10.1"
+$InstallerVersion = "0.10.2"
 $InstallerRepo    = "https://github.com/landonfox00/TeXLib-Installer"
 $ReleasesApi      = "https://api.github.com/repos/landonfox00/TeXLib-Installer/releases/latest"
 
@@ -273,7 +273,7 @@ function Stop-Installer {
             Write-Host "  It may be large. Delete it once you no longer need it." -ForegroundColor Gray
         }
     }
-    # When launched via install.bat -> tools\boot_wrapper.ps1, the wrapper
+    # Launched via tools\install-console.bat -> boot_wrapper.ps1, the wrapper
     # owns the pause-on-failure prompt and the exit-code surfacing. Skip our
     # own prompt to avoid two "Press Enter to close" prompts back to back.
     # Direct PS launches (no bat) still see the prompt here.
@@ -446,7 +446,7 @@ if ($Reinstall) {
         Write-Host ""
         Write-Host "FATAL: -Reinstall does not know '$($Parsed.Error)'." -ForegroundColor Red
         Write-Host "       Valid components: $($Parsed.Valid -join ', ')" -ForegroundColor Red
-        Write-Host "       Example: install.bat -Silent -Reinstall Sublime,SumatraPDF" -ForegroundColor Red
+        Write-Host "       Example: tools\install-console.bat -Silent -Reinstall Sublime,SumatraPDF" -ForegroundColor Red
         Write-Host ""
         Stop-Installer 14
     }
@@ -1032,7 +1032,7 @@ function Invoke-Doctor {
             _Warn "TeXLib Sublime package at $PluginLinkPath is a real folder, not a junction; it will not track library updates"
         }
     } elseif (Test-Path $PluginLibrary) {
-        _Fail "TeXLib Sublime package not deployed. The library has it at $PluginLibrary but Sublime cannot load it from there; re-run the installer (or install.bat -Repair) to create $PluginLinkPath"
+        _Fail "TeXLib Sublime package not deployed. The library has it at $PluginLibrary but Sublime cannot load it from there; re-run the installer (or tools\install-console.bat -Repair) to create $PluginLinkPath"
     } else {
         _Warn "This library ships no Sublime\texlib package; only the LaTeXTools builder is available (upgrade the library to get the command palette, snippets, and texlib_* tools)"
     }
@@ -1252,7 +1252,7 @@ function Invoke-VerifyInstall {
         Write-Host "No manifest at $ManifestFile." -ForegroundColor Yellow
         if (Test-Path $BaseDir) {
             Write-Host "This install predates -Verify (manifests arrived in 0.9.0)." -ForegroundColor Gray
-            Write-Host "Run install.bat -Repair to write one, then -Verify again." -ForegroundColor Gray
+            Write-Host "Run tools\install-console.bat -Repair to write one, then -Verify again." -ForegroundColor Gray
         } else {
             Write-Host "Nothing is installed at $BaseDir." -ForegroundColor Gray
         }
@@ -1308,8 +1308,8 @@ function Invoke-VerifyInstall {
 
     Write-Host "Edited settings show up as 'changed' and are perfectly normal." -ForegroundColor Gray
     Write-Host "Anything missing, or changes you did not make, are repaired by:" -ForegroundColor Gray
-    Write-Host "  install.bat -Repair      (config only, no downloads)" -ForegroundColor Cyan
-    Write-Host "  install.bat              (full re-install)" -ForegroundColor Cyan
+    Write-Host "  tools\install-console.bat -Repair   (config only, no downloads)" -ForegroundColor Cyan
+    Write-Host "  install.bat                         (full re-install, graphical)" -ForegroundColor Cyan
     Write-Host ""
     Stop-Installer 22
 }
@@ -1634,7 +1634,7 @@ if ($InstallComponents) {
     }
     if ($TexLiveScheme -ne 'full') {
         Add-PreflightWarning "scheme-$TexLiveScheme is smaller and much faster than scheme-full, but TeXLib is tested against full. A package it needs may be absent."
-        Add-PreflightNote "(install.bat -Doctor checks every package TeXLib requires, so a gap shows up as a named missing package rather than a cryptic build error)"
+        Add-PreflightNote "(tools\install-console.bat -Doctor checks every package TeXLib requires, so a gap shows up as a named missing package rather than a cryptic build error)"
     }
 
     # 7f. Sublime Text: always an isolated portable copy.
@@ -2191,9 +2191,27 @@ option_src 0
             $TLLog    = "$LogDir\texlive-install-$(Get-Date -Format 'yyyyMMdd-HHmmss').log"
             $TLErrLog = "$TLLog.err"
             Write-Host "  install-tl output -> $TLLog" -ForegroundColor Gray
+            # -NoNewWindow, or this step puts a console window on screen for the
+            # whole TeX Live install -- minutes to the better part of an hour,
+            # sitting in front of the GUI that is already reporting progress.
+            # It is the ONLY window the installer opens: everything else it
+            # spawns goes through the call operator, which does not allocate a
+            # console. -WindowStyle Hidden is not the fix and never was --
+            # -RedirectStandardOutput forces UseShellExecute=$false, under which
+            # WindowStyle is silently ignored. -NoNewWindow sets CreateNoWindow,
+            # which is the flag that actually suppresses it (measured: with the
+            # parent itself started CreateNoWindow, as install-gui.ps1 starts
+            # this script, the child reports a visible console window without
+            # this switch and no console at all with it).
+            #
+            # Nothing is lost by hiding it: stdout and stderr are already going
+            # to $TLLog, Wait-WithHeartbeat prints progress every 30s, and
+            # install-tl-windows.bat only runs `perl install-tl` in-place under
+            # -no-gui, so its whole child tree inherits this same hidden console
+            # rather than opening windows of its own.
             $TLProc = Start-Process -FilePath "$InstallerRoot\install-tl-windows.bat" `
                 -ArgumentList "-no-gui -profile texlive.profile" `
-                -WorkingDirectory $InstallerRoot -PassThru `
+                -WorkingDirectory $InstallerRoot -PassThru -NoNewWindow `
                 -RedirectStandardOutput $TLLog -RedirectStandardError $TLErrLog
             Wait-WithHeartbeat -Process $TLProc -IntervalSec 30 -Label "TeX Live"
 
@@ -2587,6 +2605,79 @@ try {
             $Content = $Content.Replace("{{TEX_PATH}}",    $JsonTexPath)
             $Content = $Content.Replace("{{TEX_LIB}}",     $JsonTexLib)
             Set-Content -Path "$UserDir\LaTeXTools.sublime-settings" -Value $Content -Encoding UTF8
+        }
+
+        # 16c-2. Native TeXLib plugin settings (texinputs).
+        #
+        # Ctrl+B on a .tex file runs the NATIVE `texlib_build` command -- the
+        # TeXLib package's own keymap has bound it since the 2026-07-10 cutover
+        # -- NOT LaTeXTools. The native command takes its TEXINPUTS from
+        # `texinputs` in TeXLib.sublime-settings, and the package default ships
+        # that key COMMENTED OUT ("leave unset to inherit the process
+        # environment"). Sublime inherits no TEXINPUTS and the library is
+        # deliberately outside every TEXMF tree, so through 0.10.1 a fresh
+        # install left the primary build path unable to resolve a single TeXLib
+        # class: every document died at \documentclass with "File
+        # `didactic.cls' not found". The LaTeXTools settings written just above
+        # carry a correct TEXINPUTS, but only the legacy Tools > Build With
+        # path reads them -- which is why this survived so long, and why the
+        # end-of-install smoke test (a plain `article`, no TeXLib class) still
+        # reported "LaTeX works". Section 20 now builds a real TeXLib class.
+        $TeXLibSettingsTpl = "$ScriptDir\templates\TeXLib.sublime-settings"
+        $TeXLibSettingsOut = "$UserDir\TeXLib.sublime-settings"
+        $TeXLibSettingsMark = "written by TeXLib-Installer"
+        $TeXLibTexInputsEnv = $null   # set below; read by section 20's verification
+        if (Test-Path $TeXLibSettingsTpl) {
+            # Ours to (re)write when absent, or when the file still carries the
+            # marker saying we authored it -- a re-install that moved the
+            # library must not leave stale paths behind. A file the user has
+            # taken over is never touched.
+            $ExistingTeXLibSettings = if (Test-Path $TeXLibSettingsOut) { Get-Content $TeXLibSettingsOut -Raw } else { $null }
+            $OursToWrite = (-not $ExistingTeXLibSettings) -or ($ExistingTeXLibSettings -match [regex]::Escape($TeXLibSettingsMark))
+
+            if ($OursToWrite) {
+                # Explicit, non-recursive segment list: the library root plus
+                # each immediate subdirectory actually holding a class/package/
+                # engine file. Generated rather than hardcoded, so a new module
+                # directory in the library needs no installer release. Forward
+                # slashes throughout -- kpathsea takes them on Windows and they
+                # need no JSON escaping.
+                $TexLibFs = $TeXLibDir.Replace("\", "/").TrimEnd("/")
+                $Segments = New-Object System.Collections.Generic.List[string]
+                $Segments.Add(".")
+                $Segments.Add($TexLibFs)
+                foreach ($Sub in @(Get-ChildItem -LiteralPath $TeXLibDir -Directory -ErrorAction SilentlyContinue | Sort-Object Name)) {
+                    # Sublime\ is the settings sync folder (Packages\User), not
+                    # a TeX module; dot-dirs and __pycache__ never hold classes.
+                    if ($Sub.Name -eq "Sublime" -or $Sub.Name -eq "__pycache__" -or $Sub.Name -like ".*") { continue }
+                    $TeXFiles = @(Get-ChildItem -LiteralPath $Sub.FullName -File -ErrorAction SilentlyContinue |
+                                  Where-Object { $_.Extension -eq ".sty" -or $_.Extension -eq ".cls" -or $_.Extension -eq ".lua" })
+                    if ($TeXFiles.Count -gt 0) { $Segments.Add("$TexLibFs/$($Sub.Name)") }
+                }
+                # Load-bearing empty segment -- see the template's own comment.
+                $Segments.Add("")
+                $JsonSegments = ($Segments | ForEach-Object {
+                    '"' + $_.Replace('\', '\\').Replace('"', '\"') + '"'
+                }) -join ", "
+                # Kept for section 20, which verifies these paths actually
+                # resolve the classes instead of taking it on trust.
+                $TeXLibTexInputsEnv = ($Segments -join ';')
+
+                $Content = Get-Content $TeXLibSettingsTpl -Raw
+                $Content = $Content.Replace("{{TEXINPUTS_SEGMENTS}}", $JsonSegments)
+                Set-Content -Path $TeXLibSettingsOut -Value $Content -Encoding UTF8
+                Write-Host "  Wrote $TeXLibSettingsOut (texinputs: $($Segments.Count - 1) search paths)" -ForegroundColor Green
+            } elseif ($ExistingTeXLibSettings -notmatch '(?m)^\s*"texinputs"\s*:') {
+                # Their file, so it stays -- but it has no active texinputs, and
+                # that is exactly the state in which nothing builds. Say so, and
+                # hand them the line to paste rather than making them derive it.
+                $TexLibFs = $TeXLibDir.Replace("\", "/").TrimEnd("/")
+                Write-Host "  [warn] $TeXLibSettingsOut is yours (no installer marker) and sets no `"texinputs`"." -ForegroundColor Yellow
+                Write-Host "         Ctrl+B builds will not resolve the TeXLib classes until it does. Add:" -ForegroundColor Yellow
+                Write-Host "           `"texinputs`": [`".`", `"$TexLibFs`", ... , `"`"]" -ForegroundColor Gray
+            } else {
+                Write-Host "  Left your own $TeXLibSettingsOut alone (it sets texinputs)" -ForegroundColor Gray
+            }
         }
 
         # 16d. Sublime editor preferences.
@@ -3099,7 +3190,7 @@ Set-Content -Path $VersionFile -Value $VersionContent -Encoding UTF8
 Write-Host "  Wrote $VersionFile" -ForegroundColor Gray
 
 # --- Install manifest --------------------------------------------------------
-# A hash per file this installer authored, so `install.bat -Verify` can later
+# A hash per file this installer authored, so `install-console.bat -Verify` can later
 # answer "is this still what was installed?" -- the question behind every build
 # that used to work and now doesn't. Cheap: TeX Live is excluded, so this is
 # tens of MB, not gigabytes.
@@ -3156,6 +3247,41 @@ TeXLib install verified -- $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss').
             }
         } finally {
             Pop-Location
+        }
+
+        # Can Ctrl+B resolve the TeXLib classes? The hello.tex compile above
+        # says only that LaTeX runs -- it is a plain `article` and would pass on
+        # a machine where not one TeXLib document builds, which is exactly what
+        # 0.10.1 shipped. What actually has to hold is that the TEXINPUTS
+        # written into TeXLib.sublime-settings resolves the library's classes,
+        # so ask kpsewhich under precisely that TEXINPUTS. Cheap (one call), and
+        # it fails in the same place a user's first Ctrl+B would.
+        $Kpse = "$TexBinPath\kpsewhich.exe"
+        $LibClasses = @(Get-ChildItem -LiteralPath $TeXLibDir -Filter "*.cls" -Recurse -Depth 1 -ErrorAction SilentlyContinue |
+                        Where-Object { $_.DirectoryName -notlike "*\Sublime*" } |
+                        Select-Object -ExpandProperty Name -Unique)
+        if (-not $TeXLibTexInputsEnv) {
+            Write-Host "  [note] TeXLib.sublime-settings is yours to manage; skipping the class-resolution check" -ForegroundColor Gray
+        } elseif ((Test-Path $Kpse) -and $LibClasses.Count -gt 0) {
+            $PrevTexInputs = $env:TEXINPUTS
+            $PrevEap2 = $ErrorActionPreference
+            $env:TEXINPUTS = $TeXLibTexInputsEnv
+            $ErrorActionPreference = 'Continue'   # kpsewhich exits 1 on any miss
+            try { $KpseFound = @(& $Kpse @LibClasses) } catch { $KpseFound = @() } finally {
+                $ErrorActionPreference = $PrevEap2
+                if ($null -eq $PrevTexInputs) { Remove-Item Env:TEXINPUTS -ErrorAction SilentlyContinue }
+                else { $env:TEXINPUTS = $PrevTexInputs }
+            }
+            $ResolvedNames = @($KpseFound | ForEach-Object { Split-Path $_ -Leaf })
+            $UnresolvedCls = @($LibClasses | Where-Object { $ResolvedNames -notcontains $_ })
+            if ($UnresolvedCls.Count -eq 0) {
+                Write-Host "  [OK] All $($LibClasses.Count) TeXLib classes resolve on the build TEXINPUTS -- Ctrl+B will find them" -ForegroundColor Green
+            } else {
+                Write-Host "  [FAIL] $($UnresolvedCls.Count) TeXLib class(es) do NOT resolve: $($UnresolvedCls -join ', ')" -ForegroundColor Red
+                Write-Host "         Ctrl+B will fail with `"File ``<name>.cls' not found`" on those documents." -ForegroundColor Yellow
+                Write-Host "         TEXINPUTS used: $TeXLibTexInputsEnv" -ForegroundColor Gray
+                Write-Host "         Check `"texinputs`" in $UserDir\TeXLib.sublime-settings" -ForegroundColor Gray
+            }
         }
 
         # Sublime build readiness: LaTeXTools' plugin.py won't load without its
@@ -3215,7 +3341,7 @@ if (-not $OnlyTeXLib) {
     Write-Host "     'SumatraPDF (TeXLib)'." -ForegroundColor Gray
     Write-Host ""
 }
-Write-Host "Troubleshooting:    install.bat -Doctor"            -ForegroundColor Cyan
+Write-Host "Troubleshooting:    tools\install-console.bat -Doctor" -ForegroundColor Cyan
 Write-Host "Issues:             $InstallerRepo/issues"          -ForegroundColor Cyan
 Write-Host ""
 

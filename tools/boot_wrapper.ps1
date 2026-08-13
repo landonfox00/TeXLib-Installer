@@ -53,9 +53,11 @@ $Label = if ($Kind -eq 'install') { 'Installer' } else { 'Uninstaller' }
 $env:TEXLIB_INSTALLER_WRAPPED = "1"
 
 # install.ps1 / uninstall.ps1 are siblings in tools\. They live here rather than
-# at the release root so the only clickable things a user sees are install.bat
-# and uninstall.bat -- a .ps1 next to a .bat of the same name was a reliable
-# source of "which one do I double-click?".
+# at the release root so the only clickable things a user sees there are
+# install.bat and uninstall.bat -- a .ps1 next to a .bat of the same name was a
+# reliable source of "which one do I double-click?". Since 0.10.2 those two are
+# the GRAPHICAL entry points, and the console ones live in here as
+# install-console.bat / uninstall-console.bat -- which is what invokes this file.
 $ScriptDir = $PSScriptRoot
 
 # Boot log in %TEMP% so a locked install dir does not prevent logging. The
@@ -77,7 +79,7 @@ Write-Host ""
 # ValueFromRemainingArguments hands us a flat ARRAY of tokens, and `& $script
 # @array` splats them POSITIONALLY -- array splatting never re-interprets
 # "-Silent" as a parameter name. Only a HASHTABLE splat binds named parameters.
-# So every documented `install.bat -Flag` form was broken: `-Doctor` landed in
+# So every documented `install-console.bat -Flag` form was broken: `-Doctor` landed in
 # install.ps1's positional [string]$InstallPath (running a full install into a
 # folder named "-Doctor"), and uninstall.ps1, having no positional parameter to
 # absorb it, aborted outright.

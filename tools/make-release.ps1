@@ -71,6 +71,8 @@ if (-not (Test-Path $TexLibPath)) {
     exit 1
 }
 $RequiredFiles = @("tools\install.ps1", "tools\uninstall.ps1", "tools\boot_wrapper.ps1",
+                   "tools\install-gui.ps1", "tools\uninstall-gui.ps1",
+                   "tools\install-console.bat", "tools\uninstall-console.bat",
                    "install.bat", "uninstall.bat")
 foreach ($f in $RequiredFiles) {
     if (-not (Test-Path (Join-Path $RepoRoot $f))) {
@@ -88,13 +90,17 @@ if (Test-Path $StageRoot) {
 New-Item -ItemType Directory -Force -Path $StageRoot | Out-Null
 
 Write-Host "Copying installer files..." -ForegroundColor Cyan
-# Only the .bat files and the docs sit at the release root: that is the whole
-# point of keeping the .ps1 files in tools\, so a user opening the extracted
-# folder sees a short list of things to double-click. install-gui.bat joined
-# them in 0.10.0 -- install.bat stays the console/scriptable surface (it is
-# what CI drives), and the GUI is the one to hand a colleague.
+# TWO .bat files and the docs sit at the release root -- nothing else. Opening
+# the extracted folder should present one obvious thing to double-click per
+# direction, install or uninstall, and both are the GRAPHICAL ones as of
+# 0.10.2. The console/scriptable surface did not go away; it moved to
+# tools\install-console.bat / tools\uninstall-console.bat, where CI and anyone
+# typing -Repair / -Doctor / -Verify can still reach it. Before 0.10.2 the
+# root held four .bat files and the two plainest names -- install.bat,
+# uninstall.bat -- were the console ones, so the file a first-time user was
+# most likely to click was the one meant for scripting.
 $InstallerFiles = @(
-    "install.bat", "install-gui.bat", "uninstall.bat", "uninstall-gui.bat",
+    "install.bat", "uninstall.bat",
     "INSTALL.md", "README.md", "LICENSE", "CHANGELOG.md"
 )
 foreach ($f in $InstallerFiles) {
@@ -103,15 +109,17 @@ foreach ($f in $InstallerFiles) {
 }
 Copy-Item (Join-Path $RepoRoot "templates") $StageRoot -Recurse -Force
 
-# install.bat / uninstall.bat invoke tools\boot_wrapper.ps1, which in turn runs
-# tools\install.ps1 / tools\uninstall.ps1, so all three MUST ship -- without any
-# of them the .bat just flashes open and dies (PowerShell -File on a missing
-# script). make-release.ps1 itself is the build tool, and dev-install-test.ps1
-# is a local test harness; neither ships. package-integrity asserts that the
-# shipped three are present and the other two are not.
+# The root .bat files invoke tools\*-gui.ps1; the console .bat files invoke
+# tools\boot_wrapper.ps1, which in turn runs tools\install.ps1 /
+# tools\uninstall.ps1. Every one of these MUST ship -- without any of them the
+# .bat just flashes open and dies (PowerShell -File on a missing script).
+# make-release.ps1 itself is the build tool, and dev-install-test.ps1 is a
+# local test harness; neither ships. package-integrity asserts that the shipped
+# files are present and the other two are not.
 $ToolsStage = Join-Path $StageRoot "tools"
 New-Item -ItemType Directory -Force -Path $ToolsStage | Out-Null
-foreach ($w in @("boot_wrapper.ps1", "install.ps1", "uninstall.ps1", "install-gui.ps1", "uninstall-gui.ps1")) {
+foreach ($w in @("boot_wrapper.ps1", "install.ps1", "uninstall.ps1", "install-gui.ps1", "uninstall-gui.ps1",
+                 "install-console.bat", "uninstall-console.bat")) {
     Copy-Item (Join-Path $RepoRoot "tools\$w") $ToolsStage -Force
 }
 

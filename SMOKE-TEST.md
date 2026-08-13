@@ -17,7 +17,7 @@ the one behavior CI can only simulate).
 - [ ] **Open a brand-new terminal** (PATH only refreshes in new processes) and
       run `pdflatex --version` — it should report TeX Live and a path under
       `%LOCALAPPDATA%\TeXLib\TexLive\<year>\bin\windows`.
-- [ ] `install.bat -Doctor` reports all `[OK]` and **exits 0**
+- [ ] `tools\install-console.bat -Doctor` reports all `[OK]` and **exits 0**
       (`echo %ERRORLEVEL%` / `$LASTEXITCODE` should be 0).
 
 ## Library location

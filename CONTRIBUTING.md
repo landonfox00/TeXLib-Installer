@@ -27,7 +27,7 @@ non-technical colleagues. The audience matters: changes should keep the install
   (`-ErrorAction SilentlyContinue` / `try`/`catch`).
 - `tools/install.ps1` and `tools/uninstall.ps1` are UTF-8 **with** a BOM, and
   the `encoding-guard` CI job enforces it. Without the BOM, Windows PowerShell
-  5.1 — which `install.bat` launches — decodes any non-ASCII byte (an em dash in
+  5.1 — which the `.bat` entry points launch — decodes any non-ASCII byte (an em dash in
   a message, say) as Windows-1252 and aborts with a parse error before running a
   line. That shipped once, in v0.5.0. Prefer `--` over em dashes in new script
   text anyway; the BOM is the belt to that suspenders.
@@ -47,13 +47,13 @@ non-technical colleagues. The audience matters: changes should keep the install
   Invoke-ScriptAnalyzer -Path . -Recurse -Settings PSScriptAnalyzerSettings.psd1
   ```
 
-- **Dry run** (no system changes): `install.bat -DryRun` (or
+- **Dry run** (no system changes): `tools\install-console.bat -DryRun` (or
   `powershell -File tools\install.ps1 -DryRun`).
-- **Doctor** (diagnose an existing install): `install.bat -Doctor`.
+- **Doctor** (diagnose an existing install): `tools\install-console.bat -Doctor`.
 - **Contained end-to-end run:** `powershell -File tools\dev-install-test.ps1`.
   Builds a returning-machine sandbox and installs into it twice; contained
   entirely by `-InstallPath` / `-TeXLibPath` / `-Sandbox`, so cleanup is deleting
-  one directory. Never use `uninstall.bat` to clean up a local test — it rewrites
+  one directory. Never use the uninstaller to clean up a local test — it rewrites
   HKCU associations and the user PATH regardless of `-InstallPath`.
 - **Manual checklist:** work through [TESTING.md](TESTING.md). A real
   end-to-end install on a clean machine is the gold standard before any release

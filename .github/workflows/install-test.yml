@@ -33,7 +33,7 @@ jobs:
   # ---------------------------------------------------------------------------
   # 1. encoding-guard — FAST. Fails if install.ps1 / uninstall.ps1 ever regress
   #    to UTF-8 *without* a BOM while containing non-ASCII (em-dashes). That
-  #    exact condition makes Windows PowerShell 5.1 (what install.bat launches)
+  #    exact condition makes Windows PowerShell 5.1 (what the .bat entry points launch)
   #    decode the script as Windows-1252 and abort with a parse error before
   #    running a line — the bug that shipped in v0.5.0. This guard makes the
   #    regression impossible to merge unnoticed.
@@ -102,7 +102,7 @@ jobs:
           ) -join "`r`n"
           Set-Content -Encoding UTF8 -Path (Join-Path $sandbox 'tools\uninstall.ps1') -Value $stub
 
-          # Launch exactly as uninstall.bat does: WinPS 5.1, -File, positional
+          # Launch exactly as tools\uninstall-console.bat does: WinPS 5.1, -File, positional
           # 'uninstall', NO further args. `type nul |` feeds a closed, empty
           # stdin so the wrapper's final Read-Host returns at once instead of
           # hanging the headless job.
@@ -129,7 +129,7 @@ jobs:
           $ErrorActionPreference = 'Stop'
           # Testing only the zero-arg case is precisely why the named-argument
           # bug shipped from v0.3.0 through v0.6.0. `& $script @array` splats
-          # POSITIONALLY, so every documented `install.bat -Flag` form was
+          # POSITIONALLY, so every documented `install-console.bat -Flag` form was
           # wrong: -Doctor landed in install.ps1's positional [string]
           # $InstallPath (starting a real install into a folder named
           # "-Doctor"), while uninstall.ps1 -- with no positional parameter to
@@ -887,7 +887,7 @@ jobs:
           if ($rc -ne 0) { Write-Host "FAIL: interactive re-run exited $rc." -ForegroundColor Red; exit $rc }
           Write-Host "OK: interactive re-run skipped all three components and completed." -ForegroundColor Green
 
-      - name: Teardown through uninstall.bat (zero args, wrapper path)
+      - name: Teardown through tools\uninstall-console.bat (zero args, wrapper path)
         if: always()
         shell: pwsh
         run: |
@@ -916,10 +916,10 @@ jobs:
           # only when it sits outside the install root -- it does not here, so
           # the fourth line is simply unread).
           Set-Content -Encoding ascii -Path confirm.txt -Value "Y`r`nY`r`nY`r`nY"
-          $out = & cmd /c "uninstall.bat -InstallPath `"$env:INSTALL_ROOT`" < confirm.txt" 2>&1 | Out-String
+          $out = & cmd /c "tools\uninstall-console.bat -InstallPath `"$env:INSTALL_ROOT`" < confirm.txt" 2>&1 | Out-String
           $rc = $LASTEXITCODE
           Write-Host $out
-          Write-Host "uninstall.bat exit code: $rc"
+          Write-Host "uninstall-console.bat exit code: $rc"
           if ($out -match 'positional parameter cannot be found') {
             Write-Host "FAIL: the wrapper's stray-`$null splat regressed." -ForegroundColor Red; exit 1
           }
@@ -929,7 +929,7 @@ jobs:
           if ($out -match 'Aborted\.') {
             Write-Host "FAIL: the confirmation answer did not take; nothing was uninstalled." -ForegroundColor Red; exit 1
           }
-          if ($rc -ne 0) { Write-Host "FAIL: uninstall.bat exited $rc." -ForegroundColor Red; exit $rc }
+          if ($rc -ne 0) { Write-Host "FAIL: uninstall-console.bat exited $rc." -ForegroundColor Red; exit $rc }
 
           # The junction guard: an unclaimed junction must survive, and its
           # target must be untouched (Directory::Delete(path,$false) never
@@ -952,7 +952,7 @@ jobs:
               Write-Host "FAIL: $gone survived the uninstall." -ForegroundColor Red; exit 1
             }
           }
-          Write-Host "OK: uninstall.bat removed every component and preserved the unclaimed junction." -ForegroundColor Green
+          Write-Host "OK: uninstall-console.bat removed every component and preserved the unclaimed junction." -ForegroundColor Green
 
   # ---------------------------------------------------------------------------
   # 4c. legacy-library-migration — FAST. Covers the 0.6.3 relocation. A machine
@@ -1054,7 +1054,7 @@ jobs:
           # -All is the "remove everything" switch, and it removes everything the
           # INSTALL owns. A pre-0.6.3 folder the installer merely read from is
           # not ours to delete, and must survive even this.
-          $out = & cmd /c "uninstall.bat -All -Silent -InstallPath `"$env:INSTALL_ROOT`"" 2>&1 | Out-String
+          $out = & cmd /c "tools\uninstall-console.bat -All -Silent -InstallPath `"$env:INSTALL_ROOT`"" 2>&1 | Out-String
           Write-Host $out
           if (Test-Path $env:INSTALL_ROOT) {
             Write-Host "FAIL: -All left $env:INSTALL_ROOT behind." -ForegroundColor Red; exit 1
@@ -1230,6 +1230,27 @@ jobs:
           }
           if ((Get-Content $ltSettings -Raw) -notmatch '"builder"\s*:\s*"texlib"') {
             Write-Host "FAIL: the rewritten LaTeXTools settings do not select the texlib builder." -ForegroundColor Red; exit 1
+          }
+          # The file the LaTeXTools one does NOT stand in for. Ctrl+B runs the
+          # native texlib_build command, which reads texinputs from here and
+          # nowhere else; through 0.10.1 nothing wrote it and every document
+          # failed at \documentclass on a fresh install.
+          $tlSettings = Join-Path $env:LIB_ROOT 'Sublime\TeXLib.sublime-settings'
+          if (-not (Test-Path $tlSettings)) {
+            Write-Host "FAIL: -Repair did not write $tlSettings." -ForegroundColor Red; exit 1
+          }
+          $tl = Get-Content $tlSettings -Raw
+          if ($tl -notmatch '(?m)^\s*"texinputs"\s*:') {
+            Write-Host "FAIL: TeXLib.sublime-settings has no ACTIVE texinputs key (commented out is the bug)." -ForegroundColor Red; exit 1
+          }
+          $libFs = $env:LIB_ROOT.Replace('\', '/').TrimEnd('/')
+          if ($tl -notmatch [regex]::Escape('"' + $libFs + '"')) {
+            Write-Host "FAIL: texinputs does not contain the library root $libFs." -ForegroundColor Red; exit 1
+          }
+          # kpathsea only APPENDS its default path at an empty segment; without
+          # one TEXINPUTS replaces it and every build fatals at startup.
+          if ($tl -notmatch '"texinputs"\s*:\s*\[[^\]]*""\s*\]') {
+            Write-Host "FAIL: texinputs does not end in the load-bearing empty segment." -ForegroundColor Red; exit 1
           }
           # And it must not have touched the library it was told to leave alone.
           if (-not (Test-Path (Join-Path $env:LIB_ROOT 'CANARY.txt'))) {
@@ -1534,7 +1555,7 @@ jobs:
           $desktop = [Environment]::GetFolderPath('Desktop')
           $mine = Join-Path $desktop 'Sublime.lnk'
 
-          $out = & cmd /c "uninstall.bat -All -Silent -InstallPath `"$env:INSTALL_ROOT`"" 2>&1 | Out-String
+          $out = & cmd /c "tools\uninstall-console.bat -All -Silent -InstallPath `"$env:INSTALL_ROOT`"" 2>&1 | Out-String
           Write-Host $out
 
           # Same name as the one earlier releases created, different target.
@@ -1698,12 +1719,13 @@ jobs:
 
   # ---------------------------------------------------------------------------
   # 5. package-integrity — FAST. Builds an actual release bundle with
-  #    make-release.ps1 and asserts it contains every file install.bat /
-  #    uninstall.bat invoke, catching packaging gaps the other jobs miss because
-  #    they run install.ps1 directly. Born from the 2026-06-15 flash-and-die:
-  #    make-release omitted tools\install_wrapper.ps1, which install.bat invokes.
-  #    (Actually launching install.bat headlessly is flaky -- the wrapper's
-  #    Read-Host -- so that path is covered by the manual SMOKE-TEST.md instead.)
+  #    make-release.ps1 and asserts it contains every file the four entry
+  #    points invoke, catching packaging gaps the other jobs miss because they
+  #    run install.ps1 directly. Born from the 2026-06-15 flash-and-die:
+  #    make-release omitted tools\install_wrapper.ps1, which the .bat invokes.
+  #    (Actually launching the entry points headlessly is flaky -- the
+  #    wrapper's Read-Host -- so that path is covered by SMOKE-TEST.md.)
+  #    Also guards the 0.10.2 root layout: exactly two .bat files, both GUI.
   # ---------------------------------------------------------------------------
   package-integrity:
     if: github.event_name != 'schedule'
@@ -1712,12 +1734,12 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Build a release bundle and launch install.bat from it
+      - name: Build a release bundle and check its layout
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           # make-release snapshots a texlib library; a stub suffices to check
-          # PACKAGING completeness and that install.bat launches.
+          # PACKAGING completeness and the shape of the extracted folder.
           $stub = Join-Path $env:RUNNER_TEMP 'texlib-src'
           New-Item -ItemType Directory -Force -Path $stub | Out-Null
           Set-Content -Encoding UTF8 -Path (Join-Path $stub 'CHANGELOG.md') -Value "# Changelog`r`n`r`n## [Unreleased]`r`n- stub"
@@ -1726,11 +1748,14 @@ jobs:
           if ($LASTEXITCODE -ne 0) { Write-Host "FAIL: make-release exited $LASTEXITCODE" -ForegroundColor Red; exit 1 }
           $stage = Join-Path $out 'TeXLib-Installer-v0.0.0-ci'
 
-          # Every file install.bat / uninstall.bat invoke must ship, or the .bat
-          # flashes open and dies (PowerShell -File on a missing script).
-          $required = @('install.bat','install-gui.bat','uninstall.bat','uninstall-gui.bat',
+          # Every file the entry points invoke must ship, or the .bat flashes
+          # open and dies (PowerShell -File on a missing script). Root .bat ->
+          # tools\*-gui.ps1; tools\*-console.bat -> tools\boot_wrapper.ps1 ->
+          # tools\install.ps1 / uninstall.ps1.
+          $required = @('install.bat','uninstall.bat',
                         'tools\boot_wrapper.ps1','tools\install.ps1','tools\uninstall.ps1',
                         'tools\install-gui.ps1','tools\uninstall-gui.ps1',
+                        'tools\install-console.bat','tools\uninstall-console.bat',
                         'texlib','templates')
           $missing = $required | Where-Object { -not (Test-Path (Join-Path $stage $_)) }
           if ($missing) { Write-Host "FAIL: bundle missing: $($missing -join ', ')" -ForegroundColor Red; exit 1 }
@@ -1740,6 +1765,23 @@ jobs:
           foreach ($r in 'install.ps1','uninstall.ps1','install-gui.ps1','uninstall-gui.ps1') {
             if (Test-Path (Join-Path $stage $r)) {
               Write-Host "FAIL: $r is at the bundle root; it belongs in tools\" -ForegroundColor Red; exit 1
+            }
+          }
+          # EXACTLY two .bat files at the root, and both graphical (0.10.2).
+          # The root is the whole first impression: one obvious thing to click
+          # per direction. Before 0.10.2 there were four, and the two plainest
+          # names were the CONSOLE ones -- so the file a first-time user was
+          # likeliest to pick was the one meant for scripting. If a console or
+          # -gui suffixed .bat reappears here, that regressed.
+          $rootBats = @(Get-ChildItem -Path $stage -File -Filter '*.bat' | Select-Object -ExpandProperty Name | Sort-Object)
+          if (($rootBats -join ',') -ne 'install.bat,uninstall.bat') {
+            Write-Host "FAIL: bundle root should hold exactly install.bat + uninstall.bat; found: $($rootBats -join ', ')" -ForegroundColor Red; exit 1
+          }
+          # Both root .bat files must launch the GUI, not boot_wrapper.
+          foreach ($b in 'install.bat','uninstall.bat') {
+            $body = Get-Content (Join-Path $stage $b) -Raw
+            if ($body -notmatch '-gui\.ps1') {
+              Write-Host "FAIL: $b at the root does not launch the graphical installer." -ForegroundColor Red; exit 1
             }
           }
           # Build/dev-only tools must NOT ship. make-release.ps1 builds the
@@ -1778,13 +1820,13 @@ jobs:
             exit 1
           }
 
-          # The wrapper install.bat invokes must be a real, parseable script
-          # (a missing/corrupt wrapper is exactly what makes install.bat flash
-          # open and die).
+          # The wrapper the console entry points invoke must be a real,
+          # parseable script (a missing/corrupt wrapper is exactly what makes a
+          # .bat flash open and die).
           $werr = $null
           [void][System.Management.Automation.Language.Parser]::ParseFile((Join-Path $stage 'tools\boot_wrapper.ps1'), [ref]$null, [ref]$werr)
           if ($werr) { Write-Host "FAIL: shipped boot_wrapper.ps1 has parse errors" -ForegroundColor Red; exit 1 }
-          Write-Host "OK: release bundle contains every file install.bat needs." -ForegroundColor Green
+          Write-Host "OK: release bundle is complete and the root holds only the two GUI entry points." -ForegroundColor Green
 
   # ---------------------------------------------------------------------------
   # 5b. gui — FAST. install-gui.ps1 is a front-end that reads install.ps1's
@@ -2091,7 +2133,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
-      - name: Teardown (uninstall.bat -Silent)
+      - name: Teardown (tools\uninstall-console.bat -Silent)
         # Always run so the VM is left clean even if install/Doctor failed.
         # uninstall.ps1 -Silent is fully non-interactive and always exits 0, so
         # it never masks an earlier failure (install/Doctor own pass/fail).
@@ -2108,7 +2150,7 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $env:TEXLIB_INSTALLER_WRAPPED = '1'
-          $out = & cmd /c "uninstall.bat -Silent -InstallPath `"$env:INSTALL_ROOT`"" 2>&1 | Out-String
+          $out = & cmd /c "tools\uninstall-console.bat -Silent -InstallPath `"$env:INSTALL_ROOT`"" 2>&1 | Out-String
           Write-Host $out
           if ($out -match 'positional parameter cannot be found') {
             Write-Host "FAIL: wrapper arg forwarding regressed." -ForegroundColor Red; exit 1

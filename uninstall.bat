@@ -1,5 +1,12 @@
 @echo off
-REM Thin entry point. All robustness lives in tools\boot_wrapper.ps1.
+REM The uninstaller. Double-click it; it shows what is actually installed,
+REM with folder sizes, and gives you a tick box per component. Nothing is
+REM pre-ticked.
+REM
+REM The console/scriptable surface is tools\uninstall-console.bat, which takes
+REM the -Keep* / -Remove* switches directly.
+REM
+REM -STA is required for WPF; -WindowStyle Hidden keeps a console from sitting
+REM behind the window.
 cd /d "%~dp0"
-echo Starting TeXLib uninstaller...
-PowerShell.exe -NoProfile -ExecutionPolicy Bypass -File ".\tools\boot_wrapper.ps1" uninstall %*
+start "" PowerShell.exe -STA -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File ".\tools\uninstall-gui.ps1" %*

@@ -20,20 +20,21 @@ Everything lands under one root, which is what makes uninstall a single director
 
 ```
 .
-├── install-gui.bat              # graphical installer -- what to hand a colleague
-├── install.bat                  # console installer -- scriptable surface, what CI drives
-├── uninstall-gui.bat            # graphical uninstaller -- pick what goes
-├── uninstall.bat
+├── install.bat                  # THE installer -- graphical, what to double-click
+├── uninstall.bat                # THE uninstaller -- graphical, pick what goes
 ├── templates/                   # config templates with {{...}} placeholders
 │   ├── LaTeXTools.sublime-settings
+│   ├── TeXLib.sublime-settings  # native plugin's texinputs -- how Ctrl+B finds the classes
 │   ├── Preferences.sublime-settings
 │   └── SumatraPDF-settings.txt
 ├── tools/
+│   ├── install-console.bat      # console installer -- scriptable surface, what CI drives
+│   ├── uninstall-console.bat    # console uninstaller
 │   ├── install.ps1              # main installer (runs end-to-end install)
 │   ├── install-gui.ps1          # WPF front-end: collects options, runs install.ps1 -Silent, shows progress
 │   ├── uninstall-gui.ps1        # WPF front-end: pick components, runs uninstall.ps1 -Silent
 │   ├── uninstall.ps1            # reverses install.ps1
-│   ├── boot_wrapper.ps1         # boot-log + always-pause wrapper for install.bat / uninstall.bat
+│   ├── boot_wrapper.ps1         # boot-log + always-pause wrapper for the console entry points
 │   ├── make-release.ps1         # builds the release ZIP (installer + TeXLib bundle)   [not shipped]
 │   └── dev-install-test.ps1     # contained local end-to-end test harness              [not shipped]
 ├── .github/
@@ -49,17 +50,19 @@ Everything lands under one root, which is what makes uninstall a single director
 └── README.md                    # this file
 ```
 
-The `.ps1` files live in `tools/` on purpose: an extracted release folder should offer a short list of things to double-click, and `install.bat` next to `install.ps1` reliably got people running the wrong one. `install.bat` → `tools/boot_wrapper.ps1` → `tools/install.ps1`, and CI asserts that chain plus the absence of a root-level `.ps1`.
+The release root holds **exactly two** files you can click, and as of 0.10.2 both are the graphical ones: `install.bat` → `tools/install-gui.ps1` and `uninstall.bat` → `tools/uninstall-gui.ps1`. Everything else lives in `tools/`, including the console entry points. Before 0.10.2 the root carried four `.bat` files and the two plainest names were the *console* ones, so the file a first-time user was likeliest to double-click was the one meant for scripting.
 
-`install-gui.bat` → `tools/install-gui.ps1` is a **front-end, not a second installer**. It builds an argument list, runs `install.ps1 -Silent` as a child process, and tails that process's output into a log pane. Every decision about what to install and what to write stays in `install.ps1`, which is still the only thing the install jobs in CI exercise — if the two ever disagree, `install.ps1` is right.
+The console surface did not go away, it moved: `tools/install-console.bat` → `tools/boot_wrapper.ps1` → `tools/install.ps1`. That is what CI drives and what `-Repair`, `-Doctor`, `-Verify`, `-Update` and `-Silent` are documented against. CI asserts both chains, that the root holds those two `.bat` files and nothing else, and that no `.ps1` sits at the root — `install.bat` next to `install.ps1` reliably got people running the wrong one.
 
-`uninstall-gui.bat` → `tools/uninstall-gui.ps1` is the same arrangement over `uninstall.ps1`. Per-component removal is not new — the console has confirmed Sublime Text, SumatraPDF, TeX Live and the library separately since 0.6.x — the window just puts a form over the `-Keep*` switches that choice already had. Note the polarity: the tick boxes say **remove**, the switches say **keep**, so the GUI inverts them in one place and CI asserts the wiring, because getting it backwards deletes a 6 GB tree someone meant to keep.
+`tools/install-gui.ps1` is a **front-end, not a second installer**. It builds an argument list, runs `install.ps1 -Silent` as a child process, and tails that process's output into a log pane. Every decision about what to install and what to write stays in `install.ps1`, which is still the only thing the install jobs in CI exercise — if the two ever disagree, `install.ps1` is right.
+
+`tools/uninstall-gui.ps1` is the same arrangement over `uninstall.ps1`. Per-component removal is not new — the console has confirmed Sublime Text, SumatraPDF, TeX Live and the library separately since 0.6.x — the window just puts a form over the `-Keep*` switches that choice already had. Note the polarity: the tick boxes say **remove**, the switches say **keep**, so the GUI inverts them in one place and CI asserts the wiring, because getting it backwards deletes a 6 GB tree someone meant to keep.
 
 The coupling that can rot silently is each GUI's phase table: they recognise the console banners to drive their progress bars, so renaming a banner leaves a run that works correctly behind a bar that never moves. The `gui` CI job asserts every marker still tracks its script — literally for the ones printed as constants, and via a declared `Emit` construct for those composed at runtime (`"Downloading $($Info.File)..."`, `"Removing $Label ($Path)..."`).
 
 ## Installer flags
 
-`tools/install.ps1` (and `install.bat`, which forwards args) accepts:
+`tools/install.ps1` (and `tools/install-console.bat`, which forwards args) accepts:
 
 | Flag | Effect |
 |---|---|
@@ -88,7 +91,7 @@ Combine as needed (e.g. `-OnlyTeXLib -Silent` for unattended library refreshes o
 
 ## Uninstaller flags
 
-`tools/uninstall.ps1` (and `uninstall.bat`) accepts:
+`tools/uninstall.ps1` (and `tools/uninstall-console.bat`) accepts:
 
 | Flag | Effect |
 |---|---|

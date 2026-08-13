@@ -177,6 +177,7 @@ try {
     $plugin = Join-Path $Root 'Sublime Text\Data\Packages\TeXLib'
     if (Test-Path $plugin) { [System.IO.Directory]::Delete($plugin, $false) }
     Remove-Item (Join-Path $Lib 'Sublime\LaTeXTools.sublime-settings') -Force -ErrorAction SilentlyContinue
+    Remove-Item (Join-Path $Lib 'Sublime\TeXLib.sublime-settings') -Force -ErrorAction SilentlyContinue
     Set-Content -Encoding UTF8 -Path (Join-Path $Lib 'CANARY.txt') -Value 'library must not be touched'
 
     $r3 = Invoke-Install -Repair
@@ -187,6 +188,15 @@ try {
     Assert-That ($r3.Out -match 'Leaving the TeXLib library')         "left the library alone"
     Assert-That (Test-Path $plugin)                                   "rebuilt the deleted Packages\TeXLib junction"
     Assert-That (Test-Path (Join-Path $Lib 'Sublime\LaTeXTools.sublime-settings')) "rewrote the deleted LaTeXTools settings"
+    # Ctrl+B runs the NATIVE texlib_build command, which takes its TEXINPUTS
+    # from here and from nowhere the LaTeXTools file can cover. Missing or
+    # commented-out means every document fails at \documentclass.
+    $TlSet = Join-Path $Lib 'Sublime\TeXLib.sublime-settings'
+    Assert-That (Test-Path $TlSet)                                    "rewrote the deleted TeXLib settings"
+    $TlRaw = if (Test-Path $TlSet) { Get-Content $TlSet -Raw } else { "" }
+    Assert-That ($TlRaw -match '(?m)^\s*"texinputs"\s*:')             "TeXLib settings set an ACTIVE texinputs"
+    Assert-That ($TlRaw -match [regex]::Escape('"' + $Lib.Replace('\','/').TrimEnd('/') + '"')) "texinputs contains the library root"
+    Assert-That ($TlRaw -match '"texinputs"\s*:\s*\[[^\]]*""\s*\]')   "texinputs ends in the empty (append-default) segment"
     Assert-That (Test-Path (Join-Path $Lib 'CANARY.txt'))             "library contents untouched"
 
     # -Sandbox's whole promise: nothing outside the sandbox was written.

@@ -22,7 +22,8 @@
 	// This Sublime IS a pinned portable copy the installer manages, and taking
 	// an in-app update still swaps it for an unmanaged one that no longer
 	// matches the manifest -- so update with a new installer release
-	// (`install.bat -Update`). We just cannot stop the prompt from a setting.
+	// (`tools\install-console.bat -Update`). We just cannot stop the prompt
+	// from a setting.
 	// If a real mechanism is ever found, it goes here.
 
 	"font_size": 11,
