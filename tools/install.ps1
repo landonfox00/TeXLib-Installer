@@ -1675,12 +1675,24 @@ try {
     Add-PreflightWarning "Could not determine free disk space; continuing"
 }
 
-# 7d. Internet connectivity (skip in -OnlyTeXLib if no downloads needed).
-# HEAD request against the CTAN mirror -- confirms TLS reachability without
+# 7d. Internet connectivity. HEAD request -- confirms TLS reachability without
 # pulling any payload. Test-NetConnection would also work but trips
 # PSScriptAnalyzer's "hardcoded ComputerName" rule (false positive for a
-# public mirror).
-if (-not ($OnlyTeXLib -or $Repair)) {
+# public host).
+#
+# ONLY -Repair skips this. -OnlyTeXLib used to skip it too, on the grounds that
+# it "doesn't download anything" -- true while the library shipped inside the
+# release zip, and false since 0.11.0, which fetches it. Skipping the check in
+# the one mode whose entire job is a download meant an offline -OnlyTeXLib
+# sailed through pre-flight and died at exit 7 half way through, having already
+# announced that connectivity was fine.
+#
+# The host checked is the one that mode actually needs: -OnlyTeXLib pulls the
+# library from GitHub and never touches CTAN, so failing it on a CTAN outage
+# would be a false negative.
+if (-not $Repair) {
+    $NetCheckUrl = if ($OnlyTeXLib) { "https://github.com/" } else { "https://mirror.ctan.org/" }
+    $NetCheckHost = ([Uri]$NetCheckUrl).Host
     # Retry with a longer timeout: mirror.ctan.org is a redirector to regional
     # mirrors and can be briefly slow even when the connection is fine, so a
     # single 5s HEAD was flaky and would hard-fail the whole pre-flight.
@@ -1688,18 +1700,17 @@ if (-not ($OnlyTeXLib -or $Repair)) {
     $netErr = $null
     for ($a = 1; $a -le 3 -and -not $reachable; $a++) {
         try {
-            $null = Invoke-WebRequest -Uri "https://mirror.ctan.org/" -Method Head -UseBasicParsing -TimeoutSec 15 -ErrorAction Stop
+            $null = Invoke-WebRequest -Uri $NetCheckUrl -Method Head -UseBasicParsing -TimeoutSec 15 -ErrorAction Stop
             $reachable = $true
         } catch { $netErr = $_; if ($a -lt 3) { Start-Sleep -Seconds (2 * $a) } }
     }
     if ($reachable) {
-        Add-PreflightOK "Internet connectivity to mirror.ctan.org (HTTPS)"
+        Add-PreflightOK "Internet connectivity to $NetCheckHost (HTTPS)"
     } else {
-        Add-PreflightFailure "Cannot reach https://mirror.ctan.org/ after 3 tries ($($netErr.Exception.Message)); check your internet connection / firewall / VPN"
+        Add-PreflightFailure "Cannot reach $NetCheckUrl after 3 tries ($($netErr.Exception.Message)); check your internet connection / firewall / VPN"
     }
 } else {
-    $NoNetMode = if ($Repair) { "-Repair" } else { "-OnlyTeXLib" }
-    Add-PreflightOK "Skipping internet check ($NoNetMode doesn't download anything)"
+    Add-PreflightOK "Skipping internet check (-Repair downloads nothing)"
 }
 
 # 7d-2. -Repair needs something to repair. Without this it would sail through
@@ -1774,16 +1785,12 @@ if ($NeedsUserRootJunction) {
 # ways of saying "you downloaded the wrong zip": without a bundle there was
 # nothing to install from. There always is now, so those failures are gone --
 # and a source checkout of the installer works exactly like a release.
-$HaveBundle = $HaveShippedBundle -or (-not $Repair)
-
 # An existing library counts only if the core .sty files are actually present.
 # We check the physical target ($UserRootJunctionTarget), which is where content
 # really lives regardless of whether the TEXINPUTS-safe junction exists yet.
 $HaveExistingLibrary = Test-TeXLibLibraryDir $UserRootJunctionTarget
 
-$UseExistingTeXLib = $false
-$MigrateFromLegacy = $false
-$DownloadTeXLib    = $false
+$DownloadTeXLib = $false
 
 if ($Repair) {
     # -Repair never touches the library, so it needs no source at all -- only
@@ -1839,16 +1846,12 @@ if ($DryRun) {
             Write-Host "  * Create user-root junction $UserRootJunction -> $UserRootJunctionTarget (TEXINPUTS-safe path)" -ForegroundColor Gray
         }
     }
-    $TeXLibPlan = if ($UseExistingTeXLib) {
-        "Reuse existing TeXLib library at $TeXLibDir (no bundle to deploy)"
-    } elseif ($MigrateFromLegacy) {
-        "Copy the pre-0.6.3 TeXLib library from $LegacyTeXLibDir to $TeXLibDir (original left in place)"
-    } elseif ($DownloadTeXLib) {
+    $TeXLibPlan = if ($DownloadTeXLib) {
         "Download TeXLib $TeXLibVersion from GitHub (hash-verified) and deploy it to $TeXLibDir"
     } else {
         "Deploy the local TeXLib tree at $TexLibBundle to $TeXLibDir"
     }
-    if ($LegacyTeXLibDir -and -not $MigrateFromLegacy) {
+    if ($LegacyTeXLibDir) {
         Write-Host "  * Carry Sublime settings over from $LegacyTeXLibDir\Sublime (original left in place)" -ForegroundColor Gray
     }
     if ($StaleUserRootJunction) {
@@ -2114,28 +2117,33 @@ Backup-SublimeSettings | Out-Null
 # lives in the install root, an upgrade has to carry those settings across or
 # the user silently loses their keymaps, snippets, and spell-check word lists.
 #
-# Two shapes, both non-destructive; the old folder is never deleted or edited:
-#   * $MigrateFromLegacy -- no bundle and nothing at the new location, so the
-#     old library IS the only install source. Copy the whole tree.
-#   * otherwise -- a bundle (or a library already in place) supplies the
-#     library, so only the user-owned Sublime\ settings come across, and only
-#     when the destination has none yet. Section 13 then lays the current
-#     builder files on top of them.
+# Non-destructive; the old folder is never deleted or edited. ONLY the
+# user-owned Sublime\ settings come across, and only when the destination has
+# none yet -- section 13 supplies the library itself and then lays the current
+# builder files on top.
+#
+# Before 0.11.0 there was a second shape here: with no bundle and nothing at the
+# new location, the old library WAS the only available install source, so the
+# whole tree got copied. The library is downloaded now, so there is always a
+# better source than a years-old copy of it, and that branch is gone.
 if ($LegacyTeXLibDir -and -not $Repair) {
     Write-Host ""
     try {
-        if ($MigrateFromLegacy) {
-            Write-Host "Migrating TeXLib library from $LegacyTeXLibDir..." -ForegroundColor Cyan
-            $MigStats = Copy-LibraryTree -Source $LegacyTeXLibDir -Destination $TeXLibDir
-            Write-Host "  Copied $($MigStats.Copied) files (held back $($MigStats.Skipped) dev-only)" -ForegroundColor Gray
-            Write-Host "  Copied to $TeXLibDir" -ForegroundColor Green
-        } elseif (-not (Test-Path $SublimeUserSync)) {
+        if (-not (Test-Path $SublimeUserSync)) {
             $LegacySublime = Join-Path $LegacyTeXLibDir "Sublime"
             if (Test-Path $LegacySublime) {
                 Write-Host "Carrying Sublime settings over from $LegacySublime..." -ForegroundColor Cyan
                 New-Item -ItemType Directory -Force -Path $SublimeUserSync | Out-Null
-                Copy-Item "$LegacySublime\*" $SublimeUserSync -Recurse -Force -Exclude $LibraryCopyExclude
-                Write-Host "  Settings copied to $SublimeUserSync" -ForegroundColor Green
+                # Copy-LibraryTree, not Copy-Item -Exclude. This destination IS
+                # Packages\User via the settings junction, and the source is a
+                # library an OLD installer deployed -- which through 0.9.4
+                # included the author's test suite. -Exclude would have filtered
+                # only the top level and let Sublime\test_*.py through, which is
+                # the plugin_host-3.8 killer landing in the exact folder that
+                # loads it. Section 16b-1b purges afterwards; not copying them
+                # is still better than cleaning up.
+                $SetStats = Copy-LibraryTree -Source $LegacySublime -Destination $SublimeUserSync
+                Write-Host "  Settings copied to $SublimeUserSync ($($SetStats.Copied) files, $($SetStats.Skipped) dev-only held back)" -ForegroundColor Green
             }
         }
     } catch {
@@ -2397,10 +2405,6 @@ if ($SumatraOnDisk) {
 Write-Host ""
 if (-not $DeployLibrary) {
     Write-Host "Leaving the TeXLib library at $TeXLibDir alone (-Repair)." -ForegroundColor Cyan
-} elseif ($UseExistingTeXLib) {
-    Write-Host "Using existing TeXLib library at $TeXLibDir." -ForegroundColor Cyan
-} elseif ($MigrateFromLegacy) {
-    Write-Host "TeXLib library already in place at $TeXLibDir (migrated in step 11b)." -ForegroundColor Cyan
 } else {
     # 13a. Fetch it, unless a local texlib\ tree already stood in for the pin.
     if ($DownloadTeXLib) {
