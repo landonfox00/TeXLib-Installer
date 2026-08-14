@@ -6,6 +6,22 @@ All notable changes to TeXLib-Installer are recorded here. Format follows [Keep 
 
 ### Fixed
 
+- **`-TeXLibPath` aimed at a git checkout overwrote it, destroying uncommitted
+  work.** 0.11.0 regression, and the installer suggested the command itself:
+  pre-flight prints *"Pass `-TeXLibPath <checkout>` to install AGAINST it
+  deliberately"*. Through 0.10.x that was safe — with no bundle to deploy the
+  checkout was used in place. Once the library became a download there was
+  always something to deploy, so the suggested command replaced tracked files
+  with the pinned release. Silently: exit 0, no warning.
+
+  A git work tree is now never written to. It is used exactly as it is, no
+  library is deployed over it, and the run says so. `.git` is probed with
+  `Test-Path` rather than as a directory, because a linked worktree or submodule
+  has a `.git` *file* and holds uncommitted work just the same.
+
+  Relocation is unaffected: `-TeXLibPath` at a plain directory still deploys, so
+  a custom install location keeps getting library updates.
+
 - **`-OnlyTeXLib` skipped the internet check while being the one mode that is
   nothing but a download.** The skip was correct while the library shipped
   inside the release zip, and became wrong in 0.11.0. Offline, pre-flight
