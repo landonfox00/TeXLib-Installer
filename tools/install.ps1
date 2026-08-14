@@ -3444,6 +3444,19 @@ TeXLib install verified -- $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss').
                 Write-Host "         TEXINPUTS used: $TeXLibTexInputsEnv" -ForegroundColor Gray
                 Write-Host "         Check `"texinputs`" in $UserDir\TeXLib.sublime-settings" -ForegroundColor Gray
             }
+        } else {
+            # Say why, rather than vanishing. A check that silently does nothing
+            # reads as a check that passed: CI's full-install job deployed an
+            # 8-file stub library with no .cls in it, this branch was taken, and
+            # nothing in the log distinguished that from a clean 9-of-9 result.
+            $WhyNoCheck = if (-not (Test-Path $Kpse)) {
+                "kpsewhich not found at $Kpse"
+            } elseif ($LibClasses.Count -eq 0) {
+                "no .cls files found in $TeXLibDir -- is the library complete?"
+            } else {
+                "no TEXINPUTS was written this run"
+            }
+            Write-Host "  [WARN] Could not check that TeXLib classes resolve: $WhyNoCheck" -ForegroundColor Yellow
         }
 
         # Sublime build readiness: LaTeXTools' plugin.py won't load without its
