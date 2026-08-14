@@ -1,0 +1,28 @@
+{
+	// TeXLib.sublime-settings -- written by TeXLib-Installer.
+	// The {{TEXINPUTS_SEGMENTS}} placeholder is substituted on install. If you
+	// edit this file by hand later it won't reappear -- just keep real paths.
+	// The installer rewrites this file on a re-install only while the line above
+	// still says it authored it; delete that line to make the file yours.
+
+	// texinputs: the TEXINPUTS handed to the child engine by the NATIVE build
+	// command (texlib_build), which is what Ctrl+B runs on a .tex file. The
+	// package default ships this key commented out -- "leave unset to inherit
+	// the process environment" -- and Sublime's environment carries no
+	// TEXINPUTS, so unset means every document that pulls in a TeXLib class or
+	// package dies at \documentclass with "File `<name>.cls' not found". The
+	// library deliberately lives outside every TEXMF tree (see "Uninstall
+	// Classes from TEXMF"), so this setting is the only thing that makes it
+	// resolvable.
+	//
+	// The list is EXPLICIT and non-recursive -- the library root plus each of
+	// its subdirectories that actually holds a .cls/.sty/.lua -- rather than a
+	// recursive "<root>//", which walks the whole tree on every pass and lets a
+	// stale .aux shadow a same-named build.
+	//
+	// The trailing "" is load-bearing: kpathsea APPENDS its default path at an
+	// empty segment. Without one TEXINPUTS REPLACES the default, texmf-dist
+	// drops out, and every build fatals at startup (luaotfload cannot even find
+	// its Unicode data files). The plugin re-adds one if it goes missing.
+	"texinputs": [{{TEXINPUTS_SEGMENTS}}]
+}

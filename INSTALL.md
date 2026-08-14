@@ -34,20 +34,18 @@ Everything — Sublime Text, SumatraPDF, TeX Live, and the TeXLib library itself
 1. Right-click the ZIP file → **Extract All...** → pick a destination (Desktop is fine).
 2. Open the extracted folder. You should see:
    ```
-   install-gui.bat
    install.bat
    uninstall.bat
    templates/
-   texlib/
    tools/
    README.md
    INSTALL.md
    ...
    ```
    (The actual scripts live in `tools/`; you never need to open that folder.)
-3. **Double-click `install-gui.bat`.** A window opens where you can pick the install location and the TeX Live scheme, then watch the progress. This is the one to use unless you have a reason not to.
+3. **Double-click `install.bat`.** A window opens where you can pick the install location and the TeX Live scheme, then watch the progress. That is the whole installer — there is nothing else at the top level to click.
 
-   `install.bat` does exactly the same install in a console window instead, and is what you want for scripting, for `-Silent`, and for every option in the table further down. Both run the same installer underneath — the window is a front-end, not a second implementation.
+   `tools\install-console.bat` does exactly the same install in a console window instead, and is what you want for scripting, for `-Silent`, and for every option in the table further down. Both run the same installer underneath — the window is a front-end, not a second implementation.
 
    If you have not installed on this machine before, tick **Dry run** in the window first. It runs the pre-flight checks and prints what a real install would do, without downloading or writing anything, and takes seconds.
 
@@ -120,10 +118,10 @@ Why the move? The library is a snapshot the installer overwrites on every re-ins
 The simplest way:
 
 ```
-install.bat -Update
+tools\install-console.bat -Update
 ```
 
-That fetches the newest release, checks it against the release's `SHA256SUMS`, and runs it — no browser, no ZIP to find, no folder to extract. Anything else you pass is forwarded, so `install.bat -Update -Silent` updates unattended.
+That fetches the newest release, checks it against the release's `SHA256SUMS`, and runs it — no browser, no ZIP to find, no folder to extract. Anything else you pass is forwarded, so `tools\install-console.bat -Update -Silent` updates unattended.
 
 Re-running the installer **does not** wipe your settings — they live in `%LOCALAPPDATA%\TeXLib\Library\Sublime` and are preserved across re-installs via a junction.
 
@@ -132,7 +130,7 @@ The installer also prints an "Update available" notice at the top of every run w
 ### If something is misbehaving rather than out of date
 
 ```
-install.bat -Repair
+tools\install-console.bat -Repair
 ```
 
 Re-applies the configuration — the Sublime settings junction, the builder and the TeXLib plugin, the LaTeXTools/Preferences/SumatraPDF settings, the file associations (clearing stale "Open with" entries), and the shortcuts — without reinstalling anything. It downloads nothing, works offline, takes seconds, and leaves your library alone. Try this before a full re-run.
@@ -140,10 +138,10 @@ Re-applies the configuration — the Sublime settings junction, the builder and 
 To get the latest TeXLib library **only** (no need to touch Sublime/Sumatra/TeX Live), use:
 
 ```
-install.bat -OnlyTeXLib
+tools\install-console.bat -OnlyTeXLib
 ```
 
-This skips the heavy components entirely and just refreshes the bundled library — takes seconds instead of an hour. Combine with `-Silent` for lab-machine deployment.
+This skips the heavy components entirely and just fetches the current pinned library — takes seconds instead of an hour. Combine with `-Silent` for lab-machine deployment.
 
 ## About the user-root junction
 
@@ -170,25 +168,27 @@ A few details worth knowing:
 
 | Flag | What it does |
 |---|---|
-| `install.bat -Update` | Get the newest release and install it, in one step. No hunting for a ZIP. |
-| `install.bat -Repair` | Re-apply configuration without reinstalling anything — the fix for weird file associations or a Sublime that lost the builder. Takes seconds, works offline. |
-| `install.bat -Doctor` | Diagnose an existing install (see Troubleshooting). |
-| `install.bat -Verify` | Check that the install is still what the installer put there — lists anything missing, changed, or added since. |
-| `install.bat -Version` | Print installer version + bundled TeXLib version. |
-| `install.bat -TexLiveScheme medium` | Install a smaller TeX Live — measured at 1.3 GB and 25.5 minutes here, against about 6 GB for `full`. Saves disk; saves less time than you'd expect, since most of the wait is downloading from CTAN. Run `-Doctor` afterwards — it names any package TeXLib needs that the smaller scheme left out. **Don't use `basic`:** it's missing 30 of the 50 packages the library requires. |
-| `install.bat -DryRun` | Run pre-flight checks and print what would happen, without installing anything. Safe to run on a fresh machine to confirm prerequisites. |
-| `install.bat -OnlyTeXLib` | Refresh just the TeXLib library. |
-| `install.bat -InstallPath C:\Tools\TeXLib` | Install to a non-default location (e.g. if `%LOCALAPPDATA%` is on a small SSD). The library follows it, to `C:\Tools\TeXLib\Library`. |
-| `install.bat -Silent` | No prompts; safe defaults; intended for unattended deployment. |
-| `install.bat -HideJunction` | Hide the `%USERPROFILE%\TeXLib` junction (see [About the user-root junction](#about-the-user-root-junction)). Off by default. |
+| `tools\install-console.bat -Update` | Get the newest release and install it, in one step. No hunting for a ZIP. |
+| `tools\install-console.bat -Repair` | Re-apply configuration without reinstalling anything — the fix for weird file associations or a Sublime that lost the builder. Takes seconds, works offline. |
+| `tools\install-console.bat -Doctor` | Diagnose an existing install (see Troubleshooting). |
+| `tools\install-console.bat -Verify` | Check that the install is still what the installer put there — lists anything missing, changed, or added since. |
+| `tools\install-console.bat -Version` | Print installer version + the TeXLib library version it would install. |
+| `tools\install-console.bat -TexLiveScheme medium` | Install a smaller TeX Live — measured at 1.3 GB and 25.5 minutes here, against about 6 GB for `full`. Saves disk; saves less time than you'd expect, since most of the wait is downloading from CTAN. Run `-Doctor` afterwards — it names any package TeXLib needs that the smaller scheme left out. **Don't use `basic`:** it's missing 30 of the 50 packages the library requires. |
+| `tools\install-console.bat -DryRun` | Run pre-flight checks and print what would happen, without installing anything. Safe to run on a fresh machine to confirm prerequisites. |
+| `tools\install-console.bat -OnlyTeXLib` | Refresh just the TeXLib library. |
+| `tools\install-console.bat -InstallPath C:\Tools\TeXLib` | Install to a non-default location (e.g. if `%LOCALAPPDATA%` is on a small SSD). The library follows it, to `C:\Tools\TeXLib\Library`. |
+| `tools\install-console.bat -Silent` | No prompts; safe defaults; intended for unattended deployment. |
+| `tools\install-console.bat -HideJunction` | Hide the `%USERPROFILE%\TeXLib` junction (see [About the user-root junction](#about-the-user-root-junction)). Off by default. |
 
-Flags can be combined: `install.bat -OnlyTeXLib -Silent` is the typical lab-machine refresh.
+Flags can be combined: `tools\install-console.bat -OnlyTeXLib -Silent` is the typical lab-machine refresh.
 
 ## Uninstalling
 
 TeXLib appears in **Settings → Apps → Installed apps** like any other program, so you can uninstall it from there. (The **Modify** button there runs `-Repair`.)
 
-Or double-click `uninstall.bat` from the folder you ran the installer from. Either way, after confirming it asks about each component in turn, so you can remove some and keep others:
+Or double-click `uninstall.bat` from the folder you ran the installer from. It shows what is actually installed, with folder sizes, and gives you a tick box per component. **Nothing is pre-ticked** — a window that opens with a 6 GB tree already marked for deletion is not one to trust with a stray click — so you remove exactly what you tick and keep the rest.
+
+`tools\uninstall-console.bat` is the same choice at the console, asking about each component in turn:
 
 ```
 Remove Sublime Text (...)?        (Y/n)
@@ -209,16 +209,16 @@ Whatever you choose, the uninstaller also:
 
 **A pre-0.6.3 `Documents\TeXLib` defaults to staying**, since you may have parked course materials next to it — press Enter to keep it, or answer `y` (or pass `-RemoveLibrary`) to delete it. If that library is reached through a `%USERPROFILE%\TeXLib` junction, the prompt names the real OneDrive/Documents folder, because that's the one whose contents go.
 
-For unattended use: `uninstall.bat -Silent` removes the programs with no prompts, and `uninstall.bat -All -Silent` removes everything. Add `-InstallPath` if you installed to a non-default location, and `-Force` to close a running Sublime / SumatraPDF without being asked (they hold file locks that would otherwise stop the removal).
+For unattended use: `tools\uninstall-console.bat -Silent` removes the programs with no prompts, and `tools\uninstall-console.bat -All -Silent` removes everything. Add `-InstallPath` if you installed to a non-default location, and `-Force` to close a running Sublime / SumatraPDF without being asked (they hold file locks that would otherwise stop the removal).
 
 ## Troubleshooting
 
-### First thing to try: `install.bat -Doctor`
+### First thing to try: `tools\install-console.bat -Doctor`
 
 Open the folder you extracted the installer to and run:
 
 ```
-install.bat -Doctor
+tools\install-console.bat -Doctor
 ```
 
 This runs a diagnostic against your existing install and prints a pass/warn/fail report for each component: install location, Sublime Text, SumatraPDF, TeX Live, the TeXLib library, the Sublime junction, the custom builder, LaTeXTools settings, file associations. The output is structured for copy-paste into a bug report.
@@ -228,7 +228,7 @@ Most "Sublime can't find the builder" / "PDF isn't opening" / "pdflatex not on P
 You can also check the installed version at any time:
 
 ```
-install.bat -Version
+tools\install-console.bat -Version
 ```
 
 ### Pre-flight check failed
@@ -249,9 +249,9 @@ TeX Live's install is genuinely slow — 30 to 60 minutes is normal. There's typ
 
 ### Sublime can't find the builder, or the TeXLib menu is missing
 
-First thing to try: `install.bat -Repair`. It rebuilds the settings junction, the builder files, and the TeXLib plugin in seconds, without downloading anything.
+First thing to try: `tools\install-console.bat -Repair`. It rebuilds the settings junction, the builder files, and the TeXLib plugin in seconds, without downloading anything.
 
-The TeXLib command palette entries, the **TeXLib** menu, the snippets, and the `texlib_*` tools come from a Sublime package the installer deploys to `<Sublime Data>\Packages\TeXLib`. Installers **before v0.7.0 never deployed it** — if you installed with an older version, re-run `install.bat` (or `-Repair`) once and it appears. `install.bat -Doctor` says which state you're in.
+The TeXLib command palette entries, the **TeXLib** menu, the snippets, and the `texlib_*` tools come from a Sublime package the installer deploys to `<Sublime Data>\Packages\TeXLib`. Installers **before v0.7.0 never deployed it** — if you installed with an older version, re-run `install.bat` (or `-Repair`) once and it appears. `tools\install-console.bat -Doctor` says which state you're in.
 
 If `Ctrl+B` says "Cannot find builder texlib", verify:
 
@@ -261,7 +261,7 @@ If `Ctrl+B` says "Cannot find builder texlib", verify:
 
 ### Compile works on command line but not in Sublime
 
-Usually a `TEXINPUTS` problem, caused by **commas or spaces in paths**. kpathsea (TeX Live's file resolver) splits `TEXINPUTS` on commas and chokes on spaces. As of v0.6.3 the library installs to `%LOCALAPPDATA%\TeXLib\Library`, which normally has neither, so this should no longer come up; if you used `-InstallPath` to put it somewhere with a space or comma, the installer creates a junction at `%USERPROFILE%\TeXLib` — see [About the user-root junction](#about-the-user-root-junction). If `install.bat -Doctor` reports the junction as `[FAIL]` (or doesn't mention it at all on an affected machine), re-run the installer to create it. Open an issue if the junction is in place and you're still hitting this.
+Usually a `TEXINPUTS` problem, caused by **commas or spaces in paths**. kpathsea (TeX Live's file resolver) splits `TEXINPUTS` on commas and chokes on spaces. As of v0.6.3 the library installs to `%LOCALAPPDATA%\TeXLib\Library`, which normally has neither, so this should no longer come up; if you used `-InstallPath` to put it somewhere with a space or comma, the installer creates a junction at `%USERPROFILE%\TeXLib` — see [About the user-root junction](#about-the-user-root-junction). If `tools\install-console.bat -Doctor` reports the junction as `[FAIL]` (or doesn't mention it at all on an affected machine), re-run the installer to create it. Open an issue if the junction is in place and you're still hitting this.
 
 ### Double-clicking a .tex or .pdf opens the wrong app
 
@@ -285,13 +285,13 @@ malformed ones, which show as blank rows) before registering fresh ones, and
 tells Explorer to reload so you see the change immediately. Entries for a Sublime
 or SumatraPDF you installed yourself are recognised as live and left alone.
 
-`install.bat -Doctor` reports any leftovers it finds without changing anything.
+`tools\install-console.bat -Doctor` reports any leftovers it finds without changing anything.
 
 ### Getting help
 
 When opening an issue, the GitHub issue form asks for the **Doctor output** and the **install log**. The faster you can get those into the report, the faster I can help.
 
-- **Doctor output:** `install.bat -Doctor` and paste the whole console output.
+- **Doctor output:** `tools\install-console.bat -Doctor` and paste the whole console output.
 - **Install log:** `%LOCALAPPDATA%\TeXLib\Logs\install-<timestamp>.log` (most recent). The log captures everything the installer did, including which files were downloaded and what error stopped it.
 
 Issue tracker: https://github.com/landonfox00/TeXLib-Installer/issues

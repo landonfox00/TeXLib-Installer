@@ -4,6 +4,151 @@ All notable changes to TeXLib-Installer are recorded here. Format follows [Keep 
 
 ## [Unreleased]
 
+## [0.11.0] — 2026-08-14
+
+### Changed
+
+- **The release root now holds two files you can click, and both are the
+  graphical ones.** `install.bat` and `uninstall.bat` *are* the GUI installer
+  and uninstaller; the console entry points moved to
+  `tools\install-console.bat` and `tools\uninstall-console.bat`.
+
+  0.10.0 and 0.10.1 added the two GUIs but left them named `install-gui.bat` /
+  `uninstall-gui.bat` beside the originals, so the root carried four `.bat`
+  files — and the two with the plainest, most obvious names were the *console*
+  ones. The file a first-time user was likeliest to double-click was the one
+  written for scripting. Naming should follow what people reach for, and
+  nobody reaches for `-gui`.
+
+  Nothing about the console surface changed but its path: same switches, same
+  `boot_wrapper.ps1`, same exit codes, and it is still what CI drives and what
+  `-Repair` / `-Doctor` / `-Verify` / `-Update` / `-Silent` are documented
+  against. The console `.bat` files set their working directory to the release
+  root rather than `tools\`, so `texlib.config.json`, pre-staged component
+  ZIPs, and a relative `-InstallPath` all resolve exactly where they did
+  before.
+
+  CI now pins the layout: exactly two `.bat` files at the bundle root, both
+  launching a `-gui.ps1`, no `.ps1` at the root, and every file the four entry
+  points invoke present in the bundle.
+
+- **The TeXLib library is no longer bundled; the installer downloads it.** It is
+  now the sixth entry in the same `$Downloads` table as Sublime Text,
+  SumatraPDF, TeX Live, LaTeXTools and `regex` -- a pinned GitHub tag archive,
+  SHA256-verified, and pre-stageable for offline installs like any other
+  component.
+
+  Bundling tied two projects' release cadences together. A library fix meant
+  cutting an *installer* release, and every installer release had to decide
+  which snapshot of a separate repo to freeze -- in practice whatever `HEAD`
+  happened to be on the maintainer's machine at build time, which is not a
+  decision a build script should be making quietly.
+
+  Consequences worth knowing:
+
+  - The release ZIP drops from ~3.4 MB to ~150 KB and no longer carries a
+    second project inside it.
+  - **The "you downloaded the wrong ZIP" trap is gone.** Three separate
+    pre-flight failures existed to explain that *Code -> Download ZIP* has no
+    `texlib\` in it. There is nothing to be missing now, so a source checkout
+    installs exactly like a release.
+  - A `texlib\` directory next to the release root still wins if one is there,
+    which covers re-running an older release folder, air-gapped machines, and
+    testing an unreleased library without cutting a tag.
+  - Offline installs that relied on the bundle now want a pre-staged
+    `texlib.zip` at the release root. That is why this is 0.11.0, not 0.10.2.
+
+  The pin is three constants that have to agree: the tag in the URL,
+  `$TeXLibZipDir` (GitHub drops the leading `v` when naming the folder inside
+  the archive), and `$TeXLibVersion`. CI asserts all three, because a bump that
+  updates one and not the others fails *after* the user has waited for the
+  download. `RELEASE` now records `texlib_pin=`, so a built installer states
+  which library it will fetch.
+
+### Fixed
+
+- **Every download could die on "The term 'Get-FileHash' is not recognized".**
+  It lives in `Microsoft.PowerShell.Utility`, normally autoloaded — but a
+  Windows PowerShell 5.1 child launched through `cmd /c` from a PowerShell 7
+  parent inherits a `PSModulePath` that can leave it unresolvable. The failure
+  lands *after* the bytes are already on disk, under a message that says
+  nothing about downloading, and it was latent: every path that fetched
+  anything had run some other Utility cmdlet first, so the module was already
+  loaded. The library download is the first one that does not. Hashing now goes
+  through `System.Security.Cryptography`, which needs no module at all; output
+  is byte-identical to `Get-FileHash` for both SHA256 and SHA512.
+
+- **`Copy-Item -Recurse -Exclude` never filtered nested paths.** It applies the
+  exclusion to the items enumerated at the top level, so a `test_*.py` inside
+  `Sublime\` rode straight through -- and `Packages\User` is a junction to that
+  very folder, where Sublime loads every top-level `.py` as a plugin. That is
+  the mechanism behind both `plugin_host-3.8` deaths (0.8.0's Package Control
+  state; 0.9.5's test suite, where nine modules replace
+  `sys.modules['sublime_plugin']` at import and three end in a bare
+  `sys.exit()`).
+
+  It stayed masked while `make-release.ps1` curated the bundle and only the
+  migration paths used the copy. With the library arriving as a raw tag archive
+  carrying the whole repo -- `.github\` plus eighteen `test_*.py` /
+  `_testkit.py` under `Sublime\` -- it stopped being survivable. Replaced with
+  `Copy-LibraryTree`, which walks the tree and drops an entry when **any** path
+  segment matches, on every source: downloaded archive, local `texlib\` tree, or
+  a pre-0.6.3 migration. Measured against the real v0.5.0 archive: 271 files
+  copied, 32 held back, `Sublime\` reduced to exactly the two deployable
+  builders. Section 16b-1b still purges as a backstop.
+
+### Fixed
+
+- **Nothing built on a fresh install.** Every TeXLib document failed at
+  `\documentclass` with ``File `didactic.cls' not found`` — every class, every
+  document, on a machine the installer had just reported as good.
+
+  `Ctrl+B` on a `.tex` file runs the **native** `texlib_build` command (the
+  TeXLib package's own keymap has bound it since the 2026-07-10 cutover), not
+  LaTeXTools. The native command reads its `TEXINPUTS` from `texinputs` in
+  `TeXLib.sublime-settings`, and the package default ships that key commented
+  out — *"leave unset to inherit the process environment"*. Sublime inherits no
+  `TEXINPUTS`, and the library deliberately lives outside every TEXMF tree, so
+  unset means unresolvable. The installer wrote a perfectly correct `TEXINPUTS`
+  into `LaTeXTools.sublime-settings`, but only the legacy
+  *Tools > Build With > TeXLib* path ever reads that file.
+
+  So the one file that made the primary build path work was the one file the
+  installer did not write — the author's own copy is even labelled *"Machine-local
+  override for the native TeXLib plugin (NOT shipped)"*, which is exactly why
+  this was invisible from the development machine.
+
+  The installer now writes `Packages/User/TeXLib.sublime-settings` from a
+  template, the same way it already wrote the LaTeXTools one. The search path is
+  **generated**, not hardcoded: the library root plus each immediate
+  subdirectory that actually holds a `.cls`/`.sty`/`.lua`, so adding a module
+  directory to the library needs no installer release. It is explicit rather
+  than recursive (`<root>//` re-walks the tree every pass and lets a stale
+  `.aux` shadow a same-named build), and it ends in the load-bearing empty
+  segment — kpathsea only *appends* its default path at one, and without it
+  `texmf-dist` drops out and builds fatal at startup instead.
+
+  A file you have taken over is left alone: the installer rewrites this one only
+  while it still carries the marker line saying it authored it, and if your own
+  copy sets no `texinputs` it says so and prints the line to paste.
+
+- **The end-of-install check could not have caught the above.** It compiled a
+  plain `article`, which passes on a machine where not one real document
+  builds. It now also asks `kpsewhich`, under precisely the `TEXINPUTS` just
+  written, to resolve every class in the library — one call, and it fails in the
+  same place a user's first `Ctrl+B` would.
+
+- **The TeX Live step no longer opens a console window.** It put one on screen
+  for the whole install — minutes to the better part of an hour — sitting in
+  front of the GUI that was already reporting the same progress. `Start-Process`
+  now passes `-NoNewWindow`, which sets `CreateNoWindow`; `-WindowStyle Hidden`
+  is not the fix and never was, because `-RedirectStandardOutput` forces
+  `UseShellExecute=$false`, under which `WindowStyle` is silently ignored.
+  Measured both ways rather than assumed. Nothing is lost: output was already
+  going to the log, and under `-no-gui` `install-tl-windows.bat` runs `perl
+  install-tl` in-place, so its whole child tree inherits the same hidden console
+  instead of opening windows of its own.
+
 ## [0.10.1] — 2026-08-08
 
 ### Added

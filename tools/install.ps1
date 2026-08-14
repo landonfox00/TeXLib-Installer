@@ -49,7 +49,7 @@
 .PARAMETER Update
     Fetch the latest release from GitHub, verify it against the release's
     SHA256SUMS, and re-run the newer installer in place of this one. Every other
-    argument you pass is forwarded to it, so `install.bat -Update -Silent` does
+    argument you pass is forwarded to it, so `install-console.bat -Update -Silent`
     an unattended update. Without this, a newer release means downloading and
     extracting a ZIP by hand.
 
@@ -96,8 +96,8 @@
     script -- or from the GUI, which drives -Silent and so could not offer the
     choice the interactive console prompt has always had.
 
-      install.bat -Silent -Reinstall Sublime
-      install.bat -Silent -Reinstall Sublime,SumatraPDF
+      tools\install-console.bat -Silent -Reinstall Sublime
+      tools\install-console.bat -Silent -Reinstall Sublime,SumatraPDF
 
     Reinstalling Sublime preserves your settings (they live in the library via
     the Packages\User junction); it re-fetches the binary and LaTeXTools.
@@ -180,7 +180,7 @@ param(
 # =============================================================================
 # 0. INSTALLER METADATA
 # =============================================================================
-$InstallerVersion = "0.10.1"
+$InstallerVersion = "0.11.0"
 $InstallerRepo    = "https://github.com/landonfox00/TeXLib-Installer"
 $ReleasesApi      = "https://api.github.com/repos/landonfox00/TeXLib-Installer/releases/latest"
 
@@ -273,7 +273,7 @@ function Stop-Installer {
             Write-Host "  It may be large. Delete it once you no longer need it." -ForegroundColor Gray
         }
     }
-    # When launched via install.bat -> tools\boot_wrapper.ps1, the wrapper
+    # Launched via tools\install-console.bat -> boot_wrapper.ps1, the wrapper
     # owns the pause-on-failure prompt and the exit-code surfacing. Skip our
     # own prompt to avoid two "Press Enter to close" prompts back to back.
     # Direct PS launches (no bat) still see the prompt here.
@@ -335,9 +335,19 @@ $SumatraDir = "$BaseDir\Sumatra"
 $TexLiveDir = "$BaseDir\TexLive\$TexLiveYear"
 $TexBinPath = "$TexLiveDir\bin\windows"
 
-# TeXLib bundle: a `texlib\` directory at the release root (one level up from
-# this script) holding the TeXLib library snapshot. The release ZIP includes it.
-$TexLibBundle = Join-Path $ScriptDir "texlib"
+# Where the TeXLib library is copied FROM.
+#
+# Through 0.10.x the release ZIP carried a `texlib\` snapshot and this pointed
+# at it. 0.11.0 downloads the library instead (see the "texlib" entry in
+# $Downloads), so this is filled in at fetch time with the extracted tree.
+#
+# A `texlib\` directory next to the release root still wins if one is there.
+# That covers three real cases for free: an older release folder being re-run,
+# an air-gapped machine where someone dropped the tree in deliberately, and a
+# maintainer testing an unreleased library without cutting a TeXLib tag.
+$ShippedTexLibBundle = Join-Path $ScriptDir "texlib"
+$TexLibBundle        = if (Test-Path $ShippedTexLibBundle) { $ShippedTexLibBundle } else { $null }
+$HaveShippedBundle   = [bool]$TexLibBundle
 
 # --- TeXLib library location -------------------------------------------------
 # The library is deployed INSIDE the install root, next to the portable Sublime
@@ -401,6 +411,60 @@ $DeployLibrary     = (-not $Repair)                           # section 13
 # but not copying it in the first place is better than cleaning up after.
 $LibraryCopyExclude = @(".git", ".github", "__pycache__", "test_*.py", "_testkit.py")
 
+function Copy-LibraryTree {
+    # Copy a library tree, dropping anything matching $LibraryCopyExclude at ANY
+    # depth, and report what it dropped.
+    #
+    # `Copy-Item -Recurse -Exclude` does NOT do this. Its filter applies to the
+    # items it enumerates at the top level, so a test_*.py sitting in Sublime\
+    # rides straight through -- which is exactly the directory that becomes
+    # Packages\User through the settings junction, and exactly the file class
+    # that killed plugin_host-3.8 twice (0.8.0's Package Control state, 0.9.5's
+    # test suite: nine of those modules replace sys.modules['sublime_plugin'] at
+    # import, three end in a bare sys.exit()).
+    #
+    # It was survivable while make-release.ps1 curated the bundle. From 0.11.0
+    # the library arrives as a raw GitHub tag archive carrying the whole repo --
+    # .github\ and eighteen test_*.py / _testkit.py under Sublime\ -- so the
+    # filter has to be real. Section 16b-1b still purges as a backstop.
+    param([string]$Source, [string]$Destination)
+
+    $SrcRoot = (Resolve-Path -LiteralPath $Source).Path.TrimEnd('\')
+    $Copied = 0
+    $Skipped = 0
+    foreach ($Item in (Get-ChildItem -LiteralPath $SrcRoot -Recurse -Force -ErrorAction SilentlyContinue)) {
+        $Rel = $Item.FullName.Substring($SrcRoot.Length).TrimStart('\')
+        if (-not $Rel) { continue }
+        # Excluded if ANY path segment matches -- a directory match takes its
+        # whole subtree with it.
+        $Excluded = $false
+        foreach ($Part in ($Rel -split '\\')) {
+            foreach ($Pat in $LibraryCopyExclude) {
+                if ($Part -like $Pat) { $Excluded = $true; break }
+            }
+            if ($Excluded) { break }
+        }
+        if ($Excluded) {
+            if (-not $Item.PSIsContainer) { $Skipped++ }
+            continue
+        }
+        $Target = Join-Path $Destination $Rel
+        if ($Item.PSIsContainer) {
+            if (-not (Test-Path -LiteralPath $Target)) {
+                New-Item -ItemType Directory -Force -Path $Target | Out-Null
+            }
+        } else {
+            $ParentDir = Split-Path $Target -Parent
+            if (-not (Test-Path -LiteralPath $ParentDir)) {
+                New-Item -ItemType Directory -Force -Path $ParentDir | Out-Null
+            }
+            Copy-Item -LiteralPath $Item.FullName -Destination $Target -Force
+            $Copied++
+        }
+    }
+    return [PSCustomObject]@{ Copied = $Copied; Skipped = $Skipped }
+}
+
 function Get-ReinstallList {
     # Split -Reinstall on commas / semicolons / whitespace and canonicalise the
     # case, so "sublime, texlive" and "Sublime,TeXLive" mean the same thing.
@@ -446,7 +510,7 @@ if ($Reinstall) {
         Write-Host ""
         Write-Host "FATAL: -Reinstall does not know '$($Parsed.Error)'." -ForegroundColor Red
         Write-Host "       Valid components: $($Parsed.Valid -join ', ')" -ForegroundColor Red
-        Write-Host "       Example: install.bat -Silent -Reinstall Sublime,SumatraPDF" -ForegroundColor Red
+        Write-Host "       Example: tools\install-console.bat -Silent -Reinstall Sublime,SumatraPDF" -ForegroundColor Red
         Write-Host ""
         Stop-Installer 14
     }
@@ -752,11 +816,34 @@ $Downloads = @{
         "Type" = "Static"
         "Hash" = "BB8F74F2F10DBF13A0BE8DE623BA4F9491FAF58C24064F32B65679B021ED0001"
     }
+    "texlib" = @{
+        # The TeXLib library itself. Downloaded like every other component as of
+        # 0.11.0 -- before that it was bundled INTO the release zip, which tied
+        # the library's release cadence to the installer's: a library fix meant
+        # cutting an installer release, and every installer release had to
+        # decide which snapshot of a separate repo to freeze. They are different
+        # projects with different reasons to ship; now the installer just
+        # fetches the last published TeXLib.
+        #
+        # To bump: pick a newer tag at github.com/landonfox00/TeXLib/tags, then
+        #   Get-FileHash <downloaded zip> -Algorithm SHA256
+        # and update $TeXLibZipDir below to match (GitHub names the folder
+        # inside "<repo>-<tag without the leading v>").
+        "Url"  = "https://github.com/landonfox00/TeXLib/archive/refs/tags/v0.5.0.zip"
+        "File" = "texlib.zip"
+        "Type" = "Static"
+        "Hash" = "6B1E45B7CF51E0F330AEF1E02B3AC9B27BE25BBE9CFD2EFAE88BF23CC50E20FB"
+    }
 }
 
 # Folder name inside the pinned LaTeXTools archive (GitHub names it
 # "<repo>-<tag>"). Update alongside the latextools tag above.
 $LaTeXToolsZipDir = "LaTeXTools-st4-4.5.12"
+
+# Same for TeXLib. Note GitHub drops the leading "v" from the tag here:
+# tag v0.5.0 -> folder TeXLib-0.5.0. Update alongside the texlib pin above.
+$TeXLibZipDir  = "TeXLib-0.5.0"
+$TeXLibVersion = "v0.5.0"   # what -Version reports as the library it installs
 
 # The SumatraPDF portable exe is named by version (SumatraPDF-3.5.2-64.exe).
 # Derive it ONCE from the pinned zip filename so a version bump only touches the
@@ -837,15 +924,22 @@ function Show-VersionInfo {
         Write-Host "No installed install found at $BaseDir" -ForegroundColor Yellow
     }
 
-    if (Test-Path $TexLibBundle) {
+    # Which library a normal install would put on this machine. -Version is the
+    # fast, offline mode, so this reports the PIN rather than reaching out to
+    # GitHub -- and a local texlib\ tree, which overrides the pin, is read from
+    # its own CHANGELOG so the answer matches what would actually be deployed.
+    if ($HaveShippedBundle) {
         $ChangelogPath = Join-Path $TexLibBundle "CHANGELOG.md"
         if (Test-Path $ChangelogPath) {
             $TopVersionLine = (Get-Content $ChangelogPath | Select-String -Pattern '^## \[(?<ver>[^\]]+)\]' | Select-Object -First 1)
             if ($TopVersionLine -and $TopVersionLine.Matches[0].Groups['ver'].Value -ne 'Unreleased') {
                 Write-Host ""
-                Write-Host "Bundled TeXLib version: $($TopVersionLine.Matches[0].Groups['ver'].Value)" -ForegroundColor Gray
+                Write-Host "TeXLib library (local texlib\ tree): $($TopVersionLine.Matches[0].Groups['ver'].Value)" -ForegroundColor Gray
             }
         }
+    } else {
+        Write-Host ""
+        Write-Host "TeXLib library (downloaded on install): $TeXLibVersion" -ForegroundColor Gray
     }
 
     Write-Host ""
@@ -1032,7 +1126,7 @@ function Invoke-Doctor {
             _Warn "TeXLib Sublime package at $PluginLinkPath is a real folder, not a junction; it will not track library updates"
         }
     } elseif (Test-Path $PluginLibrary) {
-        _Fail "TeXLib Sublime package not deployed. The library has it at $PluginLibrary but Sublime cannot load it from there; re-run the installer (or install.bat -Repair) to create $PluginLinkPath"
+        _Fail "TeXLib Sublime package not deployed. The library has it at $PluginLibrary but Sublime cannot load it from there; re-run the installer (or tools\install-console.bat -Repair) to create $PluginLinkPath"
     } else {
         _Warn "This library ships no Sublime\texlib package; only the LaTeXTools builder is available (upgrade the library to get the command palette, snippets, and texlib_* tools)"
     }
@@ -1252,7 +1346,7 @@ function Invoke-VerifyInstall {
         Write-Host "No manifest at $ManifestFile." -ForegroundColor Yellow
         if (Test-Path $BaseDir) {
             Write-Host "This install predates -Verify (manifests arrived in 0.9.0)." -ForegroundColor Gray
-            Write-Host "Run install.bat -Repair to write one, then -Verify again." -ForegroundColor Gray
+            Write-Host "Run tools\install-console.bat -Repair to write one, then -Verify again." -ForegroundColor Gray
         } else {
             Write-Host "Nothing is installed at $BaseDir." -ForegroundColor Gray
         }
@@ -1308,8 +1402,8 @@ function Invoke-VerifyInstall {
 
     Write-Host "Edited settings show up as 'changed' and are perfectly normal." -ForegroundColor Gray
     Write-Host "Anything missing, or changes you did not make, are repaired by:" -ForegroundColor Gray
-    Write-Host "  install.bat -Repair      (config only, no downloads)" -ForegroundColor Cyan
-    Write-Host "  install.bat              (full re-install)" -ForegroundColor Cyan
+    Write-Host "  tools\install-console.bat -Repair   (config only, no downloads)" -ForegroundColor Cyan
+    Write-Host "  install.bat                         (full re-install, graphical)" -ForegroundColor Cyan
     Write-Host ""
     Stop-Installer 22
 }
@@ -1634,7 +1728,7 @@ if ($InstallComponents) {
     }
     if ($TexLiveScheme -ne 'full') {
         Add-PreflightWarning "scheme-$TexLiveScheme is smaller and much faster than scheme-full, but TeXLib is tested against full. A package it needs may be absent."
-        Add-PreflightNote "(install.bat -Doctor checks every package TeXLib requires, so a gap shows up as a named missing package rather than a cryptic build error)"
+        Add-PreflightNote "(tools\install-console.bat -Doctor checks every package TeXLib requires, so a gap shows up as a named missing package rather than a cryptic build error)"
     }
 
     # 7f. Sublime Text: always an isolated portable copy.
@@ -1668,13 +1762,19 @@ if ($NeedsUserRootJunction) {
 }
 
 # 7i. TeXLib library source. Mirrors how we treat Sublime / Sumatra / TeX Live:
-# detect an existing install and reuse it, else deploy our own copy. Three valid
-# sources, in priority order:
-#   1. bundled snapshot (texlib\, shipped in the release zip) -- deploy it
-#   2. a library already at the install location -- reuse it in place
-#   3. a pre-0.6.3 library in Documents / OneDrive -- migrate it across
-# -OnlyTeXLib exists to PUSH a newer bundle, so it still requires a bundle.
-$HaveBundle = Test-Path $TexLibBundle
+# it is a component we fetch. Sources, in priority order:
+#   1. a local texlib\ tree next to the release root -- deploy it (older release
+#      folders, air-gapped machines, a maintainer testing an unreleased library)
+#   2. the pinned TeXLib release, downloaded in section 12b
+#   3. a pre-0.6.3 library in Documents / OneDrive -- only when the download is
+#      not an option, i.e. -Repair, which never touches the library anyway
+#
+# Through 0.10.x source (1) was the ONLY source, because the library shipped
+# inside the release zip. That is why this block used to end in three different
+# ways of saying "you downloaded the wrong zip": without a bundle there was
+# nothing to install from. There always is now, so those failures are gone --
+# and a source checkout of the installer works exactly like a release.
+$HaveBundle = $HaveShippedBundle -or (-not $Repair)
 
 # An existing library counts only if the core .sty files are actually present.
 # We check the physical target ($UserRootJunctionTarget), which is where content
@@ -1683,57 +1783,28 @@ $HaveExistingLibrary = Test-TeXLibLibraryDir $UserRootJunctionTarget
 
 $UseExistingTeXLib = $false
 $MigrateFromLegacy = $false
+$DownloadTeXLib    = $false
 
 if ($Repair) {
-    # -Repair never touches the library, so it needs no bundle and no source --
-    # only somewhere for Packages\User to point at.
+    # -Repair never touches the library, so it needs no source at all -- only
+    # somewhere for Packages\User to point at.
     if ($HaveExistingLibrary) {
         Add-PreflightOK "TeXLib library present at $UserRootJunctionTarget (left untouched by -Repair)"
     } else {
         Add-PreflightWarning "No TeXLib library at $UserRootJunctionTarget. -Repair will re-apply config, but builds will fail until you run a normal install to deploy the library."
     }
-} elseif ($HaveBundle) {
-    Add-PreflightOK "TeXLib bundle found at $TexLibBundle"
-} elseif ($HaveExistingLibrary -and -not $OnlyTeXLib) {
-    # No bundle in this installer copy (e.g. running from a source checkout, or
-    # a copy synced without its dist\ folder), but this machine already has the
-    # library where we want it. Reuse it, exactly like a detected TeX
-    # distribution -- no bundle needed, and no deploy copy in section 13.
-    $UseExistingTeXLib = $true
-    $ExistingVer = Get-TeXLibVersion $UserRootJunctionTarget
-    $VerNote = if ($ExistingVer) { " (TeXLib $ExistingVer)" } else { "" }
-    Add-PreflightOK "Existing TeXLib library detected at $UserRootJunctionTarget$VerNote; will use it (no bundle needed)"
-    Add-PreflightNote "(this installer copy ships no texlib\ bundle; reusing the library already in place, like a detected TeX distribution)"
-} elseif ($LegacyTeXLibDir -and -not $OnlyTeXLib) {
-    # No bundle and nothing at the new location, but this machine has a
-    # pre-0.6.3 library sitting in Documents / OneDrive. Copy it across rather
-    # than failing: for a returning user with a source checkout of the
-    # installer, their existing library IS the only available source.
-    $MigrateFromLegacy = $true
-    $ExistingVer = Get-TeXLibVersion $LegacyTeXLibDir
-    $VerNote = if ($ExistingVer) { " (TeXLib $ExistingVer)" } else { "" }
-    Add-PreflightOK "Pre-0.6.3 TeXLib library detected at $LegacyTeXLibDir$VerNote; will copy it to $UserRootJunctionTarget"
-    Add-PreflightNote "(the original is left untouched -- delete it yourself once you have confirmed the new install works)"
+} elseif ($HaveShippedBundle) {
+    Add-PreflightOK "TeXLib library will come from the local tree at $TexLibBundle (overrides the pinned download)"
 } else {
-    # Neither a bundle nor an existing library: nothing to install from. The #1
-    # cause is grabbing the source tree ("Code -> Download ZIP", or the release
-    # page's "Source code (zip)") instead of a release asset. Detect that (the
-    # source tree carries tools\make-release.ps1, .github\, or .git\, none of
-    # which ride in a release zip) and say so plainly.
-    $looksLikeSource = (Test-Path (Join-Path $ScriptDir "tools\make-release.ps1")) -or
-                       (Test-Path (Join-Path $ScriptDir ".github")) -or
-                       (Test-Path (Join-Path $ScriptDir ".git"))
-    if ($OnlyTeXLib) {
-        Add-PreflightFailure "-OnlyTeXLib refreshes the library FROM a bundled texlib\ snapshot, but none is present next to install.ps1. Use a release zip (it contains texlib\), or run a normal install without -OnlyTeXLib to reuse an already-synced library."
-    } elseif ($looksLikeSource -and $LegacyRepoCheckout) {
-        # Maintainer case, not the download-the-wrong-zip case: they are running
-        # from a source checkout AND have a TeXLib library checkout on disk.
-        # Telling them to go download a release zip would be wrong advice.
-        Add-PreflightFailure "This is a source checkout of the installer, so it ships no texlib\ bundle, and the TeXLib library checkout at $LegacyRepoCheckout is deliberately NOT copied (a working tree would be detached from the install the moment you committed to it). Either pass -TeXLibPath `"$LegacyRepoCheckout`" to install against that checkout, or run install.bat from an extracted release zip, which carries its own library bundle."
-    } elseif ($looksLikeSource) {
-        Add-PreflightFailure "TeXLib bundle is missing because this is the GitHub SOURCE download, which does not include the TeXLib library, and no existing TeXLib library was found at $UserRootJunctionTarget to reuse. Do NOT use 'Code -> Download ZIP' or the release page's 'Source code (zip)'. Download the release zip (TeXLib-Installer-v<version>.zip) from $InstallerRepo/releases, extract it, and run install.bat from inside THAT folder."
-    } else {
-        Add-PreflightFailure "TeXLib bundle not found at $TexLibBundle and no existing TeXLib library found at $UserRootJunctionTarget; the download looks incomplete. Re-download the release zip from $InstallerRepo/releases, extract it fully, and run install.bat from the extracted folder."
+    $DownloadTeXLib = $true
+    Add-PreflightOK "TeXLib library $TeXLibVersion will be downloaded from GitHub and hash-verified"
+    if ($HaveExistingLibrary) {
+        $ExistingVer = Get-TeXLibVersion $UserRootJunctionTarget
+        $VerNote = if ($ExistingVer) { " (currently TeXLib $ExistingVer)" } else { "" }
+        Add-PreflightNote "(a library is already at $UserRootJunctionTarget$VerNote; the download refreshes it, and your Sublime settings live alongside it and are preserved)"
+    }
+    if ($LegacyTeXLibDir) {
+        Add-PreflightNote "(a pre-0.6.3 library at $LegacyTeXLibDir is left untouched; its Sublime settings are carried over)"
     }
 }
 
@@ -1772,8 +1843,10 @@ if ($DryRun) {
         "Reuse existing TeXLib library at $TeXLibDir (no bundle to deploy)"
     } elseif ($MigrateFromLegacy) {
         "Copy the pre-0.6.3 TeXLib library from $LegacyTeXLibDir to $TeXLibDir (original left in place)"
+    } elseif ($DownloadTeXLib) {
+        "Download TeXLib $TeXLibVersion from GitHub (hash-verified) and deploy it to $TeXLibDir"
     } else {
-        "Deploy TeXLib bundle from $TexLibBundle to $TeXLibDir"
+        "Deploy the local TeXLib tree at $TexLibBundle to $TeXLibDir"
     }
     if ($LegacyTeXLibDir -and -not $MigrateFromLegacy) {
         Write-Host "  * Carry Sublime settings over from $LegacyTeXLibDir\Sublime (original left in place)" -ForegroundColor Gray
@@ -1823,6 +1896,30 @@ if ($DryRun) {
 # =============================================================================
 # 10. HELPER FUNCTIONS (install-mode only)
 # =============================================================================
+function Get-FileHashCompat {
+    # SHA256/SHA512 of a file, without depending on Get-FileHash resolving.
+    #
+    # Get-FileHash lives in Microsoft.PowerShell.Utility, which is normally
+    # autoloaded -- but a Windows PowerShell 5.1 child launched through
+    # `cmd /c` from a PowerShell 7 parent inherits a PSModulePath that can
+    # leave it unresolvable, and then every download in this installer dies on
+    # "The term 'Get-FileHash' is not recognized" AFTER the bytes are already
+    # on disk. Observed in CI on the one path where no other cmdlet from that
+    # module runs first, which is exactly the shape of failure a user in an
+    # unusual shell would hit and have no way to diagnose.
+    #
+    # [System.Security.Cryptography] needs no module. Output matches
+    # Get-FileHash's .Hash: uppercase hex, no separators.
+    param([string]$Path, [string]$Algorithm = "SHA256")
+    $Algo = [System.Security.Cryptography.HashAlgorithm]::Create($Algorithm)
+    if (-not $Algo) { throw "Unsupported hash algorithm: $Algorithm" }
+    try {
+        $Stream = [System.IO.File]::OpenRead($Path)
+        try { return ([BitConverter]::ToString($Algo.ComputeHash($Stream)) -replace '-', '') }
+        finally { $Stream.Dispose() }
+    } finally { $Algo.Dispose() }
+}
+
 function Get-SourceFile {
     param ($Key, $DestPath)
     $Info = $Downloads[$Key]
@@ -1862,7 +1959,7 @@ function Get-SourceFile {
     if (Test-Path $LocalPath) {
         Write-Host "Found pre-staged file: $($Info.File)" -ForegroundColor Cyan
         if ($Info.Type -ne "Skip") {
-            $CurrentHash = (Get-FileHash $LocalPath -Algorithm $Algo).Hash
+            $CurrentHash = Get-FileHashCompat -Path $LocalPath -Algorithm $Algo
             if ($CurrentHash -eq $ExpectedHash) {
                 Write-Host "  [OK] Hash verified" -ForegroundColor Green
                 Copy-Item $LocalPath $DestPath
@@ -1884,7 +1981,7 @@ function Get-SourceFile {
     Invoke-DownloadWithRetry -Uri $DownloadUri -OutFile $DestPath
 
     if ($Info.Type -ne "Skip" -and $ExpectedHash) {
-        $NewHash = (Get-FileHash $DestPath -Algorithm $Algo).Hash
+        $NewHash = Get-FileHashCompat -Path $DestPath -Algorithm $Algo
         # A rolling Dynamic component (texlive) can mismatch because the zip and
         # its .sha512 came from mirrors at slightly different sync states. Re-roll
         # the redirector to a fresh concrete mirror and re-pull both, a few times,
@@ -1907,7 +2004,7 @@ function Get-SourceFile {
             } catch { continue }
             $RetryDownloadUri = if ($ResolvedUrl) { $ResolvedUrl } else { $Info.Url }
             Invoke-DownloadWithRetry -Uri $RetryDownloadUri -OutFile $DestPath
-            $NewHash = (Get-FileHash $DestPath -Algorithm $Algo).Hash
+            $NewHash = Get-FileHashCompat -Path $DestPath -Algorithm $Algo
         }
         if ($NewHash -ne $ExpectedHash) {
             Write-Host "  [FAIL] Hash mismatch for $($Info.File)" -ForegroundColor Red
@@ -2029,7 +2126,8 @@ if ($LegacyTeXLibDir -and -not $Repair) {
     try {
         if ($MigrateFromLegacy) {
             Write-Host "Migrating TeXLib library from $LegacyTeXLibDir..." -ForegroundColor Cyan
-            Copy-Item "$LegacyTeXLibDir\*" $TeXLibDir -Recurse -Force -Exclude $LibraryCopyExclude
+            $MigStats = Copy-LibraryTree -Source $LegacyTeXLibDir -Destination $TeXLibDir
+            Write-Host "  Copied $($MigStats.Copied) files (held back $($MigStats.Skipped) dev-only)" -ForegroundColor Gray
             Write-Host "  Copied to $TeXLibDir" -ForegroundColor Green
         } elseif (-not (Test-Path $SublimeUserSync)) {
             $LegacySublime = Join-Path $LegacyTeXLibDir "Sublime"
@@ -2191,9 +2289,27 @@ option_src 0
             $TLLog    = "$LogDir\texlive-install-$(Get-Date -Format 'yyyyMMdd-HHmmss').log"
             $TLErrLog = "$TLLog.err"
             Write-Host "  install-tl output -> $TLLog" -ForegroundColor Gray
+            # -NoNewWindow, or this step puts a console window on screen for the
+            # whole TeX Live install -- minutes to the better part of an hour,
+            # sitting in front of the GUI that is already reporting progress.
+            # It is the ONLY window the installer opens: everything else it
+            # spawns goes through the call operator, which does not allocate a
+            # console. -WindowStyle Hidden is not the fix and never was --
+            # -RedirectStandardOutput forces UseShellExecute=$false, under which
+            # WindowStyle is silently ignored. -NoNewWindow sets CreateNoWindow,
+            # which is the flag that actually suppresses it (measured: with the
+            # parent itself started CreateNoWindow, as install-gui.ps1 starts
+            # this script, the child reports a visible console window without
+            # this switch and no console at all with it).
+            #
+            # Nothing is lost by hiding it: stdout and stderr are already going
+            # to $TLLog, Wait-WithHeartbeat prints progress every 30s, and
+            # install-tl-windows.bat only runs `perl install-tl` in-place under
+            # -no-gui, so its whole child tree inherits this same hidden console
+            # rather than opening windows of its own.
             $TLProc = Start-Process -FilePath "$InstallerRoot\install-tl-windows.bat" `
                 -ArgumentList "-no-gui -profile texlive.profile" `
-                -WorkingDirectory $InstallerRoot -PassThru `
+                -WorkingDirectory $InstallerRoot -PassThru -NoNewWindow `
                 -RedirectStandardOutput $TLLog -RedirectStandardError $TLErrLog
             Wait-WithHeartbeat -Process $TLProc -IntervalSec 30 -Label "TeX Live"
 
@@ -2276,27 +2392,53 @@ if ($SumatraOnDisk) {
 
 
 # =============================================================================
-# 13. DEPLOY TEXLIB BUNDLE TO ONEDRIVE / DOCUMENTS
+# 13. FETCH AND DEPLOY THE TEXLIB LIBRARY
 # =============================================================================
 Write-Host ""
 if (-not $DeployLibrary) {
     Write-Host "Leaving the TeXLib library at $TeXLibDir alone (-Repair)." -ForegroundColor Cyan
 } elseif ($UseExistingTeXLib) {
-    Write-Host "Using existing TeXLib library at $TeXLibDir (no bundle to deploy)." -ForegroundColor Cyan
+    Write-Host "Using existing TeXLib library at $TeXLibDir." -ForegroundColor Cyan
 } elseif ($MigrateFromLegacy) {
     Write-Host "TeXLib library already in place at $TeXLibDir (migrated in step 11b)." -ForegroundColor Cyan
 } else {
+    # 13a. Fetch it, unless a local texlib\ tree already stood in for the pin.
+    if ($DownloadTeXLib) {
+        Write-Host "Downloading the TeXLib library ($TeXLibVersion)..." -ForegroundColor Cyan
+        try {
+            $TexLibZip     = "$TempDir\texlib.zip"
+            $TexLibExtract = "$TempDir\texlib_extract"
+            Get-SourceFile -Key "texlib" -DestPath $TexLibZip
+            if (Test-Path $TexLibExtract) { Remove-Item $TexLibExtract -Recurse -Force }
+            Expand-Archive -Path $TexLibZip -DestinationPath $TexLibExtract
+            $ExtractedRoot = Join-Path $TexLibExtract $TeXLibZipDir
+            if (-not (Test-Path $ExtractedRoot)) {
+                # The pinned tag and $TeXLibZipDir disagree -- almost always a
+                # bump where one was updated and the other was not. Name what is
+                # actually in there, so the fix is obvious rather than a bare
+                # "path not found" three lines later.
+                $FoundDirs = @(Get-ChildItem $TexLibExtract -Directory -ErrorAction SilentlyContinue |
+                               Select-Object -ExpandProperty Name)
+                throw "Expected '$TeXLibZipDir' inside the TeXLib archive, found: $($FoundDirs -join ', '). The `$TeXLibZipDir constant does not match the pinned tag."
+            }
+            $TexLibBundle = $ExtractedRoot
+            Write-Host "  TeXLib $TeXLibVersion downloaded and verified" -ForegroundColor Green
+        } catch {
+            Write-Host "TeXLib download failed: $_" -ForegroundColor Red
+            Stop-Installer 7
+        }
+    }
+
+    # 13b. Copy it into the library folder. We don't delete extra files here
+    # (a migration, or a previous install's settings, may be there ahead of us),
+    # only overwrite the library bits.
     Write-Host "Deploying TeXLib library..." -ForegroundColor Cyan
     try {
-        # Mirror the bundle into the library folder. We don't delete extra files
-        # here (a migration may have put the user's settings there ahead of us),
-        # only overwrite the library bits.
-        # Same exclusion list as the migration paths. 0.9.5+ bundles are already
-        # filtered by make-release.ps1, but -OnlyTeXLib run from an OLDER
-        # release folder deploys that older bundle -- tests and all -- and this
-        # is what stops them reaching Packages\User.
-        Copy-Item "$TexLibBundle\*" $TeXLibDir -Recurse -Force -Exclude $LibraryCopyExclude
-        Write-Host "  Library deployed to $TeXLibDir" -ForegroundColor Green
+        $CopyStats = Copy-LibraryTree -Source $TexLibBundle -Destination $TeXLibDir
+        Write-Host "  Library deployed to $TeXLibDir ($($CopyStats.Copied) files)" -ForegroundColor Green
+        if ($CopyStats.Skipped -gt 0) {
+            Write-Host "  Held back $($CopyStats.Skipped) dev-only file(s) that must never reach Packages\User" -ForegroundColor Gray
+        }
     } catch {
         Write-Host "TeXLib deploy failed: $_" -ForegroundColor Red
         Stop-Installer 7
@@ -2455,7 +2597,9 @@ try {
     # throws "Cannot overwrite the item ... with itself" -- fatal (exit 10) even
     # though the files are already exactly where they belong. Skip the deploy
     # when both sides resolve to the same directory.
-    $BundledSublimeDir = if ($HaveBundle) { Join-Path $TexLibBundle "Sublime" } else { Join-Path $TeXLibDir "Sublime" }
+    # $TexLibBundle is the tree the library came from this run (a downloaded
+    # archive, or a local texlib\ override); $null when nothing was fetched.
+    $BundledSublimeDir = if ($TexLibBundle) { Join-Path $TexLibBundle "Sublime" } else { Join-Path $TeXLibDir "Sublime" }
     $SameSublimeDir = [IO.Path]::GetFullPath($BundledSublimeDir).TrimEnd('\') -ieq
                       [IO.Path]::GetFullPath($UserDir).TrimEnd('\')
     if ($SameSublimeDir) {
@@ -2587,6 +2731,79 @@ try {
             $Content = $Content.Replace("{{TEX_PATH}}",    $JsonTexPath)
             $Content = $Content.Replace("{{TEX_LIB}}",     $JsonTexLib)
             Set-Content -Path "$UserDir\LaTeXTools.sublime-settings" -Value $Content -Encoding UTF8
+        }
+
+        # 16c-2. Native TeXLib plugin settings (texinputs).
+        #
+        # Ctrl+B on a .tex file runs the NATIVE `texlib_build` command -- the
+        # TeXLib package's own keymap has bound it since the 2026-07-10 cutover
+        # -- NOT LaTeXTools. The native command takes its TEXINPUTS from
+        # `texinputs` in TeXLib.sublime-settings, and the package default ships
+        # that key COMMENTED OUT ("leave unset to inherit the process
+        # environment"). Sublime inherits no TEXINPUTS and the library is
+        # deliberately outside every TEXMF tree, so through 0.10.1 a fresh
+        # install left the primary build path unable to resolve a single TeXLib
+        # class: every document died at \documentclass with "File
+        # `didactic.cls' not found". The LaTeXTools settings written just above
+        # carry a correct TEXINPUTS, but only the legacy Tools > Build With
+        # path reads them -- which is why this survived so long, and why the
+        # end-of-install smoke test (a plain `article`, no TeXLib class) still
+        # reported "LaTeX works". Section 20 now builds a real TeXLib class.
+        $TeXLibSettingsTpl = "$ScriptDir\templates\TeXLib.sublime-settings"
+        $TeXLibSettingsOut = "$UserDir\TeXLib.sublime-settings"
+        $TeXLibSettingsMark = "written by TeXLib-Installer"
+        $TeXLibTexInputsEnv = $null   # set below; read by section 20's verification
+        if (Test-Path $TeXLibSettingsTpl) {
+            # Ours to (re)write when absent, or when the file still carries the
+            # marker saying we authored it -- a re-install that moved the
+            # library must not leave stale paths behind. A file the user has
+            # taken over is never touched.
+            $ExistingTeXLibSettings = if (Test-Path $TeXLibSettingsOut) { Get-Content $TeXLibSettingsOut -Raw } else { $null }
+            $OursToWrite = (-not $ExistingTeXLibSettings) -or ($ExistingTeXLibSettings -match [regex]::Escape($TeXLibSettingsMark))
+
+            if ($OursToWrite) {
+                # Explicit, non-recursive segment list: the library root plus
+                # each immediate subdirectory actually holding a class/package/
+                # engine file. Generated rather than hardcoded, so a new module
+                # directory in the library needs no installer release. Forward
+                # slashes throughout -- kpathsea takes them on Windows and they
+                # need no JSON escaping.
+                $TexLibFs = $TeXLibDir.Replace("\", "/").TrimEnd("/")
+                $Segments = New-Object System.Collections.Generic.List[string]
+                $Segments.Add(".")
+                $Segments.Add($TexLibFs)
+                foreach ($Sub in @(Get-ChildItem -LiteralPath $TeXLibDir -Directory -ErrorAction SilentlyContinue | Sort-Object Name)) {
+                    # Sublime\ is the settings sync folder (Packages\User), not
+                    # a TeX module; dot-dirs and __pycache__ never hold classes.
+                    if ($Sub.Name -eq "Sublime" -or $Sub.Name -eq "__pycache__" -or $Sub.Name -like ".*") { continue }
+                    $TeXFiles = @(Get-ChildItem -LiteralPath $Sub.FullName -File -ErrorAction SilentlyContinue |
+                                  Where-Object { $_.Extension -eq ".sty" -or $_.Extension -eq ".cls" -or $_.Extension -eq ".lua" })
+                    if ($TeXFiles.Count -gt 0) { $Segments.Add("$TexLibFs/$($Sub.Name)") }
+                }
+                # Load-bearing empty segment -- see the template's own comment.
+                $Segments.Add("")
+                $JsonSegments = ($Segments | ForEach-Object {
+                    '"' + $_.Replace('\', '\\').Replace('"', '\"') + '"'
+                }) -join ", "
+                # Kept for section 20, which verifies these paths actually
+                # resolve the classes instead of taking it on trust.
+                $TeXLibTexInputsEnv = ($Segments -join ';')
+
+                $Content = Get-Content $TeXLibSettingsTpl -Raw
+                $Content = $Content.Replace("{{TEXINPUTS_SEGMENTS}}", $JsonSegments)
+                Set-Content -Path $TeXLibSettingsOut -Value $Content -Encoding UTF8
+                Write-Host "  Wrote $TeXLibSettingsOut (texinputs: $($Segments.Count - 1) search paths)" -ForegroundColor Green
+            } elseif ($ExistingTeXLibSettings -notmatch '(?m)^\s*"texinputs"\s*:') {
+                # Their file, so it stays -- but it has no active texinputs, and
+                # that is exactly the state in which nothing builds. Say so, and
+                # hand them the line to paste rather than making them derive it.
+                $TexLibFs = $TeXLibDir.Replace("\", "/").TrimEnd("/")
+                Write-Host "  [warn] $TeXLibSettingsOut is yours (no installer marker) and sets no `"texinputs`"." -ForegroundColor Yellow
+                Write-Host "         Ctrl+B builds will not resolve the TeXLib classes until it does. Add:" -ForegroundColor Yellow
+                Write-Host "           `"texinputs`": [`".`", `"$TexLibFs`", ... , `"`"]" -ForegroundColor Gray
+            } else {
+                Write-Host "  Left your own $TeXLibSettingsOut alone (it sets texinputs)" -ForegroundColor Gray
+            }
         }
 
         # 16d. Sublime editor preferences.
@@ -3099,7 +3316,7 @@ Set-Content -Path $VersionFile -Value $VersionContent -Encoding UTF8
 Write-Host "  Wrote $VersionFile" -ForegroundColor Gray
 
 # --- Install manifest --------------------------------------------------------
-# A hash per file this installer authored, so `install.bat -Verify` can later
+# A hash per file this installer authored, so `install-console.bat -Verify` can later
 # answer "is this still what was installed?" -- the question behind every build
 # that used to work and now doesn't. Cheap: TeX Live is excluded, so this is
 # tens of MB, not gigabytes.
@@ -3156,6 +3373,41 @@ TeXLib install verified -- $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss').
             }
         } finally {
             Pop-Location
+        }
+
+        # Can Ctrl+B resolve the TeXLib classes? The hello.tex compile above
+        # says only that LaTeX runs -- it is a plain `article` and would pass on
+        # a machine where not one TeXLib document builds, which is exactly what
+        # 0.10.1 shipped. What actually has to hold is that the TEXINPUTS
+        # written into TeXLib.sublime-settings resolves the library's classes,
+        # so ask kpsewhich under precisely that TEXINPUTS. Cheap (one call), and
+        # it fails in the same place a user's first Ctrl+B would.
+        $Kpse = "$TexBinPath\kpsewhich.exe"
+        $LibClasses = @(Get-ChildItem -LiteralPath $TeXLibDir -Filter "*.cls" -Recurse -Depth 1 -ErrorAction SilentlyContinue |
+                        Where-Object { $_.DirectoryName -notlike "*\Sublime*" } |
+                        Select-Object -ExpandProperty Name -Unique)
+        if (-not $TeXLibTexInputsEnv) {
+            Write-Host "  [note] TeXLib.sublime-settings is yours to manage; skipping the class-resolution check" -ForegroundColor Gray
+        } elseif ((Test-Path $Kpse) -and $LibClasses.Count -gt 0) {
+            $PrevTexInputs = $env:TEXINPUTS
+            $PrevEap2 = $ErrorActionPreference
+            $env:TEXINPUTS = $TeXLibTexInputsEnv
+            $ErrorActionPreference = 'Continue'   # kpsewhich exits 1 on any miss
+            try { $KpseFound = @(& $Kpse @LibClasses) } catch { $KpseFound = @() } finally {
+                $ErrorActionPreference = $PrevEap2
+                if ($null -eq $PrevTexInputs) { Remove-Item Env:TEXINPUTS -ErrorAction SilentlyContinue }
+                else { $env:TEXINPUTS = $PrevTexInputs }
+            }
+            $ResolvedNames = @($KpseFound | ForEach-Object { Split-Path $_ -Leaf })
+            $UnresolvedCls = @($LibClasses | Where-Object { $ResolvedNames -notcontains $_ })
+            if ($UnresolvedCls.Count -eq 0) {
+                Write-Host "  [OK] All $($LibClasses.Count) TeXLib classes resolve on the build TEXINPUTS -- Ctrl+B will find them" -ForegroundColor Green
+            } else {
+                Write-Host "  [FAIL] $($UnresolvedCls.Count) TeXLib class(es) do NOT resolve: $($UnresolvedCls -join ', ')" -ForegroundColor Red
+                Write-Host "         Ctrl+B will fail with `"File ``<name>.cls' not found`" on those documents." -ForegroundColor Yellow
+                Write-Host "         TEXINPUTS used: $TeXLibTexInputsEnv" -ForegroundColor Gray
+                Write-Host "         Check `"texinputs`" in $UserDir\TeXLib.sublime-settings" -ForegroundColor Gray
+            }
         }
 
         # Sublime build readiness: LaTeXTools' plugin.py won't load without its
@@ -3215,7 +3467,7 @@ if (-not $OnlyTeXLib) {
     Write-Host "     'SumatraPDF (TeXLib)'." -ForegroundColor Gray
     Write-Host ""
 }
-Write-Host "Troubleshooting:    install.bat -Doctor"            -ForegroundColor Cyan
+Write-Host "Troubleshooting:    tools\install-console.bat -Doctor" -ForegroundColor Cyan
 Write-Host "Issues:             $InstallerRepo/issues"          -ForegroundColor Cyan
 Write-Host ""
 

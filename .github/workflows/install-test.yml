@@ -33,7 +33,7 @@ jobs:
   # ---------------------------------------------------------------------------
   # 1. encoding-guard — FAST. Fails if install.ps1 / uninstall.ps1 ever regress
   #    to UTF-8 *without* a BOM while containing non-ASCII (em-dashes). That
-  #    exact condition makes Windows PowerShell 5.1 (what install.bat launches)
+  #    exact condition makes Windows PowerShell 5.1 (what the .bat entry points launch)
   #    decode the script as Windows-1252 and abort with a parse error before
   #    running a line — the bug that shipped in v0.5.0. This guard makes the
   #    regression impossible to merge unnoticed.
@@ -102,7 +102,7 @@ jobs:
           ) -join "`r`n"
           Set-Content -Encoding UTF8 -Path (Join-Path $sandbox 'tools\uninstall.ps1') -Value $stub
 
-          # Launch exactly as uninstall.bat does: WinPS 5.1, -File, positional
+          # Launch exactly as tools\uninstall-console.bat does: WinPS 5.1, -File, positional
           # 'uninstall', NO further args. `type nul |` feeds a closed, empty
           # stdin so the wrapper's final Read-Host returns at once instead of
           # hanging the headless job.
@@ -129,7 +129,7 @@ jobs:
           $ErrorActionPreference = 'Stop'
           # Testing only the zero-arg case is precisely why the named-argument
           # bug shipped from v0.3.0 through v0.6.0. `& $script @array` splats
-          # POSITIONALLY, so every documented `install.bat -Flag` form was
+          # POSITIONALLY, so every documented `install-console.bat -Flag` form was
           # wrong: -Doctor landed in install.ps1's positional [string]
           # $InstallPath (starting a real install into a folder named
           # "-Doctor"), while uninstall.ps1 -- with no positional parameter to
@@ -577,7 +577,7 @@ jobs:
 
   # ---------------------------------------------------------------------------
   # 3. dry-run — FAST sanity check. Pre-flight + plan only, no disk changes.
-  #    A stub texlib/ is staged so pre-flight 7i (the only hard bundle gate)
+  #    A stub texlib/ is staged to exercise the local-tree override path
   #    passes; junction logic is observe-only in -DryRun and OneDrive is nulled
   #    so the junction branch is deterministically unreachable.
   #    NOTE: -DryRun runs the FULL pre-flight, including the fatal HEAD check to
@@ -592,33 +592,39 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Assert source-download guidance when the texlib bundle is missing
+      - name: Assert a bundle-less checkout plans a download (0.11.0)
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           $env:TEXLIB_INSTALLER_WRAPPED = '1'
           $env:OneDrive = ''; $env:OneDriveCommercial = ''; $env:OneDriveConsumer = ''
-          # No texlib\ staged yet. The checked-out source tree (has .git/.github/
-          # tools) is exactly what a coworker gets from "Code -> Download ZIP", so
-          # pre-flight must fail non-zero AND tell them to grab the release zip
-          # instead -- the real-world failure from 2026-06-15.
+          # No texlib\ staged. Through 0.10.x this was a hard pre-flight failure
+          # with three different ways of saying "you downloaded the wrong zip",
+          # because a bundled snapshot was the ONLY source of the library. 0.11.0
+          # downloads it like every other component, so a bare source checkout is
+          # a perfectly good install -- pre-flight must say so, not refuse.
+          $installRoot = Join-Path $env:RUNNER_TEMP 'TeXLibNoBundle'
           $out = & powershell.exe -NoProfile -ExecutionPolicy Bypass `
-            -File .\tools\install.ps1 -Silent -DryRun 2>&1 | Out-String
+            -File .\tools\install.ps1 -Silent -DryRun -InstallPath $installRoot 2>&1 | Out-String
           $rc = $LASTEXITCODE
           Write-Host $out
-          if ($rc -eq 0) { Write-Host "FAIL: expected non-zero exit when the bundle is missing" -ForegroundColor Red; exit 1 }
-          if ($out -notmatch 'GitHub SOURCE download') { Write-Host "FAIL: source-download guidance not shown" -ForegroundColor Red; exit 1 }
-          Write-Host "OK: missing-bundle pre-flight points users to the release zip." -ForegroundColor Green
-          # $LASTEXITCODE is still 1 from the intentional non-zero -DryRun above;
-          # exit 0 explicitly so the step passes once the assertions hold.
-          exit 0
+          if ($rc -ne 0) {
+            Write-Host "FAIL: a bundle-less checkout should plan a download, not fail pre-flight (exit $rc)" -ForegroundColor Red; exit 1
+          }
+          if ($out -notmatch 'will be downloaded from GitHub') {
+            Write-Host "FAIL: pre-flight did not announce the library download" -ForegroundColor Red; exit 1
+          }
+          if ($out -match 'GitHub SOURCE download') {
+            Write-Host "FAIL: the old wrong-zip guidance is still being emitted" -ForegroundColor Red; exit 1
+          }
+          Write-Host "OK: a source checkout installs like a release; the library is fetched." -ForegroundColor Green
 
       - name: Stage stub texlib bundle
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          # install.ps1 requires a sibling texlib\ dir to clear pre-flight 7i in
-          # EVERY mode (incl. -DryRun) or it aborts exit 1. Nothing parses the
+          # A sibling texlib\ dir overrides the pinned download (0.11.0), which
+          # keeps this job offline. Nothing parses the
           # .sty contents at install time, so a minimal stub suffices. Single-
           # line Set-Content avoids any here-string terminator pitfalls.
           New-Item -ItemType Directory -Force -Path 'texlib\Sublime' | Out-Null
@@ -811,8 +817,16 @@ jobs:
           if ($out -match 'with itself') {
             Write-Host "FAIL: section 16 tried to copy the builder files onto themselves." -ForegroundColor Red; exit 1
           }
-          if ($out -notmatch 'Existing TeXLib library detected') {
-            Write-Host "FAIL: seed did not put the installer on the `$UseExistingTeXLib path; this job is no longer testing what it claims." -ForegroundColor Red; exit 1
+          # The seed has to land us on the returning-machine branch, or this job
+          # is not testing what it claims. Through 0.10.x that branch REUSED the
+          # library in place (there was no bundle here, so nothing to deploy);
+          # since 0.11.0 the pinned library is downloaded and deployed over it,
+          # and only the Sublime settings alongside it are preserved. Either way
+          # the hazard under test is the same: Packages\User is a junction to
+          # the library's Sublime\ folder, so section 16 must not try to copy
+          # those files onto themselves.
+          if ($out -notmatch 'the download refreshes it') {
+            Write-Host "FAIL: seed did not put the installer on the returning-machine path; this job is no longer testing what it claims." -ForegroundColor Red; exit 1
           }
           if ($rc -ne 0) { Write-Host "FAIL: install exited $rc on a returning machine." -ForegroundColor Red; exit $rc }
           Write-Host "OK: full install succeeded reusing an already-synced library." -ForegroundColor Green
@@ -833,8 +847,14 @@ jobs:
           if (-not (Test-Path (Join-Path $user 'texlib_builder.py'))) {
             Write-Host "FAIL: texlib_builder.py not visible through Packages\User" -ForegroundColor Red; exit 1
           }
-          if ((Get-Content (Join-Path $lib 'Sublime\texlib_builder.py') -Raw) -notmatch 'CI stub builder') {
-            Write-Host "FAIL: the library's builder file was clobbered" -ForegroundColor Red; exit 1
+          # The seeded stub MUST have been replaced. This assertion used to run
+          # the other way round: with no bundle to deploy, a returning machine
+          # reused its library in place and the stub survived. Since 0.11.0 the
+          # pinned library is downloaded and deployed over it, and refreshing
+          # the library is the entire point -- a returning machine left holding
+          # a stale builder would be the bug, not the contract.
+          if ((Get-Content (Join-Path $lib 'Sublime\texlib_builder.py') -Raw) -match 'CI stub builder') {
+            Write-Host "FAIL: the seeded stub builder survived; the pinned library was not deployed over it." -ForegroundColor Red; exit 1
           }
           # The native package needs its own Packages\TeXLib entry to load at all.
           $plugin = Join-Path $env:INSTALL_ROOT 'Sublime Text\Data\Packages\TeXLib'
@@ -844,7 +864,7 @@ jobs:
           if ((Get-Item $plugin -Force).Attributes -notmatch 'ReparsePoint') {
             Write-Host "FAIL: Packages\TeXLib is not a junction, so it will not track library updates" -ForegroundColor Red; exit 1
           }
-          Write-Host "OK: builder reachable through the junction; plugin deployed; library intact." -ForegroundColor Green
+          Write-Host "OK: builder reachable through the junction; plugin deployed; library refreshed." -ForegroundColor Green
 
       - name: Re-run interactively, answering the Skip prompts on stdin
         shell: pwsh
@@ -887,7 +907,7 @@ jobs:
           if ($rc -ne 0) { Write-Host "FAIL: interactive re-run exited $rc." -ForegroundColor Red; exit $rc }
           Write-Host "OK: interactive re-run skipped all three components and completed." -ForegroundColor Green
 
-      - name: Teardown through uninstall.bat (zero args, wrapper path)
+      - name: Teardown through tools\uninstall-console.bat (zero args, wrapper path)
         if: always()
         shell: pwsh
         run: |
@@ -916,10 +936,10 @@ jobs:
           # only when it sits outside the install root -- it does not here, so
           # the fourth line is simply unread).
           Set-Content -Encoding ascii -Path confirm.txt -Value "Y`r`nY`r`nY`r`nY"
-          $out = & cmd /c "uninstall.bat -InstallPath `"$env:INSTALL_ROOT`" < confirm.txt" 2>&1 | Out-String
+          $out = & cmd /c "tools\uninstall-console.bat -InstallPath `"$env:INSTALL_ROOT`" < confirm.txt" 2>&1 | Out-String
           $rc = $LASTEXITCODE
           Write-Host $out
-          Write-Host "uninstall.bat exit code: $rc"
+          Write-Host "uninstall-console.bat exit code: $rc"
           if ($out -match 'positional parameter cannot be found') {
             Write-Host "FAIL: the wrapper's stray-`$null splat regressed." -ForegroundColor Red; exit 1
           }
@@ -929,7 +949,7 @@ jobs:
           if ($out -match 'Aborted\.') {
             Write-Host "FAIL: the confirmation answer did not take; nothing was uninstalled." -ForegroundColor Red; exit 1
           }
-          if ($rc -ne 0) { Write-Host "FAIL: uninstall.bat exited $rc." -ForegroundColor Red; exit $rc }
+          if ($rc -ne 0) { Write-Host "FAIL: uninstall-console.bat exited $rc." -ForegroundColor Red; exit $rc }
 
           # The junction guard: an unclaimed junction must survive, and its
           # target must be untouched (Directory::Delete(path,$false) never
@@ -952,7 +972,7 @@ jobs:
               Write-Host "FAIL: $gone survived the uninstall." -ForegroundColor Red; exit 1
             }
           }
-          Write-Host "OK: uninstall.bat removed every component and preserved the unclaimed junction." -ForegroundColor Green
+          Write-Host "OK: uninstall-console.bat removed every component and preserved the unclaimed junction." -ForegroundColor Green
 
   # ---------------------------------------------------------------------------
   # 4c. legacy-library-migration — FAST. Covers the 0.6.3 relocation. A machine
@@ -1054,7 +1074,7 @@ jobs:
           # -All is the "remove everything" switch, and it removes everything the
           # INSTALL owns. A pre-0.6.3 folder the installer merely read from is
           # not ours to delete, and must survive even this.
-          $out = & cmd /c "uninstall.bat -All -Silent -InstallPath `"$env:INSTALL_ROOT`"" 2>&1 | Out-String
+          $out = & cmd /c "tools\uninstall-console.bat -All -Silent -InstallPath `"$env:INSTALL_ROOT`"" 2>&1 | Out-String
           Write-Host $out
           if (Test-Path $env:INSTALL_ROOT) {
             Write-Host "FAIL: -All left $env:INSTALL_ROOT behind." -ForegroundColor Red; exit 1
@@ -1230,6 +1250,27 @@ jobs:
           }
           if ((Get-Content $ltSettings -Raw) -notmatch '"builder"\s*:\s*"texlib"') {
             Write-Host "FAIL: the rewritten LaTeXTools settings do not select the texlib builder." -ForegroundColor Red; exit 1
+          }
+          # The file the LaTeXTools one does NOT stand in for. Ctrl+B runs the
+          # native texlib_build command, which reads texinputs from here and
+          # nowhere else; through 0.10.1 nothing wrote it and every document
+          # failed at \documentclass on a fresh install.
+          $tlSettings = Join-Path $env:LIB_ROOT 'Sublime\TeXLib.sublime-settings'
+          if (-not (Test-Path $tlSettings)) {
+            Write-Host "FAIL: -Repair did not write $tlSettings." -ForegroundColor Red; exit 1
+          }
+          $tl = Get-Content $tlSettings -Raw
+          if ($tl -notmatch '(?m)^\s*"texinputs"\s*:') {
+            Write-Host "FAIL: TeXLib.sublime-settings has no ACTIVE texinputs key (commented out is the bug)." -ForegroundColor Red; exit 1
+          }
+          $libFs = $env:LIB_ROOT.Replace('\', '/').TrimEnd('/')
+          if ($tl -notmatch [regex]::Escape('"' + $libFs + '"')) {
+            Write-Host "FAIL: texinputs does not contain the library root $libFs." -ForegroundColor Red; exit 1
+          }
+          # kpathsea only APPENDS its default path at an empty segment; without
+          # one TEXINPUTS replaces it and every build fatals at startup.
+          if ($tl -notmatch '"texinputs"\s*:\s*\[[^\]]*""\s*\]') {
+            Write-Host "FAIL: texinputs does not end in the load-bearing empty segment." -ForegroundColor Red; exit 1
           }
           # And it must not have touched the library it was told to leave alone.
           if (-not (Test-Path (Join-Path $env:LIB_ROOT 'CANARY.txt'))) {
@@ -1534,7 +1575,7 @@ jobs:
           $desktop = [Environment]::GetFolderPath('Desktop')
           $mine = Join-Path $desktop 'Sublime.lnk'
 
-          $out = & cmd /c "uninstall.bat -All -Silent -InstallPath `"$env:INSTALL_ROOT`"" 2>&1 | Out-String
+          $out = & cmd /c "tools\uninstall-console.bat -All -Silent -InstallPath `"$env:INSTALL_ROOT`"" 2>&1 | Out-String
           Write-Host $out
 
           # Same name as the one earlier releases created, different target.
@@ -1698,12 +1739,13 @@ jobs:
 
   # ---------------------------------------------------------------------------
   # 5. package-integrity — FAST. Builds an actual release bundle with
-  #    make-release.ps1 and asserts it contains every file install.bat /
-  #    uninstall.bat invoke, catching packaging gaps the other jobs miss because
-  #    they run install.ps1 directly. Born from the 2026-06-15 flash-and-die:
-  #    make-release omitted tools\install_wrapper.ps1, which install.bat invokes.
-  #    (Actually launching install.bat headlessly is flaky -- the wrapper's
-  #    Read-Host -- so that path is covered by the manual SMOKE-TEST.md instead.)
+  #    make-release.ps1 and asserts it contains every file the four entry
+  #    points invoke, catching packaging gaps the other jobs miss because they
+  #    run install.ps1 directly. Born from the 2026-06-15 flash-and-die:
+  #    make-release omitted tools\install_wrapper.ps1, which the .bat invokes.
+  #    (Actually launching the entry points headlessly is flaky -- the
+  #    wrapper's Read-Host -- so that path is covered by SMOKE-TEST.md.)
+  #    Also guards the 0.11.0 root layout: exactly two .bat files, both GUI.
   # ---------------------------------------------------------------------------
   package-integrity:
     if: github.event_name != 'schedule'
@@ -1712,12 +1754,12 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Build a release bundle and launch install.bat from it
+      - name: Build a release bundle and check its layout
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           # make-release snapshots a texlib library; a stub suffices to check
-          # PACKAGING completeness and that install.bat launches.
+          # PACKAGING completeness and the shape of the extracted folder.
           $stub = Join-Path $env:RUNNER_TEMP 'texlib-src'
           New-Item -ItemType Directory -Force -Path $stub | Out-Null
           Set-Content -Encoding UTF8 -Path (Join-Path $stub 'CHANGELOG.md') -Value "# Changelog`r`n`r`n## [Unreleased]`r`n- stub"
@@ -1726,12 +1768,15 @@ jobs:
           if ($LASTEXITCODE -ne 0) { Write-Host "FAIL: make-release exited $LASTEXITCODE" -ForegroundColor Red; exit 1 }
           $stage = Join-Path $out 'TeXLib-Installer-v0.0.0-ci'
 
-          # Every file install.bat / uninstall.bat invoke must ship, or the .bat
-          # flashes open and dies (PowerShell -File on a missing script).
-          $required = @('install.bat','install-gui.bat','uninstall.bat','uninstall-gui.bat',
+          # Every file the entry points invoke must ship, or the .bat flashes
+          # open and dies (PowerShell -File on a missing script). Root .bat ->
+          # tools\*-gui.ps1; tools\*-console.bat -> tools\boot_wrapper.ps1 ->
+          # tools\install.ps1 / uninstall.ps1.
+          $required = @('install.bat','uninstall.bat',
                         'tools\boot_wrapper.ps1','tools\install.ps1','tools\uninstall.ps1',
                         'tools\install-gui.ps1','tools\uninstall-gui.ps1',
-                        'texlib','templates')
+                        'tools\install-console.bat','tools\uninstall-console.bat',
+                        'templates')
           $missing = $required | Where-Object { -not (Test-Path (Join-Path $stage $_)) }
           if ($missing) { Write-Host "FAIL: bundle missing: $($missing -join ', ')" -ForegroundColor Red; exit 1 }
           # And the .ps1 files must NOT be at the release root: the whole point
@@ -1740,6 +1785,23 @@ jobs:
           foreach ($r in 'install.ps1','uninstall.ps1','install-gui.ps1','uninstall-gui.ps1') {
             if (Test-Path (Join-Path $stage $r)) {
               Write-Host "FAIL: $r is at the bundle root; it belongs in tools\" -ForegroundColor Red; exit 1
+            }
+          }
+          # EXACTLY two .bat files at the root, and both graphical (0.11.0).
+          # The root is the whole first impression: one obvious thing to click
+          # per direction. Before 0.11.0 there were four, and the two plainest
+          # names were the CONSOLE ones -- so the file a first-time user was
+          # likeliest to pick was the one meant for scripting. If a console or
+          # -gui suffixed .bat reappears here, that regressed.
+          $rootBats = @(Get-ChildItem -Path $stage -File -Filter '*.bat' | Select-Object -ExpandProperty Name | Sort-Object)
+          if (($rootBats -join ',') -ne 'install.bat,uninstall.bat') {
+            Write-Host "FAIL: bundle root should hold exactly install.bat + uninstall.bat; found: $($rootBats -join ', ')" -ForegroundColor Red; exit 1
+          }
+          # Both root .bat files must launch the GUI, not boot_wrapper.
+          foreach ($b in 'install.bat','uninstall.bat') {
+            $body = Get-Content (Join-Path $stage $b) -Raw
+            if ($body -notmatch '-gui\.ps1') {
+              Write-Host "FAIL: $b at the root does not launch the graphical installer." -ForegroundColor Red; exit 1
             }
           }
           # Build/dev-only tools must NOT ship. make-release.ps1 builds the
@@ -1751,40 +1813,49 @@ jobs:
             }
           }
 
-          # The author's Package Control state must never ship: on a coworker's
-          # machine it makes any Package Control they install start installing
-          # PowerShell/UnitTesting and re-resolving LaTeXTools' libraries over
-          # the pinned copies, which killed a plugin host on first launch.
-          $pcState = Join-Path $stage 'texlib\Sublime\Package Control.sublime-settings'
-          if (Test-Path $pcState) {
-            Write-Host "FAIL: the bundle carries the author's Package Control.sublime-settings" -ForegroundColor Red; exit 1
+          # The library is NOT bundled as of 0.11.0 -- install.ps1 downloads the
+          # pinned release. A texlib\ folder reappearing here means make-release
+          # started snapshotting a separate repo again, which is the coupling
+          # that made every installer release decide which library to freeze.
+          if (Test-Path (Join-Path $stage 'texlib')) {
+            Write-Host "FAIL: the bundle carries a texlib\ tree; the library is downloaded, not bundled." -ForegroundColor Red; exit 1
           }
 
-          # Nothing but the two deployable plugins may sit at the top level of
-          # the bundle's Sublime\ folder. That folder becomes Packages\User
-          # verbatim via the settings junction, and Sublime loads every
-          # top-level .py there as a plugin -- which is how the author's
-          # test suite ended up running inside plugin_host-3.8 and killing it
-          # (stub_sublime() replaces sys.modules['sublime_plugin']; three
-          # modules end in a bare sys.exit()). Allowlist, so a new dev-only
-          # script added to the library cannot quietly become a coworker's
-          # plugin.
-          $deployablePy = @('texlib_builder.py', 'texlib_pdfpost.py')
-          $strayPy = @(Get-ChildItem -Path (Join-Path $stage 'texlib\Sublime') -File -Filter '*.py' -ErrorAction SilentlyContinue |
-                       Where-Object { $deployablePy -notcontains $_.Name })
-          if ($strayPy.Count -gt 0) {
-            Write-Host "FAIL: the bundle's Sublime\ carries non-deployable .py that Sublime would load as plugins:" -ForegroundColor Red
-            $strayPy | ForEach-Object { Write-Host "  $($_.Name)" -ForegroundColor Red }
-            exit 1
+          # The pin has to be internally consistent. GitHub names the folder
+          # inside a tag archive "<repo>-<tag without the leading v>", and
+          # install.ps1 hard-codes that name in $TeXLibZipDir to find the
+          # extracted tree. Bump the tag and forget the folder and every install
+          # dies after the download, at the one point the user has already
+          # waited for a 3 MB fetch. Cheap to assert, so assert it.
+          $ps1 = Get-Content (Join-Path $stage 'tools\install.ps1') -Raw
+          $tag = [regex]::Match($ps1, 'TeXLib/archive/refs/tags/(?<t>[^"]+)\.zip').Groups['t'].Value
+          $dir = [regex]::Match($ps1, '\$TeXLibZipDir\s*=\s*"(?<d>[^"]+)"').Groups['d'].Value
+          $ver = [regex]::Match($ps1, '\$TeXLibVersion\s*=\s*"(?<v>[^"]+)"').Groups['v'].Value
+          if (-not $tag -or -not $dir -or -not $ver) {
+            Write-Host "FAIL: could not read the TeXLib pin out of install.ps1 (tag='$tag' dir='$dir' ver='$ver')" -ForegroundColor Red; exit 1
           }
+          if ($dir -ne "TeXLib-$($tag -replace '^v')") {
+            Write-Host "FAIL: `$TeXLibZipDir is '$dir' but the pinned tag '$tag' extracts to 'TeXLib-$($tag -replace '^v')'." -ForegroundColor Red; exit 1
+          }
+          if ($ver -ne $tag) {
+            Write-Host "FAIL: `$TeXLibVersion ('$ver') does not match the pinned tag ('$tag')." -ForegroundColor Red; exit 1
+          }
+          # And RELEASE must record which library this installer will fetch.
+          $rel = Get-Content (Join-Path $stage 'RELEASE') -Raw
+          # \r? matters: RELEASE is written with CRLF, and .NET's multiline `$`
+          # anchors before the \n only -- the \r sits between and the match fails.
+          if ($rel -notmatch "(?m)^texlib_pin=$([regex]::Escape($ver))\r?$") {
+            Write-Host "FAIL: RELEASE does not record texlib_pin=$ver" -ForegroundColor Red; exit 1
+          }
+          Write-Host "  TeXLib pin: $ver -> $dir (consistent)" -ForegroundColor Gray
 
-          # The wrapper install.bat invokes must be a real, parseable script
-          # (a missing/corrupt wrapper is exactly what makes install.bat flash
-          # open and die).
+          # The wrapper the console entry points invoke must be a real,
+          # parseable script (a missing/corrupt wrapper is exactly what makes a
+          # .bat flash open and die).
           $werr = $null
           [void][System.Management.Automation.Language.Parser]::ParseFile((Join-Path $stage 'tools\boot_wrapper.ps1'), [ref]$null, [ref]$werr)
           if ($werr) { Write-Host "FAIL: shipped boot_wrapper.ps1 has parse errors" -ForegroundColor Red; exit 1 }
-          Write-Host "OK: release bundle contains every file install.bat needs." -ForegroundColor Green
+          Write-Host "OK: release bundle is complete and the root holds only the two GUI entry points." -ForegroundColor Green
 
   # ---------------------------------------------------------------------------
   # 5b. gui — FAST. install-gui.ps1 is a front-end that reads install.ps1's
@@ -2091,7 +2162,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
-      - name: Teardown (uninstall.bat -Silent)
+      - name: Teardown (tools\uninstall-console.bat -Silent)
         # Always run so the VM is left clean even if install/Doctor failed.
         # uninstall.ps1 -Silent is fully non-interactive and always exits 0, so
         # it never masks an earlier failure (install/Doctor own pass/fail).
@@ -2108,7 +2179,7 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $env:TEXLIB_INSTALLER_WRAPPED = '1'
-          $out = & cmd /c "uninstall.bat -Silent -InstallPath `"$env:INSTALL_ROOT`"" 2>&1 | Out-String
+          $out = & cmd /c "tools\uninstall-console.bat -Silent -InstallPath `"$env:INSTALL_ROOT`"" 2>&1 | Out-String
           Write-Host $out
           if ($out -match 'positional parameter cannot be found') {
             Write-Host "FAIL: wrapper arg forwarding regressed." -ForegroundColor Red; exit 1

@@ -51,7 +51,7 @@ Containment is by flag (`-InstallPath` / `-TeXLibPath` / `-Sandbox`), so there
 is nothing to clean up but the sandbox directory; add `-Keep` to inspect it.
 This is the fastest way to exercise the paths CI's clean-VM jobs cannot reach.
 
-> **Never** run `uninstall.ps1` / `uninstall.bat` to clean up after a local
+> **Never** run `uninstall.ps1` / the uninstaller to clean up after a local
 > test. It rewrites HKCU file associations and the user PATH regardless of
 > `-InstallPath`, and removes `%USERPROFILE%\TeXLib` when the install claims it
 > — none of which the sandbox flags contain. Uninstall is covered by CI, where
@@ -59,13 +59,13 @@ This is the fastest way to exercise the paths CI's clean-VM jobs cannot reach.
 
 ## 2. Pre-flight (no changes made)
 
-▶ `install.bat -DryRun`
+▶ `tools\install-console.bat -DryRun`
 ✓ Prints the plan, lists each component, and mentions the `%USERPROFILE%\TeXLib`
   junction when the OneDrive path needs one. Makes no changes.
 
 ## 3. Full install
 
-▶ `install.bat`
+▶ `install.bat` (graphical), then `tools\install-console.bat` (console)
 ✓ Each component downloads, hash-verifies, and installs under
   `%LOCALAPPDATA%\TeXLib`. No red errors. Desktop + Start Menu shortcuts appear.
 
@@ -82,7 +82,7 @@ This is the fastest way to exercise the paths CI's clean-VM jobs cannot reach.
 
 ## 4. Doctor
 
-▶ `install.bat -Doctor`
+▶ `tools\install-console.bat -Doctor`
 ✓ All sections `[OK]`: components found, PATH set, junction state correct,
   `texlib_builder.py` deployed, the TeXLib Sublime package junctioned at
   `Packages\TeXLib`, every LaTeX package TeXLib requires resolvable,
@@ -100,15 +100,15 @@ This is the fastest way to exercise the paths CI's clean-VM jobs cannot reach.
 
 ▶ Delete `<Sublime Data>\Packages\TeXLib` and
   `<InstallPath>\Library\Sublime\LaTeXTools.sublime-settings`, then run
-  `install.bat -Repair`.
+  `tools\install-console.bat -Repair`.
 ✓ Finishes in seconds, downloads nothing, and both come back.
 ✓ Says it is leaving the library alone; nothing in `Library\` changes.
-▶ `install.bat -Repair -InstallPath C:\nowhere`
+▶ `tools\install-console.bat -Repair -InstallPath C:\nowhere`
 ✓ Refuses with "needs an existing install to repair" and exits non-zero.
 
 ## 4d. Update
 
-▶ `install.bat -Update` on an up-to-date install.
+▶ `tools\install-console.bat -Update` on an up-to-date install.
 ✓ Reports both versions and does nothing.
 ▶ On an out-of-date install (or a copy with `$InstallerVersion` edited down).
 ✓ Downloads the newest release, reports `[OK] SHA256 verified`, and hands off to
@@ -133,12 +133,12 @@ This is the fastest way to exercise the paths CI's clean-VM jobs cannot reach.
 
 ## 6. Uninstall
 
-▶ Leave Sublime Text **running**, then `uninstall.bat` → confirm.
+▶ Leave Sublime Text **running**, then `tools\uninstall-console.bat` → confirm.
 ✓ It reports the running programs and offers to close them.
 ▶ Answer `Y` to Sublime and Sumatra, `n` to TeX Live.
 ✓ `Sublime Text\` and `Sumatra\` are gone; `TexLive\` remains; the install root
   survives to hold it, with `Scripts\` and `VERSION` intact.
-▶ `uninstall.bat` again, answering `Y` to everything.
+▶ `tools\uninstall-console.bat` again, answering `Y` to everything.
 ✓ `%LOCALAPPDATA%\TeXLib` is **entirely gone** — including `Library\`. Shortcuts
   gone, PATH cleaned, TeXLib entries out of the Open With lists, entries for your
   own Sublime/SumatraPDF untouched.
