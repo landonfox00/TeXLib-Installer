@@ -817,8 +817,16 @@ jobs:
           if ($out -match 'with itself') {
             Write-Host "FAIL: section 16 tried to copy the builder files onto themselves." -ForegroundColor Red; exit 1
           }
-          if ($out -notmatch 'Existing TeXLib library detected') {
-            Write-Host "FAIL: seed did not put the installer on the `$UseExistingTeXLib path; this job is no longer testing what it claims." -ForegroundColor Red; exit 1
+          # The seed has to land us on the returning-machine branch, or this job
+          # is not testing what it claims. Through 0.10.x that branch REUSED the
+          # library in place (there was no bundle here, so nothing to deploy);
+          # since 0.11.0 the pinned library is downloaded and deployed over it,
+          # and only the Sublime settings alongside it are preserved. Either way
+          # the hazard under test is the same: Packages\User is a junction to
+          # the library's Sublime\ folder, so section 16 must not try to copy
+          # those files onto themselves.
+          if ($out -notmatch 'the download refreshes it') {
+            Write-Host "FAIL: seed did not put the installer on the returning-machine path; this job is no longer testing what it claims." -ForegroundColor Red; exit 1
           }
           if ($rc -ne 0) { Write-Host "FAIL: install exited $rc on a returning machine." -ForegroundColor Red; exit $rc }
           Write-Host "OK: full install succeeded reusing an already-synced library." -ForegroundColor Green
@@ -1828,7 +1836,9 @@ jobs:
           }
           # And RELEASE must record which library this installer will fetch.
           $rel = Get-Content (Join-Path $stage 'RELEASE') -Raw
-          if ($rel -notmatch "(?m)^texlib_pin=$([regex]::Escape($ver))$") {
+          # \r? matters: RELEASE is written with CRLF, and .NET's multiline `$`
+          # anchors before the \n only -- the \r sits between and the match fails.
+          if ($rel -notmatch "(?m)^texlib_pin=$([regex]::Escape($ver))\r?$") {
             Write-Host "FAIL: RELEASE does not record texlib_pin=$ver" -ForegroundColor Red; exit 1
           }
           Write-Host "  TeXLib pin: $ver -> $dir (consistent)" -ForegroundColor Gray
