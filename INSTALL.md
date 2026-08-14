@@ -37,7 +37,6 @@ Everything — Sublime Text, SumatraPDF, TeX Live, and the TeXLib library itself
    install.bat
    uninstall.bat
    templates/
-   texlib/
    tools/
    README.md
    INSTALL.md
@@ -142,7 +141,7 @@ To get the latest TeXLib library **only** (no need to touch Sublime/Sumatra/TeX 
 tools\install-console.bat -OnlyTeXLib
 ```
 
-This skips the heavy components entirely and just refreshes the bundled library — takes seconds instead of an hour. Combine with `-Silent` for lab-machine deployment.
+This skips the heavy components entirely and just fetches the current pinned library — takes seconds instead of an hour. Combine with `-Silent` for lab-machine deployment.
 
 ## About the user-root junction
 
@@ -173,7 +172,7 @@ A few details worth knowing:
 | `tools\install-console.bat -Repair` | Re-apply configuration without reinstalling anything — the fix for weird file associations or a Sublime that lost the builder. Takes seconds, works offline. |
 | `tools\install-console.bat -Doctor` | Diagnose an existing install (see Troubleshooting). |
 | `tools\install-console.bat -Verify` | Check that the install is still what the installer put there — lists anything missing, changed, or added since. |
-| `tools\install-console.bat -Version` | Print installer version + bundled TeXLib version. |
+| `tools\install-console.bat -Version` | Print installer version + the TeXLib library version it would install. |
 | `tools\install-console.bat -TexLiveScheme medium` | Install a smaller TeX Live — measured at 1.3 GB and 25.5 minutes here, against about 6 GB for `full`. Saves disk; saves less time than you'd expect, since most of the wait is downloading from CTAN. Run `-Doctor` afterwards — it names any package TeXLib needs that the smaller scheme left out. **Don't use `basic`:** it's missing 30 of the 50 packages the library requires. |
 | `tools\install-console.bat -DryRun` | Run pre-flight checks and print what would happen, without installing anything. Safe to run on a fresh machine to confirm prerequisites. |
 | `tools\install-console.bat -OnlyTeXLib` | Refresh just the TeXLib library. |

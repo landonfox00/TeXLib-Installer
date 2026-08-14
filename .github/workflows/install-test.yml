@@ -577,7 +577,7 @@ jobs:
 
   # ---------------------------------------------------------------------------
   # 3. dry-run — FAST sanity check. Pre-flight + plan only, no disk changes.
-  #    A stub texlib/ is staged so pre-flight 7i (the only hard bundle gate)
+  #    A stub texlib/ is staged to exercise the local-tree override path
   #    passes; junction logic is observe-only in -DryRun and OneDrive is nulled
   #    so the junction branch is deterministically unreachable.
   #    NOTE: -DryRun runs the FULL pre-flight, including the fatal HEAD check to
@@ -592,33 +592,39 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Assert source-download guidance when the texlib bundle is missing
+      - name: Assert a bundle-less checkout plans a download (0.11.0)
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           $env:TEXLIB_INSTALLER_WRAPPED = '1'
           $env:OneDrive = ''; $env:OneDriveCommercial = ''; $env:OneDriveConsumer = ''
-          # No texlib\ staged yet. The checked-out source tree (has .git/.github/
-          # tools) is exactly what a coworker gets from "Code -> Download ZIP", so
-          # pre-flight must fail non-zero AND tell them to grab the release zip
-          # instead -- the real-world failure from 2026-06-15.
+          # No texlib\ staged. Through 0.10.x this was a hard pre-flight failure
+          # with three different ways of saying "you downloaded the wrong zip",
+          # because a bundled snapshot was the ONLY source of the library. 0.11.0
+          # downloads it like every other component, so a bare source checkout is
+          # a perfectly good install -- pre-flight must say so, not refuse.
+          $installRoot = Join-Path $env:RUNNER_TEMP 'TeXLibNoBundle'
           $out = & powershell.exe -NoProfile -ExecutionPolicy Bypass `
-            -File .\tools\install.ps1 -Silent -DryRun 2>&1 | Out-String
+            -File .	ools\install.ps1 -Silent -DryRun -InstallPath $installRoot 2>&1 | Out-String
           $rc = $LASTEXITCODE
           Write-Host $out
-          if ($rc -eq 0) { Write-Host "FAIL: expected non-zero exit when the bundle is missing" -ForegroundColor Red; exit 1 }
-          if ($out -notmatch 'GitHub SOURCE download') { Write-Host "FAIL: source-download guidance not shown" -ForegroundColor Red; exit 1 }
-          Write-Host "OK: missing-bundle pre-flight points users to the release zip." -ForegroundColor Green
-          # $LASTEXITCODE is still 1 from the intentional non-zero -DryRun above;
-          # exit 0 explicitly so the step passes once the assertions hold.
-          exit 0
+          if ($rc -ne 0) {
+            Write-Host "FAIL: a bundle-less checkout should plan a download, not fail pre-flight (exit $rc)" -ForegroundColor Red; exit 1
+          }
+          if ($out -notmatch 'will be downloaded from GitHub') {
+            Write-Host "FAIL: pre-flight did not announce the library download" -ForegroundColor Red; exit 1
+          }
+          if ($out -match 'GitHub SOURCE download') {
+            Write-Host "FAIL: the old wrong-zip guidance is still being emitted" -ForegroundColor Red; exit 1
+          }
+          Write-Host "OK: a source checkout installs like a release; the library is fetched." -ForegroundColor Green
 
       - name: Stage stub texlib bundle
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          # install.ps1 requires a sibling texlib\ dir to clear pre-flight 7i in
-          # EVERY mode (incl. -DryRun) or it aborts exit 1. Nothing parses the
+          # A sibling texlib\ dir overrides the pinned download (0.11.0), which
+          # keeps this job offline. Nothing parses the
           # .sty contents at install time, so a minimal stub suffices. Single-
           # line Set-Content avoids any here-string terminator pitfalls.
           New-Item -ItemType Directory -Force -Path 'texlib\Sublime' | Out-Null
@@ -1725,7 +1731,7 @@ jobs:
   #    make-release omitted tools\install_wrapper.ps1, which the .bat invokes.
   #    (Actually launching the entry points headlessly is flaky -- the
   #    wrapper's Read-Host -- so that path is covered by SMOKE-TEST.md.)
-  #    Also guards the 0.10.2 root layout: exactly two .bat files, both GUI.
+  #    Also guards the 0.11.0 root layout: exactly two .bat files, both GUI.
   # ---------------------------------------------------------------------------
   package-integrity:
     if: github.event_name != 'schedule'
@@ -1767,9 +1773,9 @@ jobs:
               Write-Host "FAIL: $r is at the bundle root; it belongs in tools\" -ForegroundColor Red; exit 1
             }
           }
-          # EXACTLY two .bat files at the root, and both graphical (0.10.2).
+          # EXACTLY two .bat files at the root, and both graphical (0.11.0).
           # The root is the whole first impression: one obvious thing to click
-          # per direction. Before 0.10.2 there were four, and the two plainest
+          # per direction. Before 0.11.0 there were four, and the two plainest
           # names were the CONSOLE ones -- so the file a first-time user was
           # likeliest to pick was the one meant for scripting. If a console or
           # -gui suffixed .bat reappears here, that regressed.
@@ -1793,32 +1799,39 @@ jobs:
             }
           }
 
-          # The author's Package Control state must never ship: on a coworker's
-          # machine it makes any Package Control they install start installing
-          # PowerShell/UnitTesting and re-resolving LaTeXTools' libraries over
-          # the pinned copies, which killed a plugin host on first launch.
-          $pcState = Join-Path $stage 'texlib\Sublime\Package Control.sublime-settings'
-          if (Test-Path $pcState) {
-            Write-Host "FAIL: the bundle carries the author's Package Control.sublime-settings" -ForegroundColor Red; exit 1
+          # The library is NOT bundled as of 0.11.0 -- install.ps1 downloads the
+          # pinned release. A texlib\ folder reappearing here means make-release
+          # started snapshotting a separate repo again, which is the coupling
+          # that made every installer release decide which library to freeze.
+          if (Test-Path (Join-Path $stage 'texlib')) {
+            Write-Host "FAIL: the bundle carries a texlib\ tree; the library is downloaded, not bundled." -ForegroundColor Red; exit 1
           }
 
-          # Nothing but the two deployable plugins may sit at the top level of
-          # the bundle's Sublime\ folder. That folder becomes Packages\User
-          # verbatim via the settings junction, and Sublime loads every
-          # top-level .py there as a plugin -- which is how the author's
-          # test suite ended up running inside plugin_host-3.8 and killing it
-          # (stub_sublime() replaces sys.modules['sublime_plugin']; three
-          # modules end in a bare sys.exit()). Allowlist, so a new dev-only
-          # script added to the library cannot quietly become a coworker's
-          # plugin.
-          $deployablePy = @('texlib_builder.py', 'texlib_pdfpost.py')
-          $strayPy = @(Get-ChildItem -Path (Join-Path $stage 'texlib\Sublime') -File -Filter '*.py' -ErrorAction SilentlyContinue |
-                       Where-Object { $deployablePy -notcontains $_.Name })
-          if ($strayPy.Count -gt 0) {
-            Write-Host "FAIL: the bundle's Sublime\ carries non-deployable .py that Sublime would load as plugins:" -ForegroundColor Red
-            $strayPy | ForEach-Object { Write-Host "  $($_.Name)" -ForegroundColor Red }
-            exit 1
+          # The pin has to be internally consistent. GitHub names the folder
+          # inside a tag archive "<repo>-<tag without the leading v>", and
+          # install.ps1 hard-codes that name in $TeXLibZipDir to find the
+          # extracted tree. Bump the tag and forget the folder and every install
+          # dies after the download, at the one point the user has already
+          # waited for a 3 MB fetch. Cheap to assert, so assert it.
+          $ps1 = Get-Content (Join-Path $stage 'tools\install.ps1') -Raw
+          $tag = [regex]::Match($ps1, 'TeXLib/archive/refs/tags/(?<t>[^"]+)\.zip').Groups['t'].Value
+          $dir = [regex]::Match($ps1, '\$TeXLibZipDir\s*=\s*"(?<d>[^"]+)"').Groups['d'].Value
+          $ver = [regex]::Match($ps1, '\$TeXLibVersion\s*=\s*"(?<v>[^"]+)"').Groups['v'].Value
+          if (-not $tag -or -not $dir -or -not $ver) {
+            Write-Host "FAIL: could not read the TeXLib pin out of install.ps1 (tag='$tag' dir='$dir' ver='$ver')" -ForegroundColor Red; exit 1
           }
+          if ($dir -ne "TeXLib-$($tag -replace '^v')") {
+            Write-Host "FAIL: `$TeXLibZipDir is '$dir' but the pinned tag '$tag' extracts to 'TeXLib-$($tag -replace '^v')'." -ForegroundColor Red; exit 1
+          }
+          if ($ver -ne $tag) {
+            Write-Host "FAIL: `$TeXLibVersion ('$ver') does not match the pinned tag ('$tag')." -ForegroundColor Red; exit 1
+          }
+          # And RELEASE must record which library this installer will fetch.
+          $rel = Get-Content (Join-Path $stage 'RELEASE') -Raw
+          if ($rel -notmatch "(?m)^texlib_pin=$([regex]::Escape($ver))$") {
+            Write-Host "FAIL: RELEASE does not record texlib_pin=$ver" -ForegroundColor Red; exit 1
+          }
+          Write-Host "  TeXLib pin: $ver -> $dir (consistent)" -ForegroundColor Gray
 
           # The wrapper the console entry points invoke must be a real,
           # parseable script (a missing/corrupt wrapper is exactly what makes a

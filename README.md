@@ -12,7 +12,7 @@ One-click portable Windows installer for the [TeXLib](https://github.com/landonf
 | SumatraPDF (portable) | https://www.sumatrapdfreader.org | `%LOCALAPPDATA%\TeXLib\Sumatra` |
 | TeX Live (full, portable) | https://mirror.ctan.org/systems/texlive/tlnet | `%LOCALAPPDATA%\TeXLib\TexLive\2025` |
 | LaTeXTools | https://github.com/SublimeText/LaTeXTools | Sublime packages |
-| TeXLib library (bundled snapshot) | This repo's release ZIP | `%LOCALAPPDATA%\TeXLib\Library` |
+| TeXLib library | https://github.com/landonfox00/TeXLib (pinned tag) | `%LOCALAPPDATA%\TeXLib\Library` |
 
 Everything lands under one root, which is what makes uninstall a single directory removal. Before 0.6.3 the library went to `<OneDrive>\Documents\TeXLib`; see [CHANGELOG.md](CHANGELOG.md) for why it moved and how upgrades migrate.
 
@@ -35,7 +35,7 @@ Everything lands under one root, which is what makes uninstall a single director
 │   ├── uninstall-gui.ps1        # WPF front-end: pick components, runs uninstall.ps1 -Silent
 │   ├── uninstall.ps1            # reverses install.ps1
 │   ├── boot_wrapper.ps1         # boot-log + always-pause wrapper for the console entry points
-│   ├── make-release.ps1         # builds the release ZIP (installer + TeXLib bundle)   [not shipped]
+│   ├── make-release.ps1         # builds the release ZIP (installer scripts only)      [not shipped]
 │   └── dev-install-test.ps1     # contained local end-to-end test harness              [not shipped]
 ├── .github/
 │   ├── ISSUE_TEMPLATE/
@@ -50,9 +50,15 @@ Everything lands under one root, which is what makes uninstall a single director
 └── README.md                    # this file
 ```
 
-The release root holds **exactly two** files you can click, and as of 0.10.2 both are the graphical ones: `install.bat` → `tools/install-gui.ps1` and `uninstall.bat` → `tools/uninstall-gui.ps1`. Everything else lives in `tools/`, including the console entry points. Before 0.10.2 the root carried four `.bat` files and the two plainest names were the *console* ones, so the file a first-time user was likeliest to double-click was the one meant for scripting.
+The release root holds **exactly two** files you can click, and as of 0.11.0 both are the graphical ones: `install.bat` → `tools/install-gui.ps1` and `uninstall.bat` → `tools/uninstall-gui.ps1`. Everything else lives in `tools/`, including the console entry points. Before 0.11.0 the root carried four `.bat` files and the two plainest names were the *console* ones, so the file a first-time user was likeliest to double-click was the one meant for scripting.
 
 The console surface did not go away, it moved: `tools/install-console.bat` → `tools/boot_wrapper.ps1` → `tools/install.ps1`. That is what CI drives and what `-Repair`, `-Doctor`, `-Verify`, `-Update` and `-Silent` are documented against. CI asserts both chains, that the root holds those two `.bat` files and nothing else, and that no `.ps1` sits at the root — `install.bat` next to `install.ps1` reliably got people running the wrong one.
+
+The TeXLib library is **not bundled**. Since 0.11.0 `install.ps1` downloads a pinned tag of [TeXLib](https://github.com/landonfox00/TeXLib) and hash-verifies it, exactly like Sublime Text, SumatraPDF, TeX Live and LaTeXTools. The pin lives in the `texlib` entry of `$Downloads`, alongside `$TeXLibZipDir` (GitHub drops the leading `v` from the tag when naming the folder inside the archive) and `$TeXLibVersion`. CI asserts all three agree, because a bump that updates one and not the others fails *after* the user has waited for the download.
+
+Bundling coupled two projects' release cadences: a library fix meant cutting an installer release, and every installer release had to choose which snapshot of a separate repo to freeze. A `texlib\` directory next to the release root still overrides the pin, which covers older release folders, air-gapped machines, and testing an unreleased library without cutting a tag.
+
+Whatever the source, `Copy-LibraryTree` filters it: `.git`, `.github`, `__pycache__`, `test_*.py` and `_testkit.py` are dropped **at any depth**. That matters because `Packages\User` is a junction to the library's `Sublime\` folder and Sublime loads every top-level `.py` there as a plugin — which is how the author's test suite twice killed `plugin_host-3.8`. `Copy-Item -Recurse -Exclude` does not filter nested items, which was survivable only while `make-release.ps1` curated the bundle.
 
 `tools/install-gui.ps1` is a **front-end, not a second installer**. It builds an argument list, runs `install.ps1 -Silent` as a child process, and tails that process's output into a log pane. Every decision about what to install and what to write stays in `install.ps1`, which is still the only thing the install jobs in CI exercise — if the two ever disagree, `install.ps1` is right.
 
@@ -68,9 +74,9 @@ The coupling that can rot silently is each GUI's phase table: they recognise the
 |---|---|
 | `-Silent` | Skip all interactive prompts. Safe defaults (skip if installed, abort on hash mismatch). Used for unattended deployment. |
 | `-Doctor` | Skip install; diagnose an existing install and print a pass/warn/fail report. Pastes cleanly into bug reports. |
-| `-Version` | Print installer version + bundled TeXLib version + currently-installed version metadata. Fast (no network). |
+| `-Version` | Print installer version + the pinned TeXLib version it would fetch + currently-installed version metadata. Fast (no network). |
 | `-DryRun` | Run pre-flight checks and print a plan of what would happen, without modifying the system. |
-| `-OnlyTeXLib` | Refresh only the TeXLib library bundle + Sublime builder files. Skips Sublime / Sumatra / TeX Live install entirely. Use after pulling a newer installer release whose only change is the library. |
+| `-OnlyTeXLib` | Fetch the pinned TeXLib library and refresh the Sublime builder files. Skips Sublime / Sumatra / TeX Live entirely. |
 | `-Repair` | Re-apply configuration to an existing install: settings junction, builder files, Sublime package, app settings, file associations (with the stale Open With purge), shortcuts. No downloads, no components, library untouched. Works offline. |
 | `-Update` | Fetch the newest release, verify it against its `SHA256SUMS`, and hand off to it. All your other arguments are forwarded. |
 | `-TexLiveScheme full\|medium\|basic` | TeX Live size. `full` (default, about 6 GB) is what TeXLib is tested against; `medium` measured **1.3 GB / 25.5 min** here, `basic` about 0.6 GB. Saves disk reliably, time much less so — the install is dominated by CTAN mirror speed. **`basic` is missing 30 of the 50 packages TeXLib needs**, so run `-Doctor` after any non-full install. |

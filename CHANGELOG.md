@@ -4,7 +4,7 @@ All notable changes to TeXLib-Installer are recorded here. Format follows [Keep 
 
 ## [Unreleased]
 
-## [0.10.2] — 2026-08-13
+## [0.11.0] — 2026-08-14
 
 ### Changed
 
@@ -31,6 +31,60 @@ All notable changes to TeXLib-Installer are recorded here. Format follows [Keep 
   CI now pins the layout: exactly two `.bat` files at the bundle root, both
   launching a `-gui.ps1`, no `.ps1` at the root, and every file the four entry
   points invoke present in the bundle.
+
+- **The TeXLib library is no longer bundled; the installer downloads it.** It is
+  now the sixth entry in the same `$Downloads` table as Sublime Text,
+  SumatraPDF, TeX Live, LaTeXTools and `regex` -- a pinned GitHub tag archive,
+  SHA256-verified, and pre-stageable for offline installs like any other
+  component.
+
+  Bundling tied two projects' release cadences together. A library fix meant
+  cutting an *installer* release, and every installer release had to decide
+  which snapshot of a separate repo to freeze -- in practice whatever `HEAD`
+  happened to be on the maintainer's machine at build time, which is not a
+  decision a build script should be making quietly.
+
+  Consequences worth knowing:
+
+  - The release ZIP drops from ~3.4 MB to ~150 KB and no longer carries a
+    second project inside it.
+  - **The "you downloaded the wrong ZIP" trap is gone.** Three separate
+    pre-flight failures existed to explain that *Code -> Download ZIP* has no
+    `texlib\` in it. There is nothing to be missing now, so a source checkout
+    installs exactly like a release.
+  - A `texlib\` directory next to the release root still wins if one is there,
+    which covers re-running an older release folder, air-gapped machines, and
+    testing an unreleased library without cutting a tag.
+  - Offline installs that relied on the bundle now want a pre-staged
+    `texlib.zip` at the release root. That is why this is 0.11.0, not 0.10.2.
+
+  The pin is three constants that have to agree: the tag in the URL,
+  `$TeXLibZipDir` (GitHub drops the leading `v` when naming the folder inside
+  the archive), and `$TeXLibVersion`. CI asserts all three, because a bump that
+  updates one and not the others fails *after* the user has waited for the
+  download. `RELEASE` now records `texlib_pin=`, so a built installer states
+  which library it will fetch.
+
+### Fixed
+
+- **`Copy-Item -Recurse -Exclude` never filtered nested paths.** It applies the
+  exclusion to the items enumerated at the top level, so a `test_*.py` inside
+  `Sublime\` rode straight through -- and `Packages\User` is a junction to that
+  very folder, where Sublime loads every top-level `.py` as a plugin. That is
+  the mechanism behind both `plugin_host-3.8` deaths (0.8.0's Package Control
+  state; 0.9.5's test suite, where nine modules replace
+  `sys.modules['sublime_plugin']` at import and three end in a bare
+  `sys.exit()`).
+
+  It stayed masked while `make-release.ps1` curated the bundle and only the
+  migration paths used the copy. With the library arriving as a raw tag archive
+  carrying the whole repo -- `.github\` plus eighteen `test_*.py` /
+  `_testkit.py` under `Sublime\` -- it stopped being survivable. Replaced with
+  `Copy-LibraryTree`, which walks the tree and drops an entry when **any** path
+  segment matches, on every source: downloaded archive, local `texlib\` tree, or
+  a pre-0.6.3 migration. Measured against the real v0.5.0 archive: 271 files
+  copied, 32 held back, `Sublime\` reduced to exactly the two deployable
+  builders. Section 16b-1b still purges as a backstop.
 
 ### Fixed
 
