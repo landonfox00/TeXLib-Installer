@@ -847,8 +847,14 @@ jobs:
           if (-not (Test-Path (Join-Path $user 'texlib_builder.py'))) {
             Write-Host "FAIL: texlib_builder.py not visible through Packages\User" -ForegroundColor Red; exit 1
           }
-          if ((Get-Content (Join-Path $lib 'Sublime\texlib_builder.py') -Raw) -notmatch 'CI stub builder') {
-            Write-Host "FAIL: the library's builder file was clobbered" -ForegroundColor Red; exit 1
+          # The seeded stub MUST have been replaced. This assertion used to run
+          # the other way round: with no bundle to deploy, a returning machine
+          # reused its library in place and the stub survived. Since 0.11.0 the
+          # pinned library is downloaded and deployed over it, and refreshing
+          # the library is the entire point -- a returning machine left holding
+          # a stale builder would be the bug, not the contract.
+          if ((Get-Content (Join-Path $lib 'Sublime\texlib_builder.py') -Raw) -match 'CI stub builder') {
+            Write-Host "FAIL: the seeded stub builder survived; the pinned library was not deployed over it." -ForegroundColor Red; exit 1
           }
           # The native package needs its own Packages\TeXLib entry to load at all.
           $plugin = Join-Path $env:INSTALL_ROOT 'Sublime Text\Data\Packages\TeXLib'
@@ -858,7 +864,7 @@ jobs:
           if ((Get-Item $plugin -Force).Attributes -notmatch 'ReparsePoint') {
             Write-Host "FAIL: Packages\TeXLib is not a junction, so it will not track library updates" -ForegroundColor Red; exit 1
           }
-          Write-Host "OK: builder reachable through the junction; plugin deployed; library intact." -ForegroundColor Green
+          Write-Host "OK: builder reachable through the junction; plugin deployed; library refreshed." -ForegroundColor Green
 
       - name: Re-run interactively, answering the Skip prompts on stdin
         shell: pwsh
