@@ -1790,7 +1790,23 @@ if ($NeedsUserRootJunction) {
 # really lives regardless of whether the TEXINPUTS-safe junction exists yet.
 $HaveExistingLibrary = Test-TeXLibLibraryDir $UserRootJunctionTarget
 
-$DownloadTeXLib = $false
+# NEVER write a release over a git work tree.
+#
+# -TeXLibPath aimed at a live checkout is the documented maintainer workflow --
+# pre-flight itself suggests it ("Pass -TeXLibPath ... to install AGAINST it
+# deliberately"). Through 0.10.x that was safe: with no bundle to deploy the
+# checkout was used in place. 0.11.0 made the library a download, so there was
+# always something to deploy, and the suggested command silently overwrote
+# tracked files with the pinned release -- measured, on a checkout carrying
+# uncommitted work. Nothing warned, and the run exited 0.
+#
+# `.git` is tested with Test-Path rather than as a directory on purpose: a
+# linked worktree or a submodule has a .git FILE, and those are working trees
+# with uncommitted work in them just the same.
+$TeXLibDirIsWorkTree = (Test-Path $TeXLibDir) -and (Test-Path (Join-Path $TeXLibDir ".git"))
+
+$DownloadTeXLib   = $false
+$UseTeXLibInPlace = $false
 
 if ($Repair) {
     # -Repair never touches the library, so it needs no source at all -- only
@@ -1799,6 +1815,16 @@ if ($Repair) {
         Add-PreflightOK "TeXLib library present at $UserRootJunctionTarget (left untouched by -Repair)"
     } else {
         Add-PreflightWarning "No TeXLib library at $UserRootJunctionTarget. -Repair will re-apply config, but builds will fail until you run a normal install to deploy the library."
+    }
+} elseif ($TeXLibDirIsWorkTree) {
+    # Use it exactly as it is, and write nothing into it. The maintainer pointed
+    # the installer at their checkout so the install would track that checkout;
+    # replacing it with a release is the one thing they cannot have meant.
+    $UseTeXLibInPlace = $true
+    Add-PreflightOK "TeXLib library at $TeXLibDir is a git work tree; it will be used in place and never written to"
+    Add-PreflightNote "(so this run deploys no library: the checkout IS the library, and $TeXLibVersion is not copied over it)"
+    if (-not (Test-TeXLibLibraryDir $TeXLibDir)) {
+        Add-PreflightWarning "$TeXLibDir is a work tree but is missing the core .sty files (course-metadata / texlib-build / basic-utilities); builds will fail until that checkout is complete."
     }
 } elseif ($HaveShippedBundle) {
     Add-PreflightOK "TeXLib library will come from the local tree at $TexLibBundle (overrides the pinned download)"
@@ -1846,7 +1872,9 @@ if ($DryRun) {
             Write-Host "  * Create user-root junction $UserRootJunction -> $UserRootJunctionTarget (TEXINPUTS-safe path)" -ForegroundColor Gray
         }
     }
-    $TeXLibPlan = if ($DownloadTeXLib) {
+    $TeXLibPlan = if ($UseTeXLibInPlace) {
+        "Use the git work tree at $TeXLibDir as the library, in place -- NOTHING is written to it"
+    } elseif ($DownloadTeXLib) {
         "Download TeXLib $TeXLibVersion from GitHub (hash-verified) and deploy it to $TeXLibDir"
     } else {
         "Deploy the local TeXLib tree at $TexLibBundle to $TeXLibDir"
@@ -2405,6 +2433,10 @@ if ($SumatraOnDisk) {
 Write-Host ""
 if (-not $DeployLibrary) {
     Write-Host "Leaving the TeXLib library at $TeXLibDir alone (-Repair)." -ForegroundColor Cyan
+} elseif ($UseTeXLibInPlace) {
+    Write-Host "Using the TeXLib work tree at $TeXLibDir in place." -ForegroundColor Cyan
+    Write-Host "  Nothing was written to it -- your checkout, including uncommitted work, is untouched." -ForegroundColor Gray
+    Write-Host "  Run git pull there to update the library; the installer will not do it for you." -ForegroundColor Gray
 } else {
     # 13a. Fetch it, unless a local texlib\ tree already stood in for the pin.
     if ($DownloadTeXLib) {
