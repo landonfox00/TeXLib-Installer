@@ -1896,6 +1896,30 @@ if ($DryRun) {
 # =============================================================================
 # 10. HELPER FUNCTIONS (install-mode only)
 # =============================================================================
+function Get-FileHashCompat {
+    # SHA256/SHA512 of a file, without depending on Get-FileHash resolving.
+    #
+    # Get-FileHash lives in Microsoft.PowerShell.Utility, which is normally
+    # autoloaded -- but a Windows PowerShell 5.1 child launched through
+    # `cmd /c` from a PowerShell 7 parent inherits a PSModulePath that can
+    # leave it unresolvable, and then every download in this installer dies on
+    # "The term 'Get-FileHash' is not recognized" AFTER the bytes are already
+    # on disk. Observed in CI on the one path where no other cmdlet from that
+    # module runs first, which is exactly the shape of failure a user in an
+    # unusual shell would hit and have no way to diagnose.
+    #
+    # [System.Security.Cryptography] needs no module. Output matches
+    # Get-FileHash's .Hash: uppercase hex, no separators.
+    param([string]$Path, [string]$Algorithm = "SHA256")
+    $Algo = [System.Security.Cryptography.HashAlgorithm]::Create($Algorithm)
+    if (-not $Algo) { throw "Unsupported hash algorithm: $Algorithm" }
+    try {
+        $Stream = [System.IO.File]::OpenRead($Path)
+        try { return ([BitConverter]::ToString($Algo.ComputeHash($Stream)) -replace '-', '') }
+        finally { $Stream.Dispose() }
+    } finally { $Algo.Dispose() }
+}
+
 function Get-SourceFile {
     param ($Key, $DestPath)
     $Info = $Downloads[$Key]
@@ -1935,7 +1959,7 @@ function Get-SourceFile {
     if (Test-Path $LocalPath) {
         Write-Host "Found pre-staged file: $($Info.File)" -ForegroundColor Cyan
         if ($Info.Type -ne "Skip") {
-            $CurrentHash = (Get-FileHash $LocalPath -Algorithm $Algo).Hash
+            $CurrentHash = Get-FileHashCompat -Path $LocalPath -Algorithm $Algo
             if ($CurrentHash -eq $ExpectedHash) {
                 Write-Host "  [OK] Hash verified" -ForegroundColor Green
                 Copy-Item $LocalPath $DestPath
@@ -1957,7 +1981,7 @@ function Get-SourceFile {
     Invoke-DownloadWithRetry -Uri $DownloadUri -OutFile $DestPath
 
     if ($Info.Type -ne "Skip" -and $ExpectedHash) {
-        $NewHash = (Get-FileHash $DestPath -Algorithm $Algo).Hash
+        $NewHash = Get-FileHashCompat -Path $DestPath -Algorithm $Algo
         # A rolling Dynamic component (texlive) can mismatch because the zip and
         # its .sha512 came from mirrors at slightly different sync states. Re-roll
         # the redirector to a fresh concrete mirror and re-pull both, a few times,
@@ -1980,7 +2004,7 @@ function Get-SourceFile {
             } catch { continue }
             $RetryDownloadUri = if ($ResolvedUrl) { $ResolvedUrl } else { $Info.Url }
             Invoke-DownloadWithRetry -Uri $RetryDownloadUri -OutFile $DestPath
-            $NewHash = (Get-FileHash $DestPath -Algorithm $Algo).Hash
+            $NewHash = Get-FileHashCompat -Path $DestPath -Algorithm $Algo
         }
         if ($NewHash -ne $ExpectedHash) {
             Write-Host "  [FAIL] Hash mismatch for $($Info.File)" -ForegroundColor Red

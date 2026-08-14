@@ -67,6 +67,17 @@ All notable changes to TeXLib-Installer are recorded here. Format follows [Keep 
 
 ### Fixed
 
+- **Every download could die on "The term 'Get-FileHash' is not recognized".**
+  It lives in `Microsoft.PowerShell.Utility`, normally autoloaded — but a
+  Windows PowerShell 5.1 child launched through `cmd /c` from a PowerShell 7
+  parent inherits a `PSModulePath` that can leave it unresolvable. The failure
+  lands *after* the bytes are already on disk, under a message that says
+  nothing about downloading, and it was latent: every path that fetched
+  anything had run some other Utility cmdlet first, so the module was already
+  loaded. The library download is the first one that does not. Hashing now goes
+  through `System.Security.Cryptography`, which needs no module at all; output
+  is byte-identical to `Get-FileHash` for both SHA256 and SHA512.
+
 - **`Copy-Item -Recurse -Exclude` never filtered nested paths.** It applies the
   exclusion to the items enumerated at the top level, so a `test_*.py` inside
   `Sublime\` rode straight through -- and `Packages\User` is a junction to that
