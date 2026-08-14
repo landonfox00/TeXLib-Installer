@@ -605,7 +605,7 @@ jobs:
           # a perfectly good install -- pre-flight must say so, not refuse.
           $installRoot = Join-Path $env:RUNNER_TEMP 'TeXLibNoBundle'
           $out = & powershell.exe -NoProfile -ExecutionPolicy Bypass `
-            -File .	ools\install.ps1 -Silent -DryRun -InstallPath $installRoot 2>&1 | Out-String
+            -File .\tools\install.ps1 -Silent -DryRun -InstallPath $installRoot 2>&1 | Out-String
           $rc = $LASTEXITCODE
           Write-Host $out
           if ($rc -ne 0) {
@@ -1762,7 +1762,7 @@ jobs:
                         'tools\boot_wrapper.ps1','tools\install.ps1','tools\uninstall.ps1',
                         'tools\install-gui.ps1','tools\uninstall-gui.ps1',
                         'tools\install-console.bat','tools\uninstall-console.bat',
-                        'texlib','templates')
+                        'templates')
           $missing = $required | Where-Object { -not (Test-Path (Join-Path $stage $_)) }
           if ($missing) { Write-Host "FAIL: bundle missing: $($missing -join ', ')" -ForegroundColor Red; exit 1 }
           # And the .ps1 files must NOT be at the release root: the whole point
