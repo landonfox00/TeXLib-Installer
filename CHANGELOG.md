@@ -4,6 +4,35 @@ All notable changes to TeXLib-Installer are recorded here. Format follows [Keep 
 
 ## [Unreleased]
 
+### Fixed
+
+- **`-OnlyTeXLib` skipped the internet check while being the one mode that is
+  nothing but a download.** The skip was correct while the library shipped
+  inside the release zip, and became wrong in 0.11.0. Offline, pre-flight
+  announced that connectivity was fine and the run then died at exit 7 part way
+  through. Only `-Repair` skips the check now, and the host tested is the one
+  that mode actually needs — `-OnlyTeXLib` pulls from GitHub and never touches
+  CTAN, so failing it on a CTAN outage was a false negative waiting to happen.
+
+- **One `Copy-Item -Recurse -Exclude` survived the 0.11.0 sweep**, on the
+  pre-0.6.3 settings carry-over — the single path whose destination *becomes*
+  `Packages\User` through the settings junction, copying from a library an
+  installer up to 0.9.4 had seeded with the author's test suite. So the exact
+  filter that does not filter, on the exact path where the files it fails to
+  filter get loaded as plugins. Now uses `Copy-LibraryTree` like everything
+  else. (0.11.0's note claiming that helper covered "every source" was true of
+  the library migration and not of this one.)
+
+### Removed
+
+- **Dead library-source branches.** `$UseExistingTeXLib` and
+  `$MigrateFromLegacy` could no longer be set once the library became a
+  download, but their branches survived in the plan, in section 11b and in
+  section 13, along with a comment block describing a mode that could not
+  happen. `$HaveBundle` was computed and never read. Behaviour is unchanged —
+  every one of these was unreachable — but code that describes modes it cannot
+  enter is how the next reader gets misled.
+
 ## [0.11.0] — 2026-08-14
 
 ### Changed
