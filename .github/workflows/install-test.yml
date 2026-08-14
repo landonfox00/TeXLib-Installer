@@ -2062,26 +2062,26 @@ jobs:
           New-Item -ItemType Directory -Force -Path $installRoot | Out-Null
           "INSTALL_ROOT=$installRoot" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
-      - name: Assemble stub texlib bundle
+      - name: Assert no texlib bundle is staged (this job downloads the real one)
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          # Minimal in-job stub. install.ps1 never parses/compiles the .sty during
-          # install (the end verification compiles a self-contained hello.tex with
-          # no \usepackage of the library), so stubs that merely EXIST satisfy
-          # pre-flight 7i, section 13 deploy, and the Test-Path-guarded Sublime
-          # deploy. Single-line Set-Content only — no here-strings (an indented
-          # '@ / "@ terminator after YAML de-indentation is a parse error).
-          New-Item -ItemType Directory -Force -Path 'texlib\Sublime' | Out-Null
-          Set-Content -Encoding UTF8 -Path 'texlib\CHANGELOG.md' -Value "# Changelog`r`n`r`n## [Unreleased]`r`n- CI stub bundle (not a real release)."
-          foreach ($p in 'course-metadata','texlib-build','basic-utilities') {
-            $sty = "\NeedsTeXFormat{LaTeX2e}`r`n\ProvidesPackage{$p}[2026/01/01 CI stub]`r`n\endinput"
-            Set-Content -Encoding UTF8 -Path ("texlib\{0}.sty" -f $p) -Value $sty
+          # Through 0.11.0 this step ASSEMBLED a stub texlib\ bundle, because the
+          # library shipped inside the release zip and pre-flight 7i needed one.
+          # It is now actively harmful: a local texlib\ tree OVERRIDES the pinned
+          # download, so the one job billed as the slow REAL install was the only
+          # job guaranteed NOT to exercise the library download. It deployed 8
+          # stub files, and the end-of-install class-resolution check skipped
+          # silently because a stub carries no .cls.
+          #
+          # A 3.3 MB fetch next to a 6 GB TeX Live install is not what makes this
+          # job slow. Guard against the stub creeping back rather than just
+          # deleting the step, so the coverage cannot be lost again quietly.
+          if (Test-Path 'texlib') {
+            Write-Host "FAIL: a texlib\ tree is staged; it would override the pinned download and gut this job's coverage." -ForegroundColor Red
+            exit 1
           }
-          Set-Content -Encoding UTF8 -Path 'texlib\Sublime\texlib_builder.py' -Value '# CI stub builder.'
-          Set-Content -Encoding UTF8 -Path 'texlib\Sublime\TeXLib.sublime-build' -Value '{ "//": "CI stub build." }'
-          Set-Content -Encoding UTF8 -Path 'texlib\Sublime\Default.sublime-commands' -Value '[]'
-          Set-Content -Encoding UTF8 -Path 'texlib\Sublime\LaTeX.sublime-settings' -Value '{ "//": "CI stub settings." }'
+          Write-Host "OK: no local bundle -- the installer will download TeXLib and deploy it for real." -ForegroundColor Green
 
       - name: Real install (install.ps1 -Silent)
         shell: pwsh
@@ -2095,11 +2095,38 @@ jobs:
           $env:OneDrive = ''
           $env:OneDriveCommercial = ''
           $env:OneDriveConsumer = ''
-          powershell.exe -NoProfile -ExecutionPolicy Bypass `
-            -File .\tools\install.ps1 -Silent -InstallPath $env:INSTALL_ROOT
+          $out = & powershell.exe -NoProfile -ExecutionPolicy Bypass `
+            -File .\tools\install.ps1 -Silent -InstallPath $env:INSTALL_ROOT 2>&1 | Out-String
           $rc = $LASTEXITCODE
+          Write-Host $out
           Write-Host "install.ps1 -Silent exit code: $rc"
-          exit $rc
+          if ($rc -ne 0) { exit $rc }
+
+          # This job exists to be the REAL install, so assert it actually did the
+          # real things. Each of these was true-but-unasserted while a stub
+          # bundle stood in for the library, and the job still reported success.
+          $fail = 0
+          if ($out -notmatch 'downloaded and verified') {
+            Write-Host "FAIL: the library was not downloaded + hash-verified." -ForegroundColor Red; $fail++
+          }
+          # The stub deployed 8 files. The real v0.5.0 archive deploys ~271 and
+          # holds back ~32; assert the shape rather than exact counts, which
+          # move with every library release.
+          $m = [regex]::Match($out, 'Library deployed to .+ \((?<n>\d+) files\)')
+          if (-not $m.Success -or [int]$m.Groups['n'].Value -lt 100) {
+            Write-Host "FAIL: expected a real library deploy (100+ files); saw '$($m.Groups['n'].Value)'." -ForegroundColor Red; $fail++
+          }
+          if ($out -notmatch 'Held back \d+ dev-only file') {
+            Write-Host "FAIL: Copy-LibraryTree held nothing back; the archive's test_*.py should have been filtered." -ForegroundColor Red; $fail++
+          }
+          # The check that would have caught the original build bug. It skips
+          # itself when the library has no .cls, which is exactly what a stub
+          # library looked like -- so assert it ran AND passed.
+          if ($out -notmatch 'TeXLib classes resolve on the build TEXINPUTS') {
+            Write-Host "FAIL: the class-resolution check did not run (or did not pass)." -ForegroundColor Red; $fail++
+          }
+          if ($fail) { exit 1 }
+          Write-Host "OK: real download, real deploy, real filtering, classes resolve." -ForegroundColor Green
 
       - name: Diagnose install (install.ps1 -Doctor)
         shell: pwsh
