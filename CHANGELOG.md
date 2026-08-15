@@ -4,6 +4,8 @@ All notable changes to TeXLib-Installer are recorded here. Format follows [Keep 
 
 ## [Unreleased]
 
+## [0.11.1] — 2026-08-15
+
 ### Fixed
 
 - **A real full install could deploy the library one directory too deep, and
