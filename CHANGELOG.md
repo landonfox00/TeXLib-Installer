@@ -6,6 +6,32 @@ All notable changes to TeXLib-Installer are recorded here. Format follows [Keep 
 
 ### Fixed
 
+- **A real full install could deploy the library one directory too deep, and
+  report success.** `Copy-LibraryTree` took its source root from
+  `Resolve-Path` while enumerating with `Get-ChildItem`. Those two can return
+  the same file in different FORMS — an 8.3 short name (`C:\Users\RUNNER~1\…`)
+  against its long equivalent — and the `Substring` that derives each relative
+  path then slices at the wrong offset, leaving a tail of the *source* path
+  glued to it. Every file lands under `<library>\<garbage>\…`.
+
+  Nothing errors. The copies succeed, the counter still reads 271, the install
+  exits 0. What follows is silent: no module directories at the library root,
+  so the generated `texinputs` collapses from 11 search paths to 3; no `.cls`
+  where anything looks for one; `Sublime\` missing. That is the original build
+  failure restored in full, by its own fix. CI's `full-install` caught it, and
+  `reuse-existing-library` had been passing *while* broken, because section 16b
+  copies the builder straight from the archive and masked the symptom.
+
+  The root is now taken from `Get-Item`, the same `FileSystemInfo`
+  normalization `Get-ChildItem` uses, so the two cannot disagree. Any item that
+  is somehow not under that root is a hard error rather than a guessed
+  destination — the silent version of this is indistinguishable from success.
+
+### Changed
+
+- **The pinned library moves to TeXLib v0.6.0** (was v0.5.0, 2026-07-30) — 29
+  commits of library work, hash-verified, 281 files deployed with 35 held back.
+
 - **`-TeXLibPath` aimed at a git checkout overwrote it, destroying uncommitted
   work.** 0.11.0 regression, and the installer suggested the command itself:
   pre-flight prints *"Pass `-TeXLibPath <checkout>` to install AGAINST it

@@ -429,10 +429,30 @@ function Copy-LibraryTree {
     # filter has to be real. Section 16b-1b still purges as a backstop.
     param([string]$Source, [string]$Destination)
 
-    $SrcRoot = (Resolve-Path -LiteralPath $Source).Path.TrimEnd('\')
+    # Normalize through Get-Item, NOT Resolve-Path. Both this and the
+    # Get-ChildItem below then come from the same .NET FileSystemInfo, so their
+    # FullName strings are guaranteed to agree.
+    #
+    # Resolve-Path can return a path in a different FORM from the one
+    # Get-ChildItem reports for the same file -- an 8.3 short name
+    # (C:\Users\RUNNER~1\...) against its long equivalent is the case that bit
+    # us. The Substring below then slices at the wrong offset and leaves a tail
+    # of the SOURCE path glued onto $Rel, so every file lands under
+    # <destination>\<garbage>\... . Nothing errors: the copies succeed, the
+    # counter still reads 271, the install exits 0 -- and the library the
+    # builder needs is one directory deeper than anything looks for it. That is
+    # the whole original build bug, re-created by its own fix.
+    $SrcRoot = (Get-Item -LiteralPath $Source).FullName.TrimEnd('\')
     $Copied = 0
     $Skipped = 0
     foreach ($Item in (Get-ChildItem -LiteralPath $SrcRoot -Recurse -Force -ErrorAction SilentlyContinue)) {
+        # Never guess a destination. If an item is somehow not under the root we
+        # enumerated, the relative path is meaningless and the copy would
+        # scatter files into an invented subtree -- fail loudly instead, because
+        # the silent version of this is indistinguishable from success.
+        if (-not $Item.FullName.StartsWith($SrcRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+            throw "Copy-LibraryTree: '$($Item.FullName)' is not under '$SrcRoot'; refusing to guess where it belongs."
+        }
         $Rel = $Item.FullName.Substring($SrcRoot.Length).TrimStart('\')
         if (-not $Rel) { continue }
         # Excluded if ANY path segment matches -- a directory match takes its
@@ -829,10 +849,10 @@ $Downloads = @{
         #   Get-FileHash <downloaded zip> -Algorithm SHA256
         # and update $TeXLibZipDir below to match (GitHub names the folder
         # inside "<repo>-<tag without the leading v>").
-        "Url"  = "https://github.com/landonfox00/TeXLib/archive/refs/tags/v0.5.0.zip"
+        "Url"  = "https://github.com/landonfox00/TeXLib/archive/refs/tags/v0.6.0.zip"
         "File" = "texlib.zip"
         "Type" = "Static"
-        "Hash" = "6B1E45B7CF51E0F330AEF1E02B3AC9B27BE25BBE9CFD2EFAE88BF23CC50E20FB"
+        "Hash" = "468E72F6D97D7FB1561F49BDEFCBDB8C656E4EADE19100A54CA39144B3488993"
     }
 }
 
@@ -842,8 +862,8 @@ $LaTeXToolsZipDir = "LaTeXTools-st4-4.5.12"
 
 # Same for TeXLib. Note GitHub drops the leading "v" from the tag here:
 # tag v0.5.0 -> folder TeXLib-0.5.0. Update alongside the texlib pin above.
-$TeXLibZipDir  = "TeXLib-0.5.0"
-$TeXLibVersion = "v0.5.0"   # what -Version reports as the library it installs
+$TeXLibZipDir  = "TeXLib-0.6.0"
+$TeXLibVersion = "v0.6.0"   # what -Version reports as the library it installs
 
 # The SumatraPDF portable exe is named by version (SumatraPDF-3.5.2-64.exe).
 # Derive it ONCE from the pinned zip filename so a version bump only touches the
