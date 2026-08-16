@@ -4,6 +4,23 @@ All notable changes to TeXLib-Installer are recorded here. Format follows [Keep 
 
 ## [Unreleased]
 
+### Changed
+
+- **Pinned library moves to TeXLib v0.6.1** (from v0.6.0). Three commits: the
+  `.schedmeta` calendar sidecar, and — the reason to bump rather than wait — the
+  plugin now derives its own `texinputs` instead of shipping the key commented
+  out.
+
+  That last one closes the original build failure at its source. Installed
+  machines were never exposed to it, because this installer writes an explicit
+  `texinputs` into `Packages/User`; the people it broke were anyone who
+  installed the Sublime package on its own and got a plugin that could not
+  resolve a single class. The installer's setting still wins, so nothing about
+  an installed machine changes — the difference is that the library no longer
+  depends on this installer to be usable.
+
+  290 files deployed, 37 held back, 11 search paths, 9 classes resolving.
+
 ## [0.11.1] — 2026-08-15
 
 ### Fixed
