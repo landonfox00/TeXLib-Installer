@@ -19,7 +19,9 @@
 
 .PARAMETER Version
     Release version string (no leading 'v'). Used for the ZIP filename and
-    written into VERSION inside the bundle.
+    recorded as release_version= in the bundle's RELEASE file. (It has never
+    been written to a file named VERSION, which this line claimed through
+    0.11.1.)
 
 .PARAMETER OutDir
     Where to drop the release artifacts. Defaults to .\dist .
@@ -157,7 +159,12 @@ $SumsPath = Join-Path $OutDir "SHA256SUMS"
 Write-Host "Writing $SumsPath..." -ForegroundColor Cyan
 $Hash = (Get-FileHash $ZipPath -Algorithm SHA256).Hash.ToLower()
 $ZipName = Split-Path $ZipPath -Leaf
-Set-Content -Path $SumsPath -Value "$Hash  $ZipName" -Encoding ASCII
+# LF, and no trailing newline beyond the one: Set-Content would end the line
+# CRLF, and `sha256sum -c` then parses the filename WITH the \r and reports
+# "FAILED open or read" for a file that is sitting right there and whose hash
+# is correct. Windows verifiers (Get-FileHash) never noticed; anyone checking
+# from WSL, git-bash or a Linux box saw a checksum file that appeared to fail.
+[System.IO.File]::WriteAllText($SumsPath, "$Hash  $ZipName`n", [System.Text.UTF8Encoding]::new($false))
 
 Write-Host ""
 Write-Host "Done." -ForegroundColor Green
