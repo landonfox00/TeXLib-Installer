@@ -4,6 +4,8 @@ All notable changes to TeXLib-Installer are recorded here. Format follows [Keep 
 
 ## [Unreleased]
 
+## [0.11.2] — 2026-08-17
+
 ### Changed
 
 - **Pinned library moves to TeXLib v0.6.1** (from v0.6.0). Three commits: the
@@ -1438,7 +1440,8 @@ Initial release. Reorganized and hardened port of the OneTeX installer (now arch
 - Final `Pause` at end of install (anti-pattern; replaced with conditional Read-Host on failure only).
 - Legacy `SublimeUser` folder references (TeXLib now uses `Sublime/` as the canonical sync location).
 
-[Unreleased]: https://github.com/landonfox00/TeXLib-Installer/compare/v0.6.2...HEAD
+[Unreleased]: https://github.com/landonfox00/TeXLib-Installer/compare/v0.11.2...HEAD
+[0.11.2]: https://github.com/landonfox00/TeXLib-Installer/compare/v0.11.1...v0.11.2
 [0.6.2]: https://github.com/landonfox00/TeXLib-Installer/compare/v0.6.0...v0.6.2
 [0.6.0]: https://github.com/landonfox00/TeXLib-Installer/compare/v0.5.1...v0.6.0
 [0.5.1]: https://github.com/landonfox00/TeXLib-Installer/compare/v0.5.0...v0.5.1
