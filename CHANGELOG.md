@@ -23,6 +23,21 @@ All notable changes to TeXLib-Installer are recorded here. Format follows [Keep 
 
   290 files deployed, 37 held back, 11 search paths, 9 classes resolving.
 
+### Fixed
+
+- **`SHA256SUMS` failed its own verification anywhere but Windows.**
+  `Set-Content` ended the line CRLF, so `sha256sum -c` parsed the filename with
+  the `\r` still attached and reported `FAILED open or read` for a file sitting
+  right there whose hash was correct. Windows verifiers use `Get-FileHash` and
+  never saw it; anyone checking from WSL, git-bash or Linux got a checksum file
+  that looked like it had caught a corrupted download. Written with an explicit
+  LF now, and `sha256sum -c` passes. Found while publishing this release.
+
+- **`make-release.ps1`'s synopsis described a file it has never written.** It
+  said the version is "written into VERSION inside the bundle"; no bundle has
+  ever contained a `VERSION` file — it goes into `RELEASE` as
+  `release_version=`. Stale since 0.11.0, when `RELEASE` was introduced.
+
 ## [0.11.1] — 2026-08-15
 
 ### Fixed
