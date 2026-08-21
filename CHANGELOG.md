@@ -4,6 +4,22 @@ All notable changes to TeXLib-Installer are recorded here. Format follows [Keep 
 
 ## [Unreleased]
 
+## [0.11.3] — 2026-08-20
+
+### Changed
+
+- **Pinned library moves to TeXLib v0.7.0** (from v0.6.1) — the pre-semester
+  release, shipped so coworkers get this semester's fixes before classes start.
+  Since v0.6.1: inverse search works on solution boxes (whole-box, both
+  multiple-choice key layouts, mechanism documented in the library's
+  SYNCTEX.md), TeX Live 2026 compatibility for every class, the UNR-conformant
+  thesis class gated in CI, the example corpus consolidated under one manifest
+  with 33 scenario packs, the browsable class gallery, and
+  \printbankcatalog[topic=...] filtering. Hash-verified against the tag
+  archive as always; the sample bank fragments are now named problem-bank.tex,
+  with bank.tex still resolved as a sibling for existing courses.
+
+
 ## [0.11.2] — 2026-08-17
 
 ### Changed
@@ -1455,7 +1471,8 @@ Initial release. Reorganized and hardened port of the OneTeX installer (now arch
 - Final `Pause` at end of install (anti-pattern; replaced with conditional Read-Host on failure only).
 - Legacy `SublimeUser` folder references (TeXLib now uses `Sublime/` as the canonical sync location).
 
-[Unreleased]: https://github.com/landonfox00/TeXLib-Installer/compare/v0.11.2...HEAD
+[Unreleased]: https://github.com/landonfox00/TeXLib-Installer/compare/v0.11.3...HEAD
+[0.11.3]: https://github.com/landonfox00/TeXLib-Installer/compare/v0.11.2...v0.11.3
 [0.11.2]: https://github.com/landonfox00/TeXLib-Installer/compare/v0.11.1...v0.11.2
 [0.6.2]: https://github.com/landonfox00/TeXLib-Installer/compare/v0.6.0...v0.6.2
 [0.6.0]: https://github.com/landonfox00/TeXLib-Installer/compare/v0.5.1...v0.6.0
