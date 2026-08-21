@@ -180,7 +180,7 @@ param(
 # =============================================================================
 # 0. INSTALLER METADATA
 # =============================================================================
-$InstallerVersion = "0.11.2"
+$InstallerVersion = "0.11.3"
 $InstallerRepo    = "https://github.com/landonfox00/TeXLib-Installer"
 $ReleasesApi      = "https://api.github.com/repos/landonfox00/TeXLib-Installer/releases/latest"
 
@@ -849,10 +849,10 @@ $Downloads = @{
         #   Get-FileHash <downloaded zip> -Algorithm SHA256
         # and update $TeXLibZipDir below to match (GitHub names the folder
         # inside "<repo>-<tag without the leading v>").
-        "Url"  = "https://github.com/landonfox00/TeXLib/archive/refs/tags/v0.6.1.zip"
+        "Url"  = "https://github.com/landonfox00/TeXLib/archive/refs/tags/v0.7.0.zip"
         "File" = "texlib.zip"
         "Type" = "Static"
-        "Hash" = "3617DC6B66AB0097DC85013C77003B40ABAA0B3CA1966478B19D495989D28315"
+        "Hash" = "A15BDC7809E741CAFD299B0B08BB01933232970467CEE1D9DF7F09B5DDEF66D7"
     }
 }
 
@@ -862,8 +862,8 @@ $LaTeXToolsZipDir = "LaTeXTools-st4-4.5.12"
 
 # Same for TeXLib. Note GitHub drops the leading "v" from the tag here:
 # tag v0.5.0 -> folder TeXLib-0.5.0. Update alongside the texlib pin above.
-$TeXLibZipDir  = "TeXLib-0.6.1"
-$TeXLibVersion = "v0.6.1"   # what -Version reports as the library it installs
+$TeXLibZipDir  = "TeXLib-0.7.0"
+$TeXLibVersion = "v0.7.0"   # what -Version reports as the library it installs
 
 # The SumatraPDF portable exe is named by version (SumatraPDF-3.5.2-64.exe).
 # Derive it ONCE from the pinned zip filename so a version bump only touches the
