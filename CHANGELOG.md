@@ -4,11 +4,11 @@ All notable changes to TeXLib-Installer are recorded here. Format follows [Keep 
 
 ## [Unreleased]
 
-## [0.11.3] --- 2026-08-20
+## [0.11.3] — 2026-08-20
 
 ### Changed
 
-- **Pinned library moves to TeXLib v0.7.0** (from v0.6.1) --- the pre-semester
+- **Pinned library moves to TeXLib v0.7.0** (from v0.6.1) — the pre-semester
   release, shipped so coworkers get this semester's fixes before classes start.
   Since v0.6.1: inverse search works on solution boxes (whole-box, both
   multiple-choice key layouts, mechanism documented in the library's
