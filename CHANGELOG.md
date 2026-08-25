@@ -50,6 +50,20 @@ All notable changes to TeXLib-Installer are recorded here. Format follows [Keep 
   under `Sublime\texlib\` reaches Sublime as `Packages\TeXLib` and is
   unaffected, and the any-depth denylist still applies everywhere else.
 
+- **Pinned library moves to TeXLib v0.7.3** (from v0.7.2) — the v1-readiness
+  library release. Since v0.7.2: the library's CI validates on TeX Live 2026
+  with the container *and* every outcome-deciding tool pinned (imagemagick,
+  poppler-utils, veraPDF 1.30.2 hash-verified, pypdf); an accessible build no
+  longer stacks a second `\DocumentMetadata` onto a document that declares
+  its own (the TL2026 kernel makes the duplicate fatal — the thesis
+  template's layout); the library ships `texlib-manifest.json`, its first
+  machine-readable version contract, with every `\ProvidesClass`/`Package`
+  line normalized to the release version and a CI check holding them
+  together; the duplicate `Sublime\texlib_pdfpost.py` is gone; and the README
+  family documents the repo that exists (bank/thesis classes, real engine
+  guidance, post-refactor paths). Hash-verified against the tag archive as
+  always.
+
 ### Fixed
 
 - **The `Packages\User` move cannot outrun its own safety net anymore.** On a
