@@ -4,7 +4,37 @@ All notable changes to TeXLib-Installer are recorded here. Format follows [Keep 
 
 ## [Unreleased]
 
+### Added
+
+- **A failed install leaves a breadcrumb instead of a mystery.** Nothing
+  distinguished a run that died at section 16 from a machine that was never
+  installed: the `VERSION` stamp is written at the very end, so a partial
+  install was detectable only as a Doctor shrug ("VERSION file missing —
+  partial install?"). The installer now writes `INSTALL-IN-PROGRESS` (start
+  time, installer version, mode) at its first mutation of the machine and
+  deletes it as the last act of a successful run. A surviving breadcrumb is
+  positive proof of a died-partway run: the next install reports when and in
+  what mode, then carries on — every section is idempotent, so re-running IS
+  the recovery, and now the installer says so instead of leaving the user to
+  wonder. Doctor reports it too, outranking the VERSION heuristic.
+
+- **Doctor reads the library's own version.** TeXLib v0.7.3 ships
+  `texlib-manifest.json` — the release tag's machine-readable mirror. When
+  the deployed library carries one, Doctor reports "manifest vX.Y.Z" instead
+  of inferring the library from the shape of three files; older deployments
+  still pass on the probe alone.
+
 ### Fixed
+
+- **The `Packages\User` move cannot outrun its own safety net anymore.** On a
+  first install with a pre-existing `Packages\User`, the backup was advisory:
+  a failed `Compress-Archive` warned and the move → delete → junction
+  sequence proceeded anyway, and a junction failure after the move left the
+  user's settings stranded in the sync folder with `Packages\User` gone. The
+  backup now GATES the move (a failed backup aborts with "close Sublime and
+  re-run" — an open settings file is the usual cause), and a failed
+  delete/junction step restores the moved contents to `Packages\User` before
+  failing, so the editor keeps working even when the install did not.
 
 - **Self-update refuses to run what it cannot verify.** `-Update` executes the
   downloaded installer — including under `-Silent`, where nobody reads a
