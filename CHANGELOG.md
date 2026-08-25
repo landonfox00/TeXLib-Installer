@@ -45,6 +45,15 @@ All notable changes to TeXLib-Installer are recorded here. Format follows [Keep 
 
 ### Changed
 
+- **Pinned library moves to TeXLib v0.7.4** (from v0.7.3) — the accessible/print
+  visual-parity release: tagged builds get their theorem boxes back, the
+  box-grid schedule is calibrated against the tabularray calendar with a
+  repeated continuation header, and a mid-paragraph gated-solution fatal
+  found by the measurement harness is fixed. First library release cut by
+  another session under the new version contract — `bump_version.py`
+  stamped the manifest and every `\Provides` line, and the contract check
+  held. Hash-verified against the tag archive as always.
+
 - **`.txt` belongs to the system again.** The installer had claimed `.txt`
   for Sublime alongside the TeX extensions since the OneTeX era, which meant
   every plain-text file on the machine — download receipts, exported notes,
