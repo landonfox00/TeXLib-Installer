@@ -1919,6 +1919,30 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      # The one gap the static checks below cannot close: actually RUNNING the
+      # double-click path. -SelfTest builds the real window (WPF + XAML +
+      # every FindName + handler wiring + detection), then drives the real
+      # controls through the argument-construction truth table -- including
+      # uninstall-gui's remove/keep polarity, where an inversion deletes a
+      # 6 GB tree someone meant to keep, and install-gui's visibility gate on
+      # -Reinstall, where a leak is a silent 6 GB re-download. powershell.exe
+      # -STA to match how install.bat actually launches them.
+      - name: Execute both GUIs headlessly (-SelfTest truth tables)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $bad = 0
+          foreach ($script in 'tools\install-gui.ps1', 'tools\uninstall-gui.ps1') {
+            Write-Host "=== $script -SelfTest ===" -ForegroundColor Cyan
+            & powershell.exe -STA -NoProfile -ExecutionPolicy Bypass -File $script -SelfTest
+            if ($LASTEXITCODE -ne 0) {
+              Write-Host "FAIL: $script self-test exited $LASTEXITCODE" -ForegroundColor Red
+              $bad++
+            }
+          }
+          if ($bad) { exit 1 }
+          Write-Host "OK: both GUIs executed headlessly and every truth-table case passed." -ForegroundColor Green
+
       - name: Both GUI scripts parse and are ASCII
         shell: powershell
         run: |
