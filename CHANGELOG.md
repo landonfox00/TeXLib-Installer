@@ -4,6 +4,23 @@ All notable changes to TeXLib-Installer are recorded here. Format follows [Keep 
 
 ## [Unreleased]
 
+## [0.11.4] — 2026-08-24
+
+### Changed
+
+- **Pinned library moves to TeXLib v0.7.1** (from v0.7.0) — the first-week
+  follow-up to the pre-semester release. Since v0.7.0: the published coded copy
+  takes the Math & Stat Office submission name (`MATH 181.1001_Fall 2026_Fox.pdf`)
+  instead of needing a hand rename before it is mailed; exam dates print a
+  weekday and the month spelled out, so a schedule-parseable `final-date` reads
+  like the free-form exam dates beside it; `schedule.cls` actually publishes
+  `Tentative Schedule.pdf`, which it had been named for in three places without
+  ever producing, so the LMS bundle had been shipping the syllabus alone; an
+  accessible Notes build with gated solutions no longer dies at
+  `\end{document}`; and accessible mode is reachable from the Sublime build
+  picker rather than only from Tools > Build With. Hash-verified against the tag
+  archive as always.
+
 ## [0.11.3] — 2026-08-20
 
 ### Changed
