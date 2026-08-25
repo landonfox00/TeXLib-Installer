@@ -42,10 +42,7 @@ the one behavior CI can only simulate).
       NOT Sublime. Decided 2026-08-25: taking over every plain-text file was
       surprising, so `.txt` is no longer claimed; on an upgrade the old claim
       is released unless the user themselves pinned Sublime for it.
-- [ ] Right Click → **Open with** on a `.tex`: no duplicate or dead Sublime
-      entries, ours reads `Sublime Text (TeXLib)`, and a Sublime you installed
-      yourself is **still listed**. This is the one thing no headless job can
-      check, because it needs a real Explorer.
+- [ ] Right-click → **Open with** on a `.tex`: no duplicate or dead Sublime entries, ours reads `Sublime Text (TeXLib)`, and a Sublime you installed yourself is **still listed**. This is the one thing no headless job can check, because it needs a real Explorer.
 
 ## Uninstall
 - [ ] Leave Sublime Text open, then run `uninstall.bat`. It should notice and
@@ -56,5 +53,4 @@ the one behavior CI can only simulate).
       is **entirely gone** (including `Library\`), the PATH entry is cleaned, and
       shortcuts/associations are removed.
 - [ ] A pre-0.6.3 `Documents\TeXLib` is **preserved** unless you asked for it.
-- [ ] Right Click → **Open with** again: the TeXLib entries are gone, and your
-      own Sublime/SumatraPDF entries are still there.
+- [ ] Right-click → **Open with** again: the TeXLib entries are gone, and your own Sublime/SumatraPDF entries are still there.

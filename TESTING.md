@@ -116,8 +116,7 @@ This is the fastest way to exercise the paths CI's clean-VM jobs cannot reach.
 
 ## 4b. Open With hygiene
 
-▶ Before installing, note the entries under Right Click → **Open with** for a
-  `.tex` and a `.pdf`.
+▶ Before installing, note the entries under Right-click → **Open with** for a `.tex` and a `.pdf`.
 ✓ After installing, dead entries from earlier installs are gone, the TeXLib
   entries read `Sublime Text (TeXLib)` / `SumatraPDF (TeXLib)`, and any
   Sublime/SumatraPDF you installed yourself is **still listed**.
@@ -151,9 +150,7 @@ This is the fastest way to exercise the paths CI's clean-VM jobs cannot reach.
 ## 7. Release packaging
 
 ▶ `tools\make-release.ps1 -Version <v>`
-✓ Produces `dist\TeXLib-Installer-v<v>.zip` + `SHA256SUMS`. Unzip and confirm
-  the root holds `install.bat`, `uninstall.bat`, `templates/`, `texlib/` and
-  `tools/` — and **no** `.ps1` files, so there is nothing to mis-click.
+✓ Produces `dist\TeXLib-Installer-v<v>.zip` + `SHA256SUMS`. Unzip and confirm the root holds `install.bat`, `uninstall.bat`, `templates/`, and `tools/` — no `texlib/` tree (the library is downloaded at install time, not bundled) and **no** `.ps1` files, so there is nothing to mis-click.
 ✓ `tools/` contains `boot_wrapper.ps1`, `install.ps1`, `uninstall.ps1`, and
   neither `make-release.ps1` nor `dev-install-test.ps1`.
 ▶ Extract the ZIP to a clean machine and run §3–§6 from it.
