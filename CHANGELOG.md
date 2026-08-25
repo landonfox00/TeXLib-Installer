@@ -4,6 +4,10 @@ All notable changes to TeXLib-Installer are recorded here. Format follows [Keep 
 
 ## [Unreleased]
 
+## [1.0.1] — 2026-08-25
+
+One quality-of-life feature, same-day: the machine you hand a coworker now has the quiet status bar the author's own machine always had.
+
 ### Added
 
 - **The "LaTeXTools cache updated" status-bar banner is silenced out of the
