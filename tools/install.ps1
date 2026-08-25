@@ -1523,31 +1523,44 @@ function Invoke-SelfUpdate {
         Stop-Installer 21
     }
 
-    if ($SumsAsset) {
-        try {
-            $SumsText = (Invoke-WebRequest -Uri $SumsAsset.browser_download_url -UseBasicParsing -TimeoutSec 30).Content
-            if ($SumsText -is [byte[]]) { $SumsText = [System.Text.Encoding]::ASCII.GetString($SumsText) }
-            $Expected = ($SumsText -split "`n" |
-                         Where-Object { $_ -match [regex]::Escape($ZipAsset.name) } |
-                         Select-Object -First 1) -split '\s+' | Select-Object -First 1
-            $Actual = (Get-FileHash $ZipPath -Algorithm SHA256).Hash
-            if (-not $Expected) {
-                Write-Host "  [WARN] SHA256SUMS has no line for $($ZipAsset.name); cannot verify." -ForegroundColor Yellow
-            } elseif ($Actual -ne $Expected.Trim().ToUpperInvariant() -and $Actual -ne $Expected.Trim()) {
-                Write-Host "  [FAIL] Hash mismatch on the downloaded release." -ForegroundColor Red
-                Write-Host "         expected: $Expected" -ForegroundColor Red
-                Write-Host "         actual:   $Actual"   -ForegroundColor Red
-                Write-Host "Refusing to run unverified bytes. Try again, or download manually." -ForegroundColor Red
-                Stop-Installer 21
-            } else {
-                Write-Host "  [OK] SHA256 verified against the release's SHA256SUMS" -ForegroundColor Green
-            }
-        } catch {
-            Write-Host "  [WARN] Could not fetch SHA256SUMS ($_); continuing unverified." -ForegroundColor Yellow
-        }
-    } else {
-        Write-Host "  [WARN] Release v$Latest ships no SHA256SUMS; cannot verify the download." -ForegroundColor Yellow
+    # Every verification failure below is FATAL, not a warning. Self-update
+    # EXECUTES the downloaded script two screens down -- including under
+    # -Silent, where nobody reads a warning -- so "continue unverified" here
+    # was a remote-code-execution hole the moment the download or the release
+    # page was tampered with. CONTRIBUTING's rule is fail-closed on downloads;
+    # the mismatch branch always got that right, and these paths now match it.
+    if (-not $SumsAsset) {
+        Write-Host "  [FAIL] Release v$Latest ships no SHA256SUMS; cannot verify the download." -ForegroundColor Red
+        Write-Host "Refusing to run unverified bytes. Download and verify manually from" -ForegroundColor Red
+        Write-Host "$InstallerRepo/releases if you really mean to run it." -ForegroundColor Yellow
+        Stop-Installer 21
     }
+    $Expected = $null
+    try {
+        $SumsText = (Invoke-WebRequest -Uri $SumsAsset.browser_download_url -UseBasicParsing -TimeoutSec 30).Content
+        if ($SumsText -is [byte[]]) { $SumsText = [System.Text.Encoding]::ASCII.GetString($SumsText) }
+        $Expected = ($SumsText -split "`n" |
+                     Where-Object { $_ -match [regex]::Escape($ZipAsset.name) } |
+                     Select-Object -First 1) -split '\s+' | Select-Object -First 1
+    } catch {
+        Write-Host "  [FAIL] Could not fetch SHA256SUMS ($_)." -ForegroundColor Red
+        Write-Host "Refusing to run unverified bytes. Try again, or download manually." -ForegroundColor Red
+        Stop-Installer 21
+    }
+    if (-not $Expected) {
+        Write-Host "  [FAIL] SHA256SUMS has no line for $($ZipAsset.name); cannot verify." -ForegroundColor Red
+        Write-Host "Refusing to run unverified bytes. Try again, or download manually." -ForegroundColor Red
+        Stop-Installer 21
+    }
+    $Actual = (Get-FileHash $ZipPath -Algorithm SHA256).Hash
+    if ($Actual -ne $Expected.Trim().ToUpperInvariant() -and $Actual -ne $Expected.Trim()) {
+        Write-Host "  [FAIL] Hash mismatch on the downloaded release." -ForegroundColor Red
+        Write-Host "         expected: $Expected" -ForegroundColor Red
+        Write-Host "         actual:   $Actual"   -ForegroundColor Red
+        Write-Host "Refusing to run unverified bytes. Try again, or download manually." -ForegroundColor Red
+        Stop-Installer 21
+    }
+    Write-Host "  [OK] SHA256 verified against the release's SHA256SUMS" -ForegroundColor Green
 
     Write-Host "Extracting..." -ForegroundColor Yellow
     $ExtractDir = Join-Path $UpdateDir "extracted"
