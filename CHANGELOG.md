@@ -4,6 +4,20 @@ All notable changes to TeXLib-Installer are recorded here. Format follows [Keep 
 
 ## [Unreleased]
 
+### Fixed
+
+- **Self-update refuses to run what it cannot verify.** `-Update` executes the
+  downloaded installer — including under `-Silent`, where nobody reads a
+  warning — yet three of its four verification failure modes only warned and
+  carried on: a release shipping no `SHA256SUMS`, a failed `SHA256SUMS` fetch,
+  and a sums file with no line for the downloaded asset all fell through to
+  `& powershell.exe … -File $NewInstaller`. Only an outright hash mismatch
+  refused. All four paths now stop with exit 21 and the same "refusing to run
+  unverified bytes" message the mismatch branch always had, matching
+  CONTRIBUTING's fail-closed rule for downloads; a new CI step parses
+  `Invoke-SelfUpdate` out of the script and fails if any verification failure
+  ever appears as a `[WARN]` again.
+
 ## [0.11.5] — 2026-08-25
 
 ### Changed

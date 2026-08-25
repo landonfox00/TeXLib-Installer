@@ -1316,6 +1316,35 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      # Self-update EXECUTES what it downloads (including under -Silent), so a
+      # verification failure downgraded to a warning is a remote-code-execution
+      # hole, not a UX choice. Three warn-and-run paths shipped that way until
+      # 0.12.0; this pins the fail-closed property structurally.
+      - name: Self-update verification is fail-closed (no warn-and-run paths)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $tokens = $null; $parseErrors = $null
+          $ast = [System.Management.Automation.Language.Parser]::ParseFile(
+            (Join-Path $PWD 'tools\install.ps1'), [ref]$tokens, [ref]$parseErrors)
+          if ($parseErrors.Count) { $parseErrors | ForEach-Object { Write-Host $_.Message }; exit 1 }
+          $fn = $ast.Find({ param($n)
+            $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+            $n.Name -eq 'Invoke-SelfUpdate' }, $true)
+          if (-not $fn) { Write-Host 'FAIL: Invoke-SelfUpdate not found.' -ForegroundColor Red; exit 1 }
+          $text = $fn.Extent.Text
+          if ($text -match '(?im)\[WARN\][^\r\n]*(unverified|cannot verify)') {
+            Write-Host 'FAIL: a verification failure is a [WARN] inside Invoke-SelfUpdate; it must fail closed.' -ForegroundColor Red
+            exit 1
+          }
+          foreach ($needle in 'ships no SHA256SUMS', 'Could not fetch SHA256SUMS', 'has no line for', 'Hash mismatch') {
+            if ($text -notmatch [regex]::Escape($needle)) {
+              Write-Host "FAIL: expected verification guard '$needle' is missing from Invoke-SelfUpdate." -ForegroundColor Red
+              exit 1
+            }
+          }
+          Write-Host 'OK: all four verification failure modes are fatal in Invoke-SelfUpdate.' -ForegroundColor Green
+
       - name: install.ps1 -Update decides correctly
         shell: pwsh
         run: |
