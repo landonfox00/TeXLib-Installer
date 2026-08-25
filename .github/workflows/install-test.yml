@@ -1919,6 +1919,30 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      # The one gap the static checks below cannot close: actually RUNNING the
+      # double-click path. -SelfTest builds the real window (WPF + XAML +
+      # every FindName + handler wiring + detection), then drives the real
+      # controls through the argument-construction truth table -- including
+      # uninstall-gui's remove/keep polarity, where an inversion deletes a
+      # 6 GB tree someone meant to keep, and install-gui's visibility gate on
+      # -Reinstall, where a leak is a silent 6 GB re-download. powershell.exe
+      # -STA to match how install.bat actually launches them.
+      - name: Execute both GUIs headlessly (-SelfTest truth tables)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $bad = 0
+          foreach ($script in 'tools\install-gui.ps1', 'tools\uninstall-gui.ps1') {
+            Write-Host "=== $script -SelfTest ===" -ForegroundColor Cyan
+            & powershell.exe -STA -NoProfile -ExecutionPolicy Bypass -File $script -SelfTest
+            if ($LASTEXITCODE -ne 0) {
+              Write-Host "FAIL: $script self-test exited $LASTEXITCODE" -ForegroundColor Red
+              $bad++
+            }
+          }
+          if ($bad) { exit 1 }
+          Write-Host "OK: both GUIs executed headlessly and every truth-table case passed." -ForegroundColor Green
+
       - name: Both GUI scripts parse and are ASCII
         shell: powershell
         run: |
@@ -2051,23 +2075,37 @@ jobs:
         shell: powershell
         run: |
           # The tick boxes say "remove X"; the switches say "keep X". Getting
-          # that inversion backwards deletes a 6 GB tree someone meant to keep,
-          # so it is asserted rather than trusted. Mirrors Start-Uninstall.
+          # that inversion backwards deletes a 6 GB tree someone meant to keep.
+          # The -SelfTest step above proves the polarity BEHAVIORALLY; these
+          # static asserts pin the structure it relies on: the inversion lives
+          # in the pure Get-UninstallArgList, and the FromControls wrapper is
+          # the one place control state is read (IsChecked paired with
+          # IsEnabled, so an absent component cannot lose its Keep switch).
           $gui = Get-Content .\tools\uninstall-gui.ps1 -Raw
           foreach ($pair in @(
-            @{ Box = 'ChkSublime'; Switch = '-KeepSublime' },
-            @{ Box = 'ChkSumatra'; Switch = '-KeepSumatra' },
-            @{ Box = 'ChkTexLive'; Switch = '-KeepTeXLive' }
+            @{ Flag = 'RemoveSublime'; Present = 'SublimePresent'; Switch = '-KeepSublime'; Box = 'ChkSublime' },
+            @{ Flag = 'RemoveSumatra'; Present = 'SumatraPresent'; Switch = '-KeepSumatra'; Box = 'ChkSumatra' },
+            @{ Flag = 'RemoveTexLive'; Present = 'TexLivePresent'; Switch = '-KeepTeXLive'; Box = 'ChkTexLive' }
           )) {
-            # must be guarded by -not, i.e. UNticked adds the Keep switch
-            $rx = 'if \(-not \(\$' + $pair.Box + '\.IsChecked[^)]*\)\)\s*\{\s*\$argList \+= "' + [regex]::Escape($pair.Switch) + '"'
+            # must be guarded by -not, i.e. not-(remove-and-present) KEEPS
+            $rx = 'if \(-not \(\$' + $pair.Flag + ' -and \$' + $pair.Present + '\)\)\s*\{\s*\$argList \+= "' + [regex]::Escape($pair.Switch) + '"'
             if ($gui -notmatch $rx) {
-              Write-Host "FAIL: $($pair.Box) does not map to $($pair.Switch) via -not (remove/keep inversion)" -ForegroundColor Red; exit 1
+              Write-Host "FAIL: $($pair.Flag) does not map to $($pair.Switch) via -not (remove/keep inversion)" -ForegroundColor Red; exit 1
+            }
+            # and the wrapper must feed it the real checkbox pair
+            $wx = '-' + $pair.Flag + ' \(\[bool\]\$' + $pair.Box + '\.IsChecked\) -' + $pair.Present + ' \(\[bool\]\$' + $pair.Box + '\.IsEnabled\)'
+            if ($gui -notmatch $wx) {
+              Write-Host "FAIL: Get-UninstallArgListFromControls does not wire $($pair.Box) IsChecked/IsEnabled into $($pair.Flag)/$($pair.Present)" -ForegroundColor Red; exit 1
             }
           }
-          # The library box is the opposite polarity: ticked ADDS -RemoveLibrary.
-          if ($gui -notmatch 'if \(\$ChkLibrary\.IsChecked[^)]*\)\s*\{\s*\$argList \+= "-RemoveLibrary"') {
-            Write-Host "FAIL: ChkLibrary does not map to -RemoveLibrary when ticked" -ForegroundColor Red; exit 1
+          # The library flag is the opposite polarity: remove-and-present ADDS.
+          if ($gui -notmatch 'if \(\$RemoveLibrary -and \$LibraryPresent\)\s*\{\s*\$argList \+= "-RemoveLibrary"') {
+            Write-Host "FAIL: RemoveLibrary/LibraryPresent does not map to -RemoveLibrary" -ForegroundColor Red; exit 1
+          }
+          # And the real Run handler must go through the shared wrapper -- a
+          # private argument list in Start-Uninstall would dodge every check.
+          if ($gui -notmatch '(?s)function Start-Uninstall.*?Get-UninstallArgListFromControls') {
+            Write-Host "FAIL: Start-Uninstall does not build its arguments via Get-UninstallArgListFromControls" -ForegroundColor Red; exit 1
           }
           # Nothing may be pre-ticked. A window that opens with a 6 GB tree
           # already marked for deletion is a different thing from one you opt

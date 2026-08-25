@@ -46,7 +46,12 @@ param(
     [string]$InstallPath = "",
     [string]$TeXLibPath = "",
     [ValidateSet('full', 'medium', 'basic')]
-    [string]$TexLiveScheme = 'full'
+    [string]$TexLiveScheme = 'full',
+    # Build the real window, drive the real controls through an
+    # argument-construction truth table, print PASS/FAIL per case, and exit
+    # without showing the dialog or spawning a child. This is what lets CI
+    # EXECUTE the file a user double-clicks instead of only parsing it.
+    [switch]$SelfTest
 )
 
 $ErrorActionPreference = "Stop"
@@ -511,6 +516,46 @@ function Complete-Run([int]$Code) {
     }
 }
 
+function Get-InstallArgList {
+    # PURE: state in, argument list out -- shared by the real Run handler and
+    # -SelfTest, so CI checks the same construction the click performs. The
+    # visibility gate on the Reinstall entries is load-bearing: a hidden
+    # checkbox is one the user cannot see to untick, and letting it through
+    # silently re-downloads a 6 GB TeX Live tree.
+    param(
+        [string]$InstallTo, [string]$Scheme, [string]$LibPath,
+        [bool]$HideJunction, [bool]$DryRun,
+        [bool]$ReSublime, [bool]$ReSublimeVisible,
+        [bool]$ReSumatra, [bool]$ReSumatraVisible,
+        [bool]$ReTexLive, [bool]$ReTexLiveVisible
+    )
+    $argList = @(
+        "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $InstallPs1,
+        "-Silent", "-InstallPath", $InstallTo, "-TexLiveScheme", $Scheme
+    )
+    if ($LibPath)      { $argList += @("-TeXLibPath", $LibPath) }
+    if ($HideJunction) { $argList += "-HideJunction" }
+    if ($DryRun)       { $argList += "-DryRun" }
+    $reinstall = @()
+    if ($ReSublime -and $ReSublimeVisible) { $reinstall += 'Sublime' }
+    if ($ReSumatra -and $ReSumatraVisible) { $reinstall += 'SumatraPDF' }
+    if ($ReTexLive -and $ReTexLiveVisible) { $reinstall += 'TeXLive' }
+    if ($reinstall.Count -gt 0) { $argList += @("-Reinstall", ($reinstall -join ",")) }
+    return $argList
+}
+
+function Get-InstallArgListFromControls {
+    # The one place control state is read for the argument list.
+    param([string]$InstallTo, [string]$Scheme)
+    Get-InstallArgList -InstallTo $InstallTo -Scheme $Scheme `
+        -LibPath $TxtLibPath.Text.Trim() `
+        -HideJunction ([bool]$ChkHideJunction.IsChecked) `
+        -DryRun ([bool]$S.DryRun) `
+        -ReSublime ([bool]$ChkReSublime.IsChecked) -ReSublimeVisible ($ChkReSublime.Visibility -eq 'Visible') `
+        -ReSumatra ([bool]$ChkReSumatra.IsChecked) -ReSumatraVisible ($ChkReSumatra.Visibility -eq 'Visible') `
+        -ReTexLive ([bool]$ChkReTexLive.IsChecked) -ReTexLiveVisible ($ChkReTexLive.Visibility -eq 'Visible')
+}
+
 function Start-Install {
     $installTo = $TxtInstallPath.Text.Trim()
     if (-not $installTo) {
@@ -547,23 +592,7 @@ function Start-Install {
     # copies each pipe to a file for us. CopyToAsync is pure .NET and needs no
     # PowerShell event handler, which matters because Register-ObjectEvent
     # handlers do not run while ShowDialog is pumping the message loop.
-    $argList = @(
-        "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $InstallPs1,
-        "-Silent", "-InstallPath", $installTo, "-TexLiveScheme", $scheme
-    )
-    if ($TxtLibPath.Text.Trim())    { $argList += @("-TeXLibPath", $TxtLibPath.Text.Trim()) }
-    if ($ChkHideJunction.IsChecked) { $argList += "-HideJunction" }
-    if ($S.DryRun)                  { $argList += "-DryRun" }
-
-    # Only components the form is actually SHOWING can be reinstalled -- a
-    # hidden checkbox is one the user cannot see to untick, and Update-Detection
-    # clears them anyway; belt and braces, because silently reinstalling a 6 GB
-    # TeX Live tree is not a mistake worth risking.
-    $reinstall = @()
-    if ($ChkReSublime.IsChecked -and $ChkReSublime.Visibility -eq 'Visible') { $reinstall += 'Sublime' }
-    if ($ChkReSumatra.IsChecked -and $ChkReSumatra.Visibility -eq 'Visible') { $reinstall += 'SumatraPDF' }
-    if ($ChkReTexLive.IsChecked -and $ChkReTexLive.Visibility -eq 'Visible') { $reinstall += 'TeXLive' }
-    if ($reinstall.Count -gt 0)     { $argList += @("-Reinstall", ($reinstall -join ",")) }
+    $argList = Get-InstallArgListFromControls -InstallTo $installTo -Scheme $scheme
 
     $psi = New-Object System.Diagnostics.ProcessStartInfo
     $psi.FileName               = "powershell.exe"
@@ -729,6 +758,57 @@ $Win.Dispatcher.Add_UnhandledException({
     } catch { $null = $_ }
     $ErrorArgs.Handled = $true      # keep the window alive so the log stays reachable
 })
+
+if ($SelfTest) {
+    # Everything real has happened by this point: WPF loaded, XAML parsed,
+    # every FindName resolved, handlers wired, detection ran. What remains is
+    # the dialog loop and the child process, which a headless runner cannot
+    # have -- so drive the REAL controls and check the argument list each
+    # state produces.
+    $Fails = 0
+    function Assert-Args {
+        param([string]$Name, [string[]]$Got, [string[]]$MustHave, [string[]]$MustNotHave)
+        $ok = $true
+        foreach ($m in $MustHave)    { if ($Got -notcontains $m) { $ok = $false } }
+        foreach ($m in $MustNotHave) { if ($Got -contains $m)    { $ok = $false } }
+        if ($ok) { Write-Host "  PASS  $Name" -ForegroundColor Green }
+        else {
+            Write-Host "  FAIL  $Name" -ForegroundColor Red
+            Write-Host "        got: $($Got -join ' ')" -ForegroundColor Red
+            $script:Fails++
+        }
+    }
+    $installTo = 'C:\SelfTestRoot'
+    Write-Host "install-gui self-test (window built, controls live):"
+
+    $TxtLibPath.Text = ''
+    $ChkHideJunction.IsChecked = $false
+    $S.DryRun = $false
+    foreach ($c in @($ChkReSublime, $ChkReSumatra, $ChkReTexLive)) { $c.IsChecked = $false; $c.Visibility = 'Collapsed' }
+    Assert-Args "defaults -> silent full-scheme install, nothing extra" (Get-InstallArgListFromControls -InstallTo $installTo -Scheme 'full') `
+        @('-Silent','-InstallPath',$installTo,'-TexLiveScheme','full',$InstallPs1) @('-Reinstall','-DryRun','-HideJunction','-TeXLibPath')
+
+    $TxtLibPath.Text = 'C:\Somewhere\TeXLib'
+    $ChkHideJunction.IsChecked = $true
+    $S.DryRun = $true
+    Assert-Args "library path + junction + dry-run forwarded" (Get-InstallArgListFromControls -InstallTo $installTo -Scheme 'medium') `
+        @('-TeXLibPath','C:\Somewhere\TeXLib','-HideJunction','-DryRun','-TexLiveScheme','medium') @()
+
+    # The visibility gate: a ticked but HIDDEN Reinstall box must not reach
+    # the child -- a hidden checkbox is one the user cannot see to untick,
+    # and TeXLive on that list is a silent 6 GB re-download.
+    $TxtLibPath.Text = ''; $ChkHideJunction.IsChecked = $false; $S.DryRun = $false
+    $ChkReTexLive.IsChecked = $true; $ChkReTexLive.Visibility = 'Collapsed'
+    Assert-Args "ticked but hidden Reinstall box stays out" (Get-InstallArgListFromControls -InstallTo $installTo -Scheme 'full') `
+        @() @('-Reinstall')
+
+    $ChkReTexLive.Visibility = 'Visible'
+    $Got = Get-InstallArgListFromControls -InstallTo $installTo -Scheme 'full'
+    Assert-Args "ticked and visible Reinstall box goes through" $Got @('-Reinstall','TeXLive') @()
+
+    Write-Host ("self-test: {0}" -f $(if ($Fails -eq 0) { "all cases pass" } else { "$Fails case(s) FAILED" }))
+    exit $(if ($Fails -eq 0) { 0 } else { 1 })
+}
 
 Write-GuiLog "showing window"
 $null = $Win.ShowDialog()

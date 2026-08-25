@@ -27,7 +27,12 @@
 #>
 [CmdletBinding()]
 param(
-    [string]$InstallPath = ""
+    [string]$InstallPath = "",
+    # Build the real window, drive the real controls through the polarity
+    # truth table, print PASS/FAIL per case, and exit without showing the
+    # dialog or spawning a child. This is what lets CI EXECUTE the file a
+    # user double-clicks instead of only parsing it.
+    [switch]$SelfTest
 )
 
 $ErrorActionPreference = "Stop"
@@ -399,6 +404,50 @@ function Stop-Child {
     }
 }
 
+function Get-UninstallArgList {
+    # PURE: state in, argument list out. The remove/keep polarity inversion
+    # lives HERE and only here -- a tick means REMOVE, the switches mean KEEP,
+    # and only a PRESENT component (enabled checkbox) may skip its Keep
+    # switch. Getting this backwards deletes a 6 GB tree someone meant to
+    # keep, which is why -SelfTest drives this function through a truth table
+    # in CI and why Start-Uninstall is not allowed a private copy of the
+    # logic.
+    param(
+        [string]$Root,
+        [bool]$RemoveSublime,  [bool]$SublimePresent,
+        [bool]$RemoveSumatra,  [bool]$SumatraPresent,
+        [bool]$RemoveTexLive,  [bool]$TexLivePresent,
+        [bool]$RemoveLibrary,  [bool]$LibraryPresent,
+        [bool]$RemoveJunction,
+        [bool]$Force
+    )
+    $argList = @(
+        "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $UninstallPs1,
+        "-Silent", "-InstallPath", $Root
+    )
+    if (-not ($RemoveSublime -and $SublimePresent)) { $argList += "-KeepSublime" }
+    if (-not ($RemoveSumatra -and $SumatraPresent)) { $argList += "-KeepSumatra" }
+    if (-not ($RemoveTexLive -and $TexLivePresent)) { $argList += "-KeepTeXLive" }
+    if ($RemoveLibrary -and $LibraryPresent)        { $argList += "-RemoveLibrary" }
+    if ($RemoveJunction)                            { $argList += "-RemoveJunction" }
+    if ($Force)                                     { $argList += "-Force" }
+    return $argList
+}
+
+function Get-UninstallArgListFromControls {
+    # The one place control state is read for the argument list, shared by the
+    # real Run handler and -SelfTest -- so the self-test exercises the same
+    # wiring the click does.
+    param([string]$Root)
+    Get-UninstallArgList -Root $Root `
+        -RemoveSublime ([bool]$ChkSublime.IsChecked) -SublimePresent ([bool]$ChkSublime.IsEnabled) `
+        -RemoveSumatra ([bool]$ChkSumatra.IsChecked) -SumatraPresent ([bool]$ChkSumatra.IsEnabled) `
+        -RemoveTexLive ([bool]$ChkTexLive.IsChecked) -TexLivePresent ([bool]$ChkTexLive.IsEnabled) `
+        -RemoveLibrary ([bool]$ChkLibrary.IsChecked) -LibraryPresent ([bool]$ChkLibrary.IsEnabled) `
+        -RemoveJunction ([bool]$ChkJunction.IsChecked) `
+        -Force ([bool]$ChkForce.IsChecked)
+}
+
 function Start-Uninstall {
     $root = $TxtInstallPath.Text.Trim()
     if (-not $root) {
@@ -406,19 +455,7 @@ function Start-Uninstall {
         return
     }
 
-    # Ticked means REMOVE; the switches mean KEEP. Invert here, once, where it
-    # is easy to check -- and only for components that are actually present, so
-    # an absent one never contributes a switch.
-    $argList = @(
-        "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $UninstallPs1,
-        "-Silent", "-InstallPath", $root
-    )
-    if (-not ($ChkSublime.IsChecked -and $ChkSublime.IsEnabled)) { $argList += "-KeepSublime" }
-    if (-not ($ChkSumatra.IsChecked -and $ChkSumatra.IsEnabled)) { $argList += "-KeepSumatra" }
-    if (-not ($ChkTexLive.IsChecked -and $ChkTexLive.IsEnabled)) { $argList += "-KeepTeXLive" }
-    if ($ChkLibrary.IsChecked -and $ChkLibrary.IsEnabled)        { $argList += "-RemoveLibrary" }
-    if ($ChkJunction.IsChecked)                                  { $argList += "-RemoveJunction" }
-    if ($ChkForce.IsChecked)                                     { $argList += "-Force" }
+    $argList = Get-UninstallArgListFromControls -Root $root
 
     $going = @()
     if ($ChkSublime.IsChecked -and $ChkSublime.IsEnabled) { $going += "Sublime Text" }
@@ -557,4 +594,67 @@ $Win.Add_Closing({
 })
 
 Update-Detection
+
+if ($SelfTest) {
+    # Everything real has happened by this point: WPF loaded, XAML parsed,
+    # every FindName resolved, handlers wired, detection ran. What remains is
+    # the dialog loop and the child process, which a headless runner cannot
+    # have -- so instead, drive the REAL controls through the polarity truth
+    # table and check the argument list each state produces.
+    $Fails = 0
+    function Assert-Args {
+        param([string]$Name, [string[]]$Got, [string[]]$MustHave, [string[]]$MustNotHave)
+        $ok = $true
+        foreach ($m in $MustHave)    { if ($Got -notcontains $m) { $ok = $false } }
+        foreach ($m in $MustNotHave) { if ($Got -contains $m)    { $ok = $false } }
+        if ($ok) { Write-Host "  PASS  $Name" -ForegroundColor Green }
+        else {
+            Write-Host "  FAIL  $Name" -ForegroundColor Red
+            Write-Host "        got: $($Got -join ' ')" -ForegroundColor Red
+            $script:Fails++
+        }
+    }
+    function Set-State {
+        param([bool]$SubOn,[bool]$SubEn,[bool]$SumOn,[bool]$SumEn,[bool]$TexOn,[bool]$TexEn,[bool]$LibOn,[bool]$LibEn,[bool]$Junc,[bool]$Force)
+        $ChkSublime.IsChecked = $SubOn; $ChkSublime.IsEnabled = $SubEn
+        $ChkSumatra.IsChecked = $SumOn; $ChkSumatra.IsEnabled = $SumEn
+        $ChkTexLive.IsChecked = $TexOn; $ChkTexLive.IsEnabled = $TexEn
+        $ChkLibrary.IsChecked = $LibOn; $ChkLibrary.IsEnabled = $LibEn
+        $ChkJunction.IsChecked = $Junc; $ChkForce.IsChecked = $Force
+    }
+    $root = 'C:\SelfTestRoot'
+    Write-Host "uninstall-gui self-test (window built, controls live):"
+
+    Set-State -SubOn $true -SubEn $true -SumOn $true -SumEn $true -TexOn $true -TexEn $true -LibOn $true -LibEn $true -Junc $false -Force $false
+    Assert-Args "all present + all ticked -> everything goes" (Get-UninstallArgListFromControls -Root $root) `
+        @('-RemoveLibrary') @('-KeepSublime','-KeepSumatra','-KeepTeXLive')
+
+    Set-State -SubOn $false -SubEn $true -SumOn $false -SumEn $true -TexOn $false -TexEn $true -LibOn $false -LibEn $true -Junc $false -Force $false
+    Assert-Args "all present + none ticked -> everything kept" (Get-UninstallArgListFromControls -Root $root) `
+        @('-KeepSublime','-KeepSumatra','-KeepTeXLive') @('-RemoveLibrary')
+
+    # THE polarity canary. A ticked, present TeX Live must not emit
+    # -KeepTeXLive; an inverted wiring here is the deleted-6GB-tree bug.
+    Set-State -SubOn $false -SubEn $true -SumOn $false -SumEn $true -TexOn $true -TexEn $true -LibOn $false -LibEn $true -Junc $false -Force $false
+    Assert-Args "only TeX Live ticked -> only TeX Live goes" (Get-UninstallArgListFromControls -Root $root) `
+        @('-KeepSublime','-KeepSumatra') @('-KeepTeXLive','-RemoveLibrary')
+
+    # An ABSENT component contributes its Keep switch even when ticked: the
+    # disabled checkbox may keep whatever stale state the form had.
+    Set-State -SubOn $true -SubEn $false -SumOn $true -SumEn $true -TexOn $true -TexEn $true -LibOn $true -LibEn $false -Junc $false -Force $false
+    Assert-Args "absent Sublime/library ticked -> still kept / not removed" (Get-UninstallArgListFromControls -Root $root) `
+        @('-KeepSublime') @('-RemoveLibrary')
+
+    Set-State -SubOn $true -SubEn $true -SumOn $true -SumEn $true -TexOn $true -TexEn $true -LibOn $true -LibEn $true -Junc $true -Force $true
+    Assert-Args "junction + force ticked -> flags forwarded" (Get-UninstallArgListFromControls -Root $root) `
+        @('-RemoveJunction','-Force') @()
+
+    $BaseArgs = Get-UninstallArgListFromControls -Root $root
+    Assert-Args "always: silent child aimed at uninstall.ps1 with the root" $BaseArgs `
+        @('-Silent','-InstallPath',$root,$UninstallPs1) @()
+
+    Write-Host ("self-test: {0}" -f $(if ($Fails -eq 0) { "all cases pass" } else { "$Fails case(s) FAILED" }))
+    exit $(if ($Fails -eq 0) { 0 } else { 1 })
+}
+
 $null = $Win.ShowDialog()

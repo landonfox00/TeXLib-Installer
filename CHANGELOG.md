@@ -24,6 +24,25 @@ All notable changes to TeXLib-Installer are recorded here. Format follows [Keep 
   of inferring the library from the shape of three files; older deployments
   still pass on the probe alone.
 
+- **CI executes the GUIs now, not just parses them.** `install.bat` →
+  `install-gui.ps1` is the file a user actually double-clicks, and no CI job
+  had ever run it — the `gui` job stopped at parse + XAML-load + FindName +
+  banner checks, so a WPF crash on startup, a broken handler wiring, or an
+  inverted checkbox would have shipped. Both GUIs gained `-SelfTest`: build
+  the real window (WPF, XAML, every FindName, handler wiring, detection),
+  then drive the real controls through an argument-construction truth table
+  and exit — no dialog loop, no child process. The argument builders were
+  extracted into pure functions (`Get-InstallArgList` /
+  `Get-UninstallArgList`) shared by the real Run handlers and the self-test,
+  so CI checks the same code the click executes. The tables pin the two
+  expensive mistakes by name: uninstall-gui's remove/keep polarity (an
+  inversion deletes a 6 GB tree someone meant to keep — a ticked, present
+  TeX Live must never emit `-KeepTeXLive`, and an *absent* component must
+  keep even when ticked) and install-gui's visibility gate on `-Reinstall`
+  (a ticked-but-hidden box must stay out of the child's arguments — letting
+  it through is a silent 6 GB re-download). The `gui` job runs both under
+  `powershell.exe -STA`, matching how the `.bat` entry points launch them.
+
 ### Changed
 
 - **`.txt` belongs to the system again.** The installer had claimed `.txt`
