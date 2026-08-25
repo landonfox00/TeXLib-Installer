@@ -37,8 +37,11 @@ the one behavior CI can only simulate).
 - [ ] **Double-click a `.tex` file** in Explorer → it opens in Sublime Text.
 - [ ] In Sublime, build the document (LaTeXTools) → a PDF is produced and opens
       in **SumatraPDF**.
-- [ ] **Double-click a `.pdf`** → it opens in SumatraPDF. Note: the installer
-      also takes over `.txt` (opens in Sublime) — confirm that's intended.
+- [ ] **Double-click a `.pdf`** → it opens in SumatraPDF.
+- [ ] **Double-click a `.txt`** → it opens in the system default (Notepad),
+      NOT Sublime. Decided 2026-08-25: taking over every plain-text file was
+      surprising, so `.txt` is no longer claimed; on an upgrade the old claim
+      is released unless the user themselves pinned Sublime for it.
 - [ ] Right Click → **Open with** on a `.tex`: no duplicate or dead Sublime
       entries, ours reads `Sublime Text (TeXLib)`, and a Sublime you installed
       yourself is **still listed**. This is the one thing no headless job can
