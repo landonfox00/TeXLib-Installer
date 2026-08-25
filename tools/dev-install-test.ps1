@@ -84,8 +84,9 @@ New-Item -ItemType Directory -Force -Path (Join-Path $Lib 'Sublime\texlib') | Ou
 Set-Content -Encoding UTF8 -Path (Join-Path $Lib 'Sublime\texlib\texlib.py')          -Value '# dev-install-test stub plugin.'
 Set-Content -Encoding UTF8 -Path (Join-Path $Lib 'Sublime\texlib\Main.sublime-menu')  -Value '[]'
 
-# Empty dirs are all the installer's detection needs to offer Skip. The TexLive
-# path must match $TexLiveYear exactly.
+# Empty dirs are all the installer's detection needs to offer Skip. Any
+# TexLive\<year>\bin\windows works: detection goes by shape, not by a year
+# constant.
 New-Item -ItemType Directory -Force -Path `
     (Join-Path $Root 'Sublime Text\Data\Packages\LaTeXTools'), `
     (Join-Path $Root 'Sublime Text\Data\Lib\python38\regex'), `

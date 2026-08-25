@@ -18,6 +18,26 @@ All notable changes to TeXLib-Installer are recorded here. Format follows [Keep 
   `Invoke-SelfUpdate` out of the script and fails if any verification failure
   ever appears as a `[WARN]` again.
 
+- **The TeX Live year is derived, not declared.** `$TexLiveYear` was hardcoded
+  `"2025"` while the download URL is rolling tlnet — which installs whatever
+  year is *current* — so a fresh install today laid TeX Live 2026 into a
+  directory named `2025`, and the first year-constant bump would have made
+  `Test-Path` miss every existing install and silently re-download ~6 GB
+  beside an orphaned tree. Now: an existing install is found by **shape**
+  (`TexLive\<year>\bin\windows`, newest wins) wherever the year landed; a
+  fresh install derives the real year from the downloaded installer itself
+  (`release-texlive.txt`, falling back to the `install-tl-YYYYMMDD` folder
+  name) and labels the tree truthfully; the constant survives only as the
+  provisional label of last resort. `uninstall.ps1` loses its "keep in
+  lockstep" twin entirely — it already preferred the VERSION stamp, and its
+  no-stamp fallback now uses the same shape search. Removing TeX Live now
+  removes the whole `TexLive` root, taking the `texmf-local` planted beside
+  the year tree (orphaned until now) and any second year tree with it; the
+  legacy OneTeX PATH cleanup matches by prefix instead of an exact
+  year-labeled string. CI's package-integrity job now enforces the other
+  hand-synced pair (`$UninstallerVersion` == `$InstallerVersion`) and fails
+  if a `$TexLiveYear` constant ever reappears in `uninstall.ps1`.
+
 ## [0.11.5] — 2026-08-25
 
 ### Changed

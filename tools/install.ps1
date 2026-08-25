@@ -305,10 +305,14 @@ $ScriptsDir = "$BaseDir\Scripts"
 $LogDir     = "$BaseDir\Logs"
 
 # Program paths.
-# TeX Live's tlnet installer always installs the current year; we pin the tree
-# name here in ONE place so a yearly bump is a single edit rather than a
-# scattered find-and-replace. (install-tl honors the explicit TEXDIR in the
-# profile, so the folder name is just a label.)
+# TeX Live's tlnet installer always installs the CURRENT year -- the download
+# URL is a rolling pointer, not a year-pinned one -- so this constant is only
+# (a) the provisional label for a fresh install until section 12 derives the
+# real year from the downloaded installer itself, and (b) the last-resort
+# fallback when there is nothing to derive from. An EXISTING install is found
+# by shape ($BaseDir\TexLive\<year>\bin\windows, newest year wins), never by
+# this constant: a stale constant after a rollover used to make the installer
+# forget a 6 GB tree and lay a second one beside it.
 $TexLiveYear = "2025"
 
 # What each scheme costs. SIZE is quoted rather than a time estimate, because
@@ -333,6 +337,17 @@ $SchemeSize   = @{ 'full' = 'about 6 GB'; 'medium' = '1.3 GB measured'; 'basic' 
 $SublimeDir = "$BaseDir\Sublime Text"
 $SumatraDir = "$BaseDir\Sumatra"
 $TexLiveDir = "$BaseDir\TexLive\$TexLiveYear"
+# Shape-detection: if a year-tree already exists under $BaseDir\TexLive, use it
+# (newest first), whatever year it is labeled with. This is what keeps an
+# upgrade from re-downloading TeX Live after the tlnet year rolls past the
+# constant above.
+$ExistingTexTree = Get-ChildItem "$BaseDir\TexLive" -Directory -ErrorAction SilentlyContinue |
+    Where-Object { $_.Name -match '^\d{4}$' -and (Test-Path (Join-Path $_.FullName 'bin\windows')) } |
+    Sort-Object Name -Descending | Select-Object -First 1
+if ($ExistingTexTree) {
+    $TexLiveDir  = $ExistingTexTree.FullName
+    $TexLiveYear = $ExistingTexTree.Name
+}
 $TexBinPath = "$TexLiveDir\bin\windows"
 
 # Where the TeXLib library is copied FROM.
@@ -1768,7 +1783,7 @@ if ($InstallComponents) {
     if ($OurTex -and ($OurTex.Source -like "$BaseDir*")) {
         Add-PreflightOK "Existing TeXLib install detected at $($OurTex.Source) (Skip/Reinstall prompt below)"
     } else {
-        Add-PreflightOK "Will install an isolated TeX Live 2025 (scheme-$TexLiveScheme) under $BaseDir"
+        Add-PreflightOK "Will install an isolated TeX Live (current release, scheme-$TexLiveScheme) under $BaseDir"
     }
     if ($TexLiveScheme -ne 'full') {
         Add-PreflightWarning "scheme-$TexLiveScheme is smaller and much faster than scheme-full, but TeXLib is tested against full. A package it needs may be absent."
@@ -2326,6 +2341,29 @@ if ($InstallComponents) {
             Get-SourceFile -Key "texlive" -DestPath $ZipPath
             Expand-Archive -Path $ZipPath -DestinationPath "$TempDir\texlive_installer"
             $InstallerRoot = Get-ChildItem "$TempDir\texlive_installer\install-tl-*" | Select-Object -ExpandProperty FullName
+
+            # The tlnet zip installs whatever year is CURRENT. Derive the real
+            # year from the downloaded installer itself (release-texlive.txt,
+            # falling back to the install-tl-YYYYMMDD folder name) so the tree
+            # is labeled truthfully and the next run's shape-detection finds
+            # it. The $TexLiveYear constant is only the fallback of last
+            # resort, and disagreeing with it is expected after a rollover.
+            $DetectedYear = $null
+            $ReleaseFile = Join-Path $InstallerRoot 'release-texlive.txt'
+            if (Test-Path $ReleaseFile) {
+                $m = [regex]::Match((Get-Content $ReleaseFile -Raw), 'version\s+(\d{4})')
+                if ($m.Success) { $DetectedYear = $m.Groups[1].Value }
+            }
+            if (-not $DetectedYear) {
+                $m = [regex]::Match((Split-Path $InstallerRoot -Leaf), '^install-tl-(\d{4})')
+                if ($m.Success) { $DetectedYear = $m.Groups[1].Value }
+            }
+            if ($DetectedYear -and $DetectedYear -ne $TexLiveYear) {
+                Write-Host "  The downloaded installer is TeX Live $DetectedYear (script default: $TexLiveYear); installing to the $DetectedYear tree." -ForegroundColor Gray
+                $script:TexLiveYear = $DetectedYear
+                $script:TexLiveDir  = "$BaseDir\TexLive\$DetectedYear"
+                $script:TexBinPath  = "$($script:TexLiveDir)\bin\windows"
+            }
 
             $TexDirFwd          = $BaseDir.Replace("\", "/") + "/TexLive/$TexLiveYear"
             $TexMfLocalFwd      = $BaseDir.Replace("\", "/") + "/TexLive/texmf-local"

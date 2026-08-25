@@ -790,8 +790,8 @@ jobs:
           Set-Content -Encoding UTF8 -Path (Join-Path $lib 'Sublime\texlib\texlib.py') -Value '# CI stub plugin.'
 
           # Empty component dirs are all the installer's Test-Path detection
-          # needs to offer Skip -- no multi-GB downloads. TexLive\2025\bin\
-          # windows must exist by that exact name ($TexLiveYear).
+          # needs to offer Skip -- no multi-GB downloads. Any TexLive\<year>\
+          # bin\windows works: detection goes by shape, not by a year constant.
           New-Item -ItemType Directory -Force -Path `
             (Join-Path $installRoot 'Sublime Text\Data\Packages\LaTeXTools'), `
             (Join-Path $installRoot 'Sublime Text\Data\Lib\python38\regex'), `
@@ -1877,6 +1877,25 @@ jobs:
             Write-Host "FAIL: RELEASE does not record texlib_pin=$ver" -ForegroundColor Red; exit 1
           }
           Write-Host "  TeXLib pin: $ver -> $dir (consistent)" -ForegroundColor Gray
+
+          # The other hand-synced pair: uninstall.ps1 carries its own version
+          # constant with a "keep in lockstep" comment that nothing enforced.
+          # (The $TexLiveYear twin was retired outright -- the year is derived
+          # from the tree/stamp now, and a fresh declaration in uninstall.ps1
+          # would mean the derivation regressed to a constant.)
+          $ups1 = Get-Content (Join-Path $stage 'tools\uninstall.ps1') -Raw
+          $iVer = [regex]::Match($ps1,  '\$InstallerVersion\s*=\s*"(?<v>[^"]+)"').Groups['v'].Value
+          $uVer = [regex]::Match($ups1, '\$UninstallerVersion\s*=\s*"(?<v>[^"]+)"').Groups['v'].Value
+          if (-not $iVer -or -not $uVer) {
+            Write-Host "FAIL: could not read InstallerVersion ('$iVer') / UninstallerVersion ('$uVer')." -ForegroundColor Red; exit 1
+          }
+          if ($iVer -ne $uVer) {
+            Write-Host "FAIL: InstallerVersion ($iVer) != UninstallerVersion ($uVer) -- the lockstep comment finally has teeth." -ForegroundColor Red; exit 1
+          }
+          if ($ups1 -match '(?m)^\s*\$TexLiveYear\s*=') {
+            Write-Host "FAIL: uninstall.ps1 declares `$TexLiveYear again; the year must stay derived (stamp/shape), not hardcoded." -ForegroundColor Red; exit 1
+          }
+          Write-Host "  Version lockstep: installer $iVer == uninstaller $uVer; no year constant in uninstall.ps1" -ForegroundColor Gray
 
           # The wrapper the console entry points invoke must be a real,
           # parseable script (a missing/corrupt wrapper is exactly what makes a

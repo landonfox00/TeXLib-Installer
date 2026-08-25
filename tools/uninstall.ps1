@@ -187,7 +187,6 @@ function Read-YesNo {
 # 0. Work out what this machine actually has, from the install's own stamp.
 # -----------------------------------------------------------------------------
 $VersionFile = "$BaseDir\VERSION"
-$TexLiveYear = "2025"   # keep in lockstep with install.ps1 $TexLiveYear
 
 $SublimeDir  = Get-StampedValue -VersionFile $VersionFile -Key "sublime_dir"
 $SumatraDir  = Get-StampedValue -VersionFile $VersionFile -Key "sumatra_dir"
@@ -195,7 +194,15 @@ $TexLiveDir  = Get-StampedValue -VersionFile $VersionFile -Key "texlive_dir"
 $TeXLibDir   = Get-StampedValue -VersionFile $VersionFile -Key "texlib_root"
 if (-not $SublimeDir) { $SublimeDir = "$BaseDir\Sublime Text" }
 if (-not $SumatraDir) { $SumatraDir = "$BaseDir\Sumatra" }
-if (-not $TexLiveDir) { $TexLiveDir = "$BaseDir\TexLive\$TexLiveYear" }
+if (-not $TexLiveDir) {
+    # No stamp (pre-0.6.3 install, or a failed one). Find the tree by SHAPE --
+    # tlnet always installs the current year, so a hardcoded year constant
+    # here silently missed the real tree after a rollover.
+    $TexLiveDir = Get-ChildItem "$BaseDir\TexLive" -Directory -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -match '^\d{4}$' -and (Test-Path (Join-Path $_.FullName 'bin\windows')) } |
+        Sort-Object Name -Descending | Select-Object -First 1 -ExpandProperty FullName
+    if (-not $TexLiveDir) { $TexLiveDir = "$BaseDir\TexLive\2025" }
+}
 if (-not $TeXLibDir)  { $TeXLibDir  = "$BaseDir\Library" }
 
 $LibraryInsideRoot = $TeXLibDir.TrimEnd('\').ToLowerInvariant().StartsWith(
@@ -482,7 +489,19 @@ if ($KeepAnyComponent) {
     if (-not $KeepSumatra) { Uninstall-Component -Label "SumatraPDF" -Path $SumatraDir }
     else { Write-Host "Keeping SumatraPDF at $SumatraDir" -ForegroundColor Gray }
 
-    if (-not $KeepTeXLive) { Uninstall-Component -Label "TeX Live" -Path $TexLiveDir }
+    if (-not $KeepTeXLive) {
+        # Remove the whole TexLive root, not just the year directory: the
+        # profile plants texmf-local BESIDE the year tree (it survives year
+        # upgrades), and a second year tree can exist after a rollover. Both
+        # were orphaned when only $TexLiveDir went. Guard the shape so a
+        # hand-edited stamp cannot aim the recursive delete somewhere else.
+        $TexLiveRoot = Split-Path $TexLiveDir -Parent
+        if ((Split-Path $TexLiveRoot -Leaf) -eq 'TexLive') {
+            Uninstall-Component -Label "TeX Live" -Path $TexLiveRoot
+        } else {
+            Uninstall-Component -Label "TeX Live" -Path $TexLiveDir
+        }
+    }
     else { Write-Host "Keeping TeX Live at $TexLiveDir" -ForegroundColor Gray }
 
     if ($RemoveLibrary) { Remove-TeXLibLibrary }
@@ -643,8 +662,10 @@ if ($StartMenuPath) {
 # -----------------------------------------------------------------------------
 Write-Host "Cleaning user PATH..." -ForegroundColor Yellow
 $TexBinPath     = "$TexLiveDir\bin\windows"
-$LegacyOneTeX   = "$env:LOCALAPPDATA\OneTeX\TexLive\$TexLiveYear\bin\windows"
-$LegacyWrappers = "$env:LOCALAPPDATA\OneTeX\Wrappers"
+# Any OneTeX-era PATH entry goes, whatever year its TexLive tree was labeled
+# with (the old exact-match against a year constant kept entries from other
+# years alive).
+$LegacyOneTeXRoot = "$env:LOCALAPPDATA\OneTeX"
 
 $CurrentPath = [Environment]::GetEnvironmentVariable("Path", "User")
 if ($CurrentPath) {
@@ -652,7 +673,8 @@ if ($CurrentPath) {
     $NewParts = $PathParts | Where-Object {
         # TeX Live's bin stays on PATH when TeX Live itself is staying.
         (-not ($_ -eq $TexBinPath -and -not $KeepTeXLive)) -and
-        $_ -ne $LegacyOneTeX -and $_ -ne $LegacyWrappers -and $_ -ne ""
+        (-not $_.StartsWith("$LegacyOneTeXRoot\", [System.StringComparison]::OrdinalIgnoreCase)) -and
+        $_ -ne ""
     }
     if ($NewParts.Count -ne $PathParts.Count) {
         [Environment]::SetEnvironmentVariable("Path", ($NewParts -join ";"), "User")
