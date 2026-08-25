@@ -483,6 +483,20 @@ function Copy-LibraryTree {
             if (-not $Item.PSIsContainer) { $Skipped++ }
             continue
         }
+        # Packages\User loads every TOP-LEVEL .py as a plugin, and the
+        # library's Sublime\ becomes Packages\User through the settings
+        # junction -- so at this ONE level, .py is allowlisted rather than
+        # denylisted: a future stray that doesn't happen to match test_*.py
+        # must not get a third chance to kill plugin_host-3.8.
+        # texlib_builder.py is the sole deployable; Sublime\texlib\ is the
+        # plugin package and reaches Sublime as Packages\TeXLib, not through
+        # Packages\User, so its files are not affected.
+        if ($Item.PSIsContainer -eq $false -and
+            $Rel -match '^Sublime\\[^\\]+\.py$' -and
+            $Rel -ne 'Sublime\texlib_builder.py') {
+            $Skipped++
+            continue
+        }
         $Target = Join-Path $Destination $Rel
         if ($Item.PSIsContainer) {
             if (-not (Test-Path -LiteralPath $Target)) {
@@ -3011,10 +3025,17 @@ if ($WriteMachineState) {
     Write-Host "Registering file associations..." -ForegroundColor Cyan
 
     # Every extension we claim and every ProgID we have ever used (TeXLib.* now,
-    # OneTeX.* before the rename). One list drives both the stale-entry purge
-    # and the registration below; uninstall.ps1 carries the same lists.
-    $SublimeExts   = @(".txt", ".tex", ".cls", ".sty", ".bib", ".sublime-project", ".sublime-workspace")
-    $ManagedExts   = $SublimeExts + @(".pdf")
+    # OneTeX.* before the rename). $SublimeExts drives the registration;
+    # $ManagedExts (which adds the legacy claims) drives the stale-entry purge;
+    # uninstall.ps1 carries the same lists.
+    #
+    # .txt is a LEGACY claim, not a registered one: 0.11.x and earlier took
+    # over every plain-text file on the machine, which surprises exactly the
+    # non-technical audience this installer is for. Dropped for 1.0; it stays
+    # in the purge list so upgrades still clean the old entries.
+    $SublimeExts   = @(".tex", ".cls", ".sty", ".bib", ".sublime-project", ".sublime-workspace")
+    $LegacyExts    = @(".txt")
+    $ManagedExts   = $SublimeExts + $LegacyExts + @(".pdf")
     $ManagedProgIDs = @("TeXLib.SublimeFile", "TeXLib.SumatraPDF",
                         "OneTeX.SublimeFile", "OneTeX.SumatraPDF")
 
@@ -3267,12 +3288,26 @@ public static extern void SHChangeNotify(int eventId, uint flags, System.IntPtr 
             Write-Host "         Right Click -> Open With -> Choose Another App -> 'Always use this app'." -ForegroundColor Gray
         }
 
+        # Release the legacy .txt claim on upgrades. Deleted ONLY when the
+        # key's default is one of OUR ProgIDs -- that key was our write, and
+        # removing it restores the system default. A UserChoice pin for .txt
+        # is different: Windows only writes that when the USER confirms
+        # "always use this app", so it is their decision and stays untouched.
+        $TxtClass = "HKCU:\Software\Classes\.txt"
+        if (Test-Path $TxtClass) {
+            $TxtDefault = (Get-ItemProperty -Path $TxtClass -ErrorAction SilentlyContinue)."(default)"
+            if ($TxtDefault -and ($ManagedProgIDs -contains $TxtDefault)) {
+                Remove-Item -Path $TxtClass -Recurse -Force -ErrorAction SilentlyContinue
+                Write-Host "  Released the legacy .txt association (was $TxtDefault); the system default applies again" -ForegroundColor Green
+            }
+        }
+
         foreach ($Ext in $SublimeExts) {
             Register-TeXLibAssociation -Ext $Ext -ProgID "TeXLib.SublimeFile" -Desc "Sublime Text (TeXLib)" -Exe $SublExe -Icon $SublIcon
         }
         Register-TeXLibAssociation -Ext ".pdf" -ProgID "TeXLib.SumatraPDF" -Desc "SumatraPDF (TeXLib)" -Exe $SumExe -Icon $SumIcon
         Sync-ShellAssociationCache
-        Write-Host "  Registered .tex .cls .sty .bib .pdf and friends" -ForegroundColor Green
+        Write-Host "  Registered .tex .cls .sty .bib .pdf and friends (.txt stays with the system default)" -ForegroundColor Green
     } catch {
         Write-Host "File-association registration failed: $_" -ForegroundColor Red
         Write-Host "  (Non-fatal; you can set defaults manually via Right Click -> Open With.)" -ForegroundColor Yellow

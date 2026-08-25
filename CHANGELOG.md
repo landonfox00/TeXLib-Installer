@@ -24,6 +24,32 @@ All notable changes to TeXLib-Installer are recorded here. Format follows [Keep 
   of inferring the library from the shape of three files; older deployments
   still pass on the probe alone.
 
+### Changed
+
+- **`.txt` belongs to the system again.** The installer had claimed `.txt`
+  for Sublime alongside the TeX extensions since the OneTeX era, which meant
+  every plain-text file on the machine — download receipts, exported notes,
+  README.txt — opened in a programmer's editor. That surprises exactly the
+  non-technical audience this installer is for, and SMOKE-TEST.md had carried
+  "confirm that's intended" as an open question since it was written. Decided:
+  it was not. Fresh installs no longer register `.txt`; upgrades release the
+  old claim, but ONLY when the association still points at one of our ProgIDs
+  (a `.txt` default the user set to anything else, including deliberately to
+  Sublime via "always use this app", is never touched). `.txt` stays in the
+  stale-entry purge list so old dead entries are still cleaned.
+
+- **The plugin-host protection at `Sublime\` top level is an allowlist now.**
+  Sublime loads every top-level `.py` in `Packages\User` as a plugin, and the
+  library's `Sublime\` becomes `Packages\User` through the settings junction —
+  the path by which the library's own test suite killed `plugin_host-3.8`
+  twice (0.8.0, 0.9.5). The old guard was a denylist (`test_*.py`,
+  `_testkit.py`): correct for every file that exists today, and one
+  unfortunately-named future file away from a third crash. `Copy-LibraryTree`
+  now inverts the rule at that one level: `Sublime\*.py` copies **only**
+  `texlib_builder.py`, the sole Packages\User deployable. The plugin package
+  under `Sublime\texlib\` reaches Sublime as `Packages\TeXLib` and is
+  unaffected, and the any-depth denylist still applies everywhere else.
+
 ### Fixed
 
 - **The `Packages\User` move cannot outrun its own safety net anymore.** On a
