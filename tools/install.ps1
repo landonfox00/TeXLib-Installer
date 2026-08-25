@@ -2773,6 +2773,31 @@ try {
         }
     }
 
+    # 16a-3. Deploy the QuietLatextoolsCache package. LaTeXTools' on-save
+    # cache refresh writes "LaTeXTools cache updated" to the status bar
+    # through the same status key the build uses, and the message is
+    # hardcoded -- no setting turns it off. This one-file package swaps a
+    # no-op activity indicator into the cache listener module ONLY: caching
+    # still runs on every save, the build's own status stays real, and
+    # LaTeXTools itself is never modified. Known failure mode (deliberate --
+    # it fails open): a LaTeXTools reload purges its submodules and drops the
+    # patch until Sublime restarts. The .python-version file is load-bearing:
+    # without it Sublime runs the package on the 3.3 plugin host, which
+    # cannot import from LaTeXTools (3.8), and the patch silently never
+    # applies. Copied unconditionally (installer-owned, tiny, offline) so
+    # -Repair refreshes it too; the end-of-install MANIFEST covers it, so
+    # -Verify notices tampering.
+    $QuietTpl  = "$ScriptDir\templates\QuietLatextoolsCache"
+    $QuietDest = "$PackagesDir\QuietLatextoolsCache"
+    if (Test-Path "$QuietTpl\quiet_cache_status.py") {
+        New-Item -ItemType Directory -Force -Path $QuietDest | Out-Null
+        Copy-Item "$QuietTpl\quiet_cache_status.py" $QuietDest -Force
+        Copy-Item "$QuietTpl\.python-version" $QuietDest -Force
+        Write-Host "  Deployed QuietLatextoolsCache (silences the cache status-bar banner)" -ForegroundColor Green
+    } else {
+        Write-Host "  [WARN] templates\QuietLatextoolsCache missing from this release folder; the cache banner stays." -ForegroundColor Yellow
+    }
+
     # 16b. Deploy the TeXLib custom builder + bundled spell-check dictionary.
     # Source of truth is the bundle; when reusing an already-synced library (no
     # bundle in this installer copy), pull the same files from the library's own

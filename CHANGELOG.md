@@ -4,6 +4,24 @@ All notable changes to TeXLib-Installer are recorded here. Format follows [Keep 
 
 ## [Unreleased]
 
+### Added
+
+- **The "LaTeXTools cache updated" status-bar banner is silenced out of the
+  box.** LaTeXTools' on-save cache refresh writes to the same status key the
+  build uses, so saving to build got the build message overwritten by a
+  cache banner and then wiped — and the message is hardcoded, with no
+  setting to turn it off. The installer now deploys
+  `QuietLatextoolsCache` (from `templates\`), a one-file package that swaps
+  a no-op activity indicator into the cache *listener* module only: caching
+  still runs on every save (so `\ref`/`\cite` completions stay fresh), the
+  build's own status stays real, and LaTeXTools itself is never modified.
+  It fails open by design — a LaTeXTools reload drops the patch until
+  Sublime restarts — and its `.python-version` sibling is load-bearing
+  (without it the 3.3 plugin host can't import from LaTeXTools and the
+  patch silently never applies). `-Repair` refreshes it; the install
+  MANIFEST covers it for `-Verify`. Previously this lived only as an
+  unmanaged package on the author's machine.
+
 ## [1.0.0] — 2026-08-25
 
 The 1.0. Nothing in this tag is new over the section below — 1.0.0 *is* the v1-readiness batch, released under the number it was built for: the self-update trust boundary fails closed, the TeX Live year is derived from reality, a failed install leaves evidence, the destructive `Packages\User` move is gated on its own safety net, the GUIs are executed by CI rather than trusted, `.txt` belongs to the system again, and the pinned library (v0.7.4, the accessible/print visual-parity release) carries its own version contract that Doctor reads back.
