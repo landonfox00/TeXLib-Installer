@@ -602,6 +602,9 @@ function Get-ManifestPath {
     #               hashing it and flagging its changes would be noise.
     #   Logs     -- written during the very run that would hash them.
     #   MANIFEST -- cannot contain its own hash.
+    #   INSTALL-IN-PROGRESS -- transient run state, alive when the manifest is
+    #               written and deleted as the run's last act; hashing it made
+    #               -Verify report a missing file on every healthy install.
     # Reparse points are skipped rather than followed: Packages\User is a
     # junction into the library, so following it would hash the same files twice
     # and report every library edit under two different names.
@@ -619,7 +622,7 @@ function Get-ManifestPath {
                 if ($f.Attributes -match 'ReparsePoint') { continue }
                 $Results += $f.FullName.Substring($Root.TrimEnd('\').Length + 1)
             }
-        } elseif ($Top.Name -ne 'MANIFEST') {
+        } elseif ($Top.Name -ne 'MANIFEST' -and $Top.Name -ne 'INSTALL-IN-PROGRESS') {
             $Results += $Top.Name
         }
     }
@@ -1002,6 +1005,16 @@ function Invoke-Doctor {
     # 5a. Install location.
     Write-Host "Install location:" -ForegroundColor Cyan
     $VersionFile = "$BaseDir\VERSION"
+    # The breadcrumb outranks the VERSION heuristic: it is written at the first
+    # mutation of an install run and deleted as its last act, so its survival
+    # is positive proof of a run that died partway -- with the when and the
+    # mode recorded, where "VERSION missing" can only shrug "partial install?".
+    $Breadcrumb = "$BaseDir\INSTALL-IN-PROGRESS"
+    if (Test-Path $Breadcrumb) {
+        $BcStart = Get-StampedValue -VersionFile $Breadcrumb -Key "started_at"
+        $BcMode  = Get-StampedValue -VersionFile $Breadcrumb -Key "mode"
+        _Warn "An install run (started $BcStart, mode $BcMode) did not finish. Re-running install.bat is the recovery: completed components are detected and offered as Skip."
+    }
     if (Test-Path $VersionFile) {
         $InstalledMeta = Get-Content $VersionFile | Out-String
         $InstalledVer = ($InstalledMeta -split "`n" | Where-Object { $_ -match '^installer_version=' } | ForEach-Object { ($_ -split '=')[1].Trim() })
@@ -1100,8 +1113,21 @@ function Invoke-Doctor {
     if (Test-Path $DoctorTeXLibDir) {
         $CoreFiles = @("course-metadata.sty", "texlib-build.sty", "basic-utilities.sty")
         $MissingCore = $CoreFiles | Where-Object { -not (Test-Path (Join-Path $DoctorTeXLibDir $_)) }
+        # The library ships texlib-manifest.json as of v0.7.3: its version is
+        # the tag's machine-readable mirror, which beats inferring the library
+        # from the shape of three files. Older deployments have no manifest;
+        # the probe result alone stays a pass for them.
+        $LibManifest = Join-Path $DoctorTeXLibDir "texlib-manifest.json"
+        $LibVersion = $null
+        if (Test-Path $LibManifest) {
+            try { $LibVersion = (Get-Content $LibManifest -Raw | ConvertFrom-Json).version } catch { $null = $_ }
+        }
         if ($MissingCore.Count -eq 0) {
-            _Pass "TeXLib library at $DoctorTeXLibDir (core .sty files present)"
+            if ($LibVersion) {
+                _Pass "TeXLib library at $DoctorTeXLibDir (manifest v$LibVersion, core .sty files present)"
+            } else {
+                _Pass "TeXLib library at $DoctorTeXLibDir (core .sty files present; pre-manifest release)"
+            }
         } else {
             _Warn "TeXLib library at $DoctorTeXLibDir but missing: $($MissingCore -join ', ')"
         }
@@ -2165,6 +2191,29 @@ try {
         if (-not (Test-Path $d)) { New-Item -ItemType Directory -Force -Path $d | Out-Null }
     }
 
+    # Partial-install breadcrumb. Written HERE -- the first moment this run
+    # mutates the machine -- and deleted as the very last act of a successful
+    # run, so its survival is positive proof of a run that died partway.
+    # (The VERSION stamp cannot tell that apart from "never installed": it is
+    # only written at the end.) There is deliberately no rollback behind it:
+    # every section is idempotent and skip-if-installed, so RE-RUNNING is the
+    # recovery, and the breadcrumb's job is to say so out loud.
+    $script:BreadcrumbFile = "$BaseDir\INSTALL-IN-PROGRESS"
+    if (Test-Path $BreadcrumbFile) {
+        $PriorStart = Get-StampedValue -VersionFile $BreadcrumbFile -Key "started_at"
+        $PriorMode  = Get-StampedValue -VersionFile $BreadcrumbFile -Key "mode"
+        Write-Host ""
+        Write-Host "  [WARN] A previous install run (started $PriorStart, mode $PriorMode) did not finish." -ForegroundColor Yellow
+        Write-Host "         Components it completed are detected below and offered as Skip;" -ForegroundColor Yellow
+        Write-Host "         continuing this run is the recovery." -ForegroundColor Yellow
+        Write-Host ""
+    }
+    @"
+started_at=$(Get-Date -Format 'o')
+installer_version=$InstallerVersion
+mode=$(if ($Repair) { 'repair' } elseif ($OnlyTeXLib) { 'only-texlib' } else { 'full' })
+"@ | Set-Content -Path $BreadcrumbFile -Encoding UTF8
+
     if (-not (Test-Path $TeXLibDir)) {
         Write-Host "Creating the TeXLib library folder at $TeXLibDir..." -ForegroundColor Cyan
         New-Item -ItemType Directory -Force -Path $TeXLibDir | Out-Null
@@ -2608,6 +2657,10 @@ if (-not $OnlyTeXLib) {
             # crash between the move and the junction can't lose the user's
             # settings. (Backup-SublimeSettings only covers $SublimeUserSync,
             # which doesn't exist yet on a first install -- this is the gap.)
+            # The backup GATES the move: without it, the sequence below is a
+            # destructive operation with no safety net, so a failed backup
+            # aborts instead of warning-and-hoping. Sublime holding a settings
+            # file open is the usual cause; close it and re-run.
             $ExistingUserItems = @(Get-ChildItem -Path $UserPackagesLocal -Force -ErrorAction SilentlyContinue)
             if ($ExistingUserItems.Count -gt 0) {
                 if (-not (Test-Path $LogDir)) { New-Item -ItemType Directory -Force -Path $LogDir | Out-Null }
@@ -2616,13 +2669,29 @@ if (-not $OnlyTeXLib) {
                     Compress-Archive -Path "$UserPackagesLocal\*" -DestinationPath $PkgBackup -CompressionLevel Fastest -ErrorAction Stop
                     Write-Host "  Backed up existing Packages\User to $PkgBackup" -ForegroundColor Gray
                 } catch {
-                    Write-Host "  [warn] Packages\User backup failed: $_ (continuing)" -ForegroundColor Yellow
+                    Write-Host "  [FAIL] Could not back up the existing Packages\User: $_" -ForegroundColor Red
+                    Write-Host "         Not moving the user's settings without a backup. Close Sublime Text" -ForegroundColor Red
+                    Write-Host "         (it may be holding a settings file open) and re-run the installer." -ForegroundColor Red
+                    Stop-Installer 9
                 }
             }
             New-Item -ItemType Directory -Force -Path $SublimeUserSync | Out-Null
             Get-ChildItem -Path $UserPackagesLocal -Force | Move-Item -Destination $SublimeUserSync -Force
-            Remove-Item $UserPackagesLocal -Recurse -Force
-            New-Item -ItemType Junction -Path $UserPackagesLocal -Target $SublimeUserSync | Out-Null
+            try {
+                Remove-Item $UserPackagesLocal -Recurse -Force
+                New-Item -ItemType Junction -Path $UserPackagesLocal -Target $SublimeUserSync | Out-Null
+            } catch {
+                # The user's settings are sitting in $SublimeUserSync and
+                # Packages\User is gone or half-gone. Put everything back
+                # before failing, so the editor still works even though the
+                # install did not.
+                Write-Host "  [FAIL] Junctioning Packages\User failed: $_" -ForegroundColor Red
+                Write-Host "         Restoring the original Packages\User..." -ForegroundColor Yellow
+                New-Item -ItemType Directory -Force -Path $UserPackagesLocal | Out-Null
+                Get-ChildItem -Path $SublimeUserSync -Force -ErrorAction SilentlyContinue |
+                    Move-Item -Destination $UserPackagesLocal -Force -ErrorAction SilentlyContinue
+                Stop-Installer 9
+            }
         }
     } catch {
         Write-Host "Sublime sync setup failed: $_" -ForegroundColor Red
@@ -3590,5 +3659,12 @@ if (-not $OnlyTeXLib) {
 Write-Host "Troubleshooting:    tools\install-console.bat -Doctor" -ForegroundColor Cyan
 Write-Host "Issues:             $InstallerRepo/issues"          -ForegroundColor Cyan
 Write-Host ""
+
+# The run made it all the way through: the partial-install breadcrumb comes
+# off. (Every failure path exits through Stop-Installer above this line, so a
+# breadcrumb that survives is exactly a run that did not reach here.)
+if ($script:BreadcrumbFile -and (Test-Path $script:BreadcrumbFile)) {
+    Remove-Item $script:BreadcrumbFile -Force -ErrorAction SilentlyContinue
+}
 
 Stop-Installer 0
