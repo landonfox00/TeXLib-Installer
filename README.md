@@ -113,19 +113,19 @@ An interactive run asks about each component, so the flags are only needed for u
 
 ## How releases work
 
-The installer needs a snapshot of TeXLib to deploy. We don't commit TeXLib into this repo (it has its own); instead, `tools/make-release.ps1` snapshots TeXLib at release time and bundles it into the release ZIP.
+The library is **not bundled** (see above — that model ended with 0.11.0). A release is the installer alone; the library arrives at install time as a hash-verified download of the pinned TeXLib tag.
 
 ```powershell
-.\tools\make-release.ps1 -Version 0.5.0
+.\tools\make-release.ps1 -Version 0.12.0
 ```
 
-This produces `dist/TeXLib-Installer-v0.5.0.zip` and `dist/SHA256SUMS`. Upload both to a new GitHub Release.
+This stages the entry points and `tools/` under `dist\<version>\`, writes a `RELEASE` metadata file that records `texlib_pin=` (read back out of `install.ps1`, so the bundle can't claim a pin the script doesn't have), and produces `dist/TeXLib-Installer-v0.12.0.zip` plus `dist/SHA256SUMS` (LF line endings, so `sha256sum -c` passes). Upload the ZIP and SHA256SUMS to a new GitHub Release. CI's package-integrity job asserts the bundle layout, that no `texlib\` tree rides along, and that the pin trio and `RELEASE` agree.
 
-End users download the ZIP, extract it, and run `install.bat`. The installer finds the bundled `texlib/` folder at the release root (one level up from `tools/`) and deploys it.
+To ship a new library version: tag it in the TeXLib repo, bump the pin here (the `texlib` entry in `$Downloads`, plus `$TeXLibZipDir` and `$TeXLibVersion`), and cut a new installer release. A `texlib\` directory placed next to the release root still overrides the pin for air-gapped machines and unreleased-library testing.
 
 ## Refreshing component versions
 
-The pinned versions in `tools/install.ps1` (Sublime 4200, SumatraPDF 3.5.2, TeX Live 2025) are reproducible and known to work, but they go stale. To refresh:
+The pinned versions in `tools/install.ps1` (Sublime 4200, SumatraPDF 3.5.2, LaTeXTools, the `regex` wheel, the TeXLib tag) are reproducible and known to work, but they go stale. TeX Live is the exception: its tlnet URL is a rolling pointer to the current release, and the year is derived from the downloaded installer at install time rather than pinned. To refresh the others:
 
 1. Edit the `$Downloads` hashtable at the top of `tools/install.ps1`.
 2. For `Type = "Static"` entries, recompute the hash:
