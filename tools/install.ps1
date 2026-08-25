@@ -602,6 +602,9 @@ function Get-ManifestPath {
     #               hashing it and flagging its changes would be noise.
     #   Logs     -- written during the very run that would hash them.
     #   MANIFEST -- cannot contain its own hash.
+    #   INSTALL-IN-PROGRESS -- transient run state, alive when the manifest is
+    #               written and deleted as the run's last act; hashing it made
+    #               -Verify report a missing file on every healthy install.
     # Reparse points are skipped rather than followed: Packages\User is a
     # junction into the library, so following it would hash the same files twice
     # and report every library edit under two different names.
@@ -619,7 +622,7 @@ function Get-ManifestPath {
                 if ($f.Attributes -match 'ReparsePoint') { continue }
                 $Results += $f.FullName.Substring($Root.TrimEnd('\').Length + 1)
             }
-        } elseif ($Top.Name -ne 'MANIFEST') {
+        } elseif ($Top.Name -ne 'MANIFEST' -and $Top.Name -ne 'INSTALL-IN-PROGRESS') {
             $Results += $Top.Name
         }
     }
