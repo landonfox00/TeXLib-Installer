@@ -4,6 +4,21 @@ All notable changes to TeXLib-Installer are recorded here. Format follows [Keep 
 
 ## [Unreleased]
 
+## [0.11.5] — 2026-08-25
+
+### Changed
+
+- **Pinned library moves to TeXLib v0.7.2** (from v0.7.1) — the box-grid
+  schedule appearance fix. The box-grid renderer, which every accessible
+  schedule build is forced onto, had always been an approximation of the
+  tabularray calendar: rows floated apart, cells shifted against each other
+  whenever a month-start date was `\fbox`'d, the WEEK divider was a fat white
+  channel, and rows overran the text width. v0.7.2 re-baselines every row
+  component to a uniform frame profile so the tagged schedule renders with the
+  normal build's geometry — a Fall-term schedule paginates identically again
+  (3 pages back to 2 on the real Math 126 course). Hash-verified against the
+  tag archive as always.
+
 ## [0.11.4] — 2026-08-24
 
 ### Changed
