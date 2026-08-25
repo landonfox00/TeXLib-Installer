@@ -4,6 +4,10 @@ All notable changes to TeXLib-Installer are recorded here. Format follows [Keep 
 
 ## [Unreleased]
 
+## [1.0.0] — 2026-08-25
+
+The 1.0. Nothing in this tag is new over the section below — 1.0.0 *is* the v1-readiness batch, released under the number it was built for: the self-update trust boundary fails closed, the TeX Live year is derived from reality, a failed install leaves evidence, the destructive `Packages\User` move is gated on its own safety net, the GUIs are executed by CI rather than trusted, `.txt` belongs to the system again, and the pinned library (v0.7.4, the accessible/print visual-parity release) carries its own version contract that Doctor reads back.
+
 ### Added
 
 - **A failed install leaves a breadcrumb instead of a mystery.** Nothing
