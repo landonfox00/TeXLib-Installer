@@ -36,7 +36,7 @@
     Pre-select the TeX Live scheme. Same meaning as install.ps1's.
 
 .NOTES
-    ASCII-only on purpose. install.bat launches Windows PowerShell 5.1, which
+    ASCII-only on purpose. install.vbs launches Windows PowerShell 5.1, which
     decodes a BOM-less UTF-8 script as Windows-1252 -- the bug that shipped in
     v0.5.0. Keeping this file ASCII means the question never arises. CI's
     encoding-guard covers it.
@@ -488,7 +488,7 @@ function Complete-Run([int]$Code) {
         $Bar.Value = 0
         $LblPhase.Text = "Cancelled"
         $LblFooter.Text = "Cancelled -- the install is incomplete"
-        Add-Log "`r`n=== Cancelled. Run uninstall.bat to clear a partial install. ===`r`n"
+        Add-Log "`r`n=== Cancelled. Run uninstall.vbs to clear a partial install. ===`r`n"
         return
     }
     if ($Code -eq 0) {
@@ -714,7 +714,7 @@ $BtnPrimary.Add_Click({
 $BtnCancel.Add_Click({
     if (-not $S.Running) { $Win.Close(); return }
     $ans = [Windows.MessageBox]::Show(
-        "Stop the install?`n`nWhatever has been written so far stays on disk. Run uninstall.bat afterwards to clear it out.",
+        "Stop the install?`n`nWhatever has been written so far stays on disk. Run uninstall.vbs afterwards to clear it out.",
         "TeXLib Installer", 'YesNo', 'Warning')
     if ($ans -eq 'Yes') {
         $S.Cancelled = $true

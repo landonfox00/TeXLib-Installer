@@ -1,6 +1,6 @@
 @echo off
 REM Console entry point -- the scriptable surface, and what CI drives. The
-REM installer you double-click is install.bat at the release root; this one
+REM installer you double-click is install.vbs at the release root; this one
 REM takes the same switches plus the ones only a console run makes sense for:
 REM
 REM   tools\install-console.bat -Doctor

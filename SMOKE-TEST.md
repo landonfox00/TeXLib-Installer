@@ -8,15 +8,18 @@ install (ideally a coworker's UNR machine, since the OneDrive-path junction is
 the one behavior CI can only simulate).
 
 ## Setup
-- [ ] On a clean machine, run `install.bat` by **double-clicking it** (not via
+- [ ] On a clean machine, run `install.vbs` by **double-clicking it** (not via
       PowerShell 7 / an editor). This is the exact path a coworker uses and the
       one that caught the v0.5.0 launch bug.
-- [ ] **No PowerShell/terminal window flashes** before the GUI opens — at most
-      the .bat's own brief cmd frame. A visible PowerShell console here means
-      the launch fell back past `tools\launch-hidden.vbs` (missing from the
-      bundle, or Windows Script Host disabled by policy — the latter is fine
-      on that machine, the former is a packaging regression). No headless job
-      can see a window flash, so this line is the only check for it.
+- [ ] **No console or terminal window appears at any point of the launch** —
+      the GUI is the first and only window. Any flash means the machine ran
+      something other than the shipped `.vbs` → hidden-PowerShell chain (a
+      stale pre-1.0.3 bundle, or a re-associated `.vbs` handler). If
+      double-clicking instead shows "Windows Script Host access is disabled"
+      or an open-with prompt, that machine can't run the `.vbs` entry points
+      at all — use `tools\install-console.bat`, which INSTALL.md documents as
+      the fallback. No headless job can see a window flash, so this line is
+      the only check for it.
 - [ ] Installer finishes with a success banner, no red `[FAIL]`/error text.
 
 ## TeX toolchain
@@ -51,7 +54,7 @@ the one behavior CI can only simulate).
 - [ ] Right-click → **Open with** on a `.tex`: no duplicate or dead Sublime entries, ours reads `Sublime Text (TeXLib)`, and a Sublime you installed yourself is **still listed**. This is the one thing no headless job can check, because it needs a real Explorer.
 
 ## Uninstall
-- [ ] Leave Sublime Text open, then run `uninstall.bat`. It should notice and
+- [ ] Leave Sublime Text open, then run `uninstall.vbs`. It should notice and
       offer to close it.
 - [ ] Answer `n` to TeX Live and `Y` to the rest: `Sublime Text\` and `Sumatra\`
       are gone, `TexLive\` survives.

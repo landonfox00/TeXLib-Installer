@@ -55,7 +55,7 @@ body:
     attributes:
       label: What happened?
       description: "Plain-English description. What did you click, what did you see?"
-      placeholder: "Ran install.bat, clicked 'Run anyway' on SmartScreen, got to the TeX Live install step and..."
+      placeholder: "Ran install.vbs, clicked 'Run anyway' on SmartScreen, got to the TeX Live install step and..."
     validations:
       required: true
 

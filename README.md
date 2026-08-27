@@ -20,8 +20,8 @@ Everything lands under one root, which is what makes uninstall a single director
 
 ```
 .
-├── install.bat                  # THE installer -- graphical, what to double-click
-├── uninstall.bat                # THE uninstaller -- graphical, pick what goes
+├── install.vbs                  # THE installer -- graphical, what to double-click
+├── uninstall.vbs                # THE uninstaller -- graphical, pick what goes
 ├── templates/                   # config templates with {{...}} placeholders
 │   ├── LaTeXTools.sublime-settings
 │   ├── TeXLib.sublime-settings  # native plugin's texinputs -- how Ctrl+B finds the classes
@@ -50,9 +50,11 @@ Everything lands under one root, which is what makes uninstall a single director
 └── README.md                    # this file
 ```
 
-The release root holds **exactly two** files you can click, and as of 0.11.0 both are the graphical ones: `install.bat` → `tools/install-gui.ps1` and `uninstall.bat` → `tools/uninstall-gui.ps1`. Everything else lives in `tools/`, including the console entry points. Before 0.11.0 the root carried four `.bat` files and the two plainest names were the *console* ones, so the file a first-time user was likeliest to double-click was the one meant for scripting.
+The release root holds **exactly two** files you can click, and as of 0.11.0 both are the graphical ones: `install.vbs` → `tools/install-gui.ps1` and `uninstall.vbs` → `tools/uninstall-gui.ps1`. Everything else lives in `tools/`, including the console entry points. Before 0.11.0 the root carried four `.bat` files and the two plainest names were the *console* ones, so the file a first-time user was likeliest to double-click was the one meant for scripting.
 
-The console surface didn't go away; it moved: `tools/install-console.bat` → `tools/boot_wrapper.ps1` → `tools/install.ps1`. That is what CI drives and what `-Repair`, `-Doctor`, `-Verify`, `-Update`, and `-Silent` are documented against. CI asserts both chains, that the root holds those two `.bat` files and nothing else, and that no `.ps1` sits at the root — `install.bat` next to `install.ps1` reliably got people running the wrong one.
+The entry points are `.vbs` rather than `.bat` because a double-clicked `.bat` *is* a console program: Windows puts a console window on screen (a full Windows Terminal window on Windows 11) before the first line runs, so every launch flashed one no matter what the file said. wscript, the host that runs a double-clicked `.vbs`, is a GUI-subsystem binary and never allocates a console. The two files are byte-identical — each derives install/uninstall from its own filename — and CI asserts they match so they cannot drift.
+
+The console surface didn't go away; it moved: `tools/install-console.bat` → `tools/boot_wrapper.ps1` → `tools/install.ps1`. That is what CI drives, what `-Repair`, `-Doctor`, `-Verify`, `-Update`, and `-Silent` are documented against, and the fallback for a machine that cannot run the `.vbs` (Windows Script Host disabled by policy, or a future Windows without the deprecated VBScript feature — both fail visibly, not silently). CI asserts both chains, that the root holds those two `.vbs` files and nothing else clickable, and that no `.ps1` sits at the root — an entry point next to `install.ps1` reliably got people running the wrong one.
 
 The TeXLib library is **not bundled**. Since 0.11.0 `install.ps1` downloads a pinned tag of [TeXLib](https://github.com/landonfox00/TeXLib) and hash-verifies it, exactly like Sublime Text, SumatraPDF, TeX Live, and LaTeXTools. The pin lives in the `texlib` entry of `$Downloads`, alongside `$TeXLibZipDir` (GitHub drops the leading `v` from the tag when naming the folder inside the archive) and `$TeXLibVersion`. CI asserts all three agree, because a bump that updates one and not the others fails *after* the user has waited for the download.
 
@@ -87,7 +89,7 @@ The coupling that can rot silently is each GUI's phase table: they recognize the
 | `-Sandbox` | Skip every write outside `-InstallPath` / `-TeXLibPath` (PATH, HKCU associations, shortcuts). For developing *on* the installer. |
 | `-HideJunction` | Apply the hidden attribute to the `%USERPROFILE%\TeXLib` junction, which is created only when the library path contains a space or comma. Off by default (a visible junction is easier to diagnose). |
 
-A `texlib.config.json` next to `install.bat` presets any of these — useful for lab deployment. Explicit command-line arguments always win:
+A `texlib.config.json` next to `install.vbs` presets any of these — useful for lab deployment. Explicit command-line arguments always win:
 
 ```json
 { "InstallPath": "D:\\TeXLib", "TexLiveScheme": "medium", "Silent": true }
@@ -141,7 +143,7 @@ TeX Live's `texlive` entry uses `Type = "Dynamic"` — it fetches the upstream h
 
 ## Pre-stage downloads for testing or offline installs
 
-If you drop the component ZIP files (for example, `sublime_text_build_4200_x64.zip`) at the repo or release root (next to `install.bat`, *not* inside `tools/`) before running the installer, it uses those local copies (after hash-verifying them) instead of re-downloading. This is useful for repeated test installs without burning bandwidth.
+If you drop the component ZIP files (for example, `sublime_text_build_4200_x64.zip`) at the repo or release root (next to `install.vbs`, *not* inside `tools/`) before running the installer, it uses those local copies (after hash-verifying them) instead of re-downloading. This is useful for repeated test installs without burning bandwidth.
 
 ## Hacking on the installer
 

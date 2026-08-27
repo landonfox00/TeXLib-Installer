@@ -54,9 +54,10 @@ $env:TEXLIB_INSTALLER_WRAPPED = "1"
 
 # install.ps1 / uninstall.ps1 are siblings in tools\. They live here rather than
 # at the release root so the only clickable things a user sees there are
-# install.bat and uninstall.bat -- a .ps1 next to a .bat of the same name was a
-# reliable source of "which one do I double-click?". Since 0.11.0 those two are
-# the GRAPHICAL entry points, and the console ones live in here as
+# install.vbs and uninstall.vbs -- a .ps1 next to an entry point of the same
+# name was a reliable source of "which one do I double-click?". Since 0.11.0
+# those two are the GRAPHICAL entry points (.bat then, .vbs since the
+# launch-flash fix), and the console ones live in here as
 # install-console.bat / uninstall-console.bat -- which is what invokes this file.
 $ScriptDir = $PSScriptRoot
 
