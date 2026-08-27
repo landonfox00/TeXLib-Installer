@@ -6,7 +6,11 @@ REM
 REM The console/scriptable surface is tools\uninstall-console.bat, which takes
 REM the -Keep* / -Remove* switches directly.
 REM
-REM -STA is required for WPF; -WindowStyle Hidden keeps a console from sitting
-REM behind the window.
+REM Launched through wscript so no PowerShell console ever shows; see
+REM install.bat and tools\launch-hidden.vbs for why `start PowerShell
+REM -WindowStyle Hidden` flashed a window and this does not. The fallback
+REM line is the old launch, for machines where Windows Script Host is
+REM disabled by policy.
 cd /d "%~dp0"
-start "" PowerShell.exe -STA -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File ".\tools\uninstall-gui.ps1" %*
+"%SystemRoot%\System32\wscript.exe" //B //Nologo "tools\launch-hidden.vbs" uninstall %*
+if errorlevel 1 start "" PowerShell.exe -STA -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File ".\tools\uninstall-gui.ps1" %*

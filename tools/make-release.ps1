@@ -63,6 +63,7 @@ Write-Host ""
 $RequiredFiles = @("tools\install.ps1", "tools\uninstall.ps1", "tools\boot_wrapper.ps1",
                    "tools\install-gui.ps1", "tools\uninstall-gui.ps1",
                    "tools\install-console.bat", "tools\uninstall-console.bat",
+                   "tools\launch-hidden.vbs",
                    "install.bat", "uninstall.bat")
 foreach ($f in $RequiredFiles) {
     if (-not (Test-Path (Join-Path $RepoRoot $f))) {
@@ -99,17 +100,20 @@ foreach ($f in $InstallerFiles) {
 }
 Copy-Item (Join-Path $RepoRoot "templates") $StageRoot -Recurse -Force
 
-# The root .bat files invoke tools\*-gui.ps1; the console .bat files invoke
-# tools\boot_wrapper.ps1, which in turn runs tools\install.ps1 /
+# The root .bat files invoke tools\launch-hidden.vbs, which runs
+# tools\*-gui.ps1 with its console hidden from creation; the console .bat
+# files invoke tools\boot_wrapper.ps1, which in turn runs tools\install.ps1 /
 # tools\uninstall.ps1. Every one of these MUST ship -- without any of them the
-# .bat just flashes open and dies (PowerShell -File on a missing script).
+# .bat just flashes open and dies (PowerShell -File on a missing script; a
+# missing .vbs degrades to exactly that old flashing launch via the .bat's
+# fallback line).
 # make-release.ps1 itself is the build tool, and dev-install-test.ps1 is a
 # local test harness; neither ships. package-integrity asserts that the shipped
 # files are present and the other two are not.
 $ToolsStage = Join-Path $StageRoot "tools"
 New-Item -ItemType Directory -Force -Path $ToolsStage | Out-Null
 foreach ($w in @("boot_wrapper.ps1", "install.ps1", "uninstall.ps1", "install-gui.ps1", "uninstall-gui.ps1",
-                 "install-console.bat", "uninstall-console.bat")) {
+                 "install-console.bat", "uninstall-console.bat", "launch-hidden.vbs")) {
     Copy-Item (Join-Path $RepoRoot "tools\$w") $ToolsStage -Force
 }
 

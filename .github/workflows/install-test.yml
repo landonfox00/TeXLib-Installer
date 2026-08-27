@@ -1799,12 +1799,16 @@ jobs:
 
           # Every file the entry points invoke must ship, or the .bat flashes
           # open and dies (PowerShell -File on a missing script). Root .bat ->
-          # tools\*-gui.ps1; tools\*-console.bat -> tools\boot_wrapper.ps1 ->
-          # tools\install.ps1 / uninstall.ps1.
+          # tools\launch-hidden.vbs -> tools\*-gui.ps1 (the .vbs is what keeps
+          # the PowerShell console from ever showing; if it goes missing the
+          # .bat's fallback degrades to the old flashing launch, so its absence
+          # is a shipped regression, not a crash); tools\*-console.bat ->
+          # tools\boot_wrapper.ps1 -> tools\install.ps1 / uninstall.ps1.
           $required = @('install.bat','uninstall.bat',
                         'tools\boot_wrapper.ps1','tools\install.ps1','tools\uninstall.ps1',
                         'tools\install-gui.ps1','tools\uninstall-gui.ps1',
                         'tools\install-console.bat','tools\uninstall-console.bat',
+                        'tools\launch-hidden.vbs',
                         'templates')
           $missing = $required | Where-Object { -not (Test-Path (Join-Path $stage $_)) }
           if ($missing) { Write-Host "FAIL: bundle missing: $($missing -join ', ')" -ForegroundColor Red; exit 1 }

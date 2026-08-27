@@ -4,6 +4,22 @@ All notable changes to TeXLib-Installer are recorded here. Format follows [Keep 
 
 ## [Unreleased]
 
+### Fixed
+
+- **Double-clicking `install.bat` / `uninstall.bat` no longer flashes a
+  PowerShell window before the GUI opens.** powershell.exe is a
+  console-subsystem binary, so Windows put its console on screen before the
+  process ran a single line; `-WindowStyle Hidden` only takes effect once
+  PowerShell's own startup processes it, which is late enough that every
+  launch popped a console at the user first — a full Windows Terminal
+  window on Windows 11, where Terminal is the default host. The root .bat
+  files now launch through `tools\launch-hidden.vbs` (`WshShell.Run` with
+  window style 0), which passes SW_HIDE in the child's STARTUPINFO so the
+  console is created hidden and nothing ever appears. Machines where
+  Windows Script Host is disabled by policy fall back to the old launch —
+  one cosmetic flash there, never a dead double-click — and
+  package-integrity asserts the .vbs ships.
+
 ## [1.0.1] — 2026-08-25
 
 One quality-of-life feature, same-day: the machine you hand a coworker now has the quiet status bar the author's own machine always had.

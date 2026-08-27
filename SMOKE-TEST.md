@@ -11,6 +11,12 @@ the one behavior CI can only simulate).
 - [ ] On a clean machine, run `install.bat` by **double-clicking it** (not via
       PowerShell 7 / an editor). This is the exact path a coworker uses and the
       one that caught the v0.5.0 launch bug.
+- [ ] **No PowerShell/terminal window flashes** before the GUI opens — at most
+      the .bat's own brief cmd frame. A visible PowerShell console here means
+      the launch fell back past `tools\launch-hidden.vbs` (missing from the
+      bundle, or Windows Script Host disabled by policy — the latter is fine
+      on that machine, the former is a packaging regression). No headless job
+      can see a window flash, so this line is the only check for it.
 - [ ] Installer finishes with a success banner, no red `[FAIL]`/error text.
 
 ## TeX toolchain
