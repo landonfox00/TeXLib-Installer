@@ -4,6 +4,10 @@ All notable changes to TeXLib-Installer are recorded here. Format follows [Keep 
 
 ## [Unreleased]
 
+## [1.0.2] — 2026-08-27
+
+One fix: the last window the installer still put on screen — the PowerShell console flash on every double-click — is gone.
+
 ### Fixed
 
 - **Double-clicking `install.bat` / `uninstall.bat` no longer flashes a
