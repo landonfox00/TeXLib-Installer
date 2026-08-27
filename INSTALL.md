@@ -34,8 +34,8 @@ Everything — Sublime Text, SumatraPDF, TeX Live, and the TeXLib library itself
 1. Right-click the ZIP file → **Extract All...** → pick a destination (Desktop is fine).
 2. Open the extracted folder. You should see:
    ```
-   install.bat
-   uninstall.bat
+   install.vbs
+   uninstall.vbs
    templates/
    tools/
    README.md
@@ -43,23 +43,23 @@ Everything — Sublime Text, SumatraPDF, TeX Live, and the TeXLib library itself
    ...
    ```
    (The actual scripts live in `tools/`; you never need to open that folder.)
-3. **Double-click `install.bat`.** A window opens where you can pick the install location and the TeX Live scheme, then watch the progress. That is the whole installer — there is nothing else at the top level to click.
+3. **Double-click `install.vbs`.** A window opens where you can pick the install location and the TeX Live scheme, then watch the progress. That is the whole installer — there is nothing else at the top level to click.
 
-   `tools\install-console.bat` does exactly the same install in a console window instead, and is what you want for scripting, for `-Silent`, and for every option in the table further down. Both run the same installer underneath — the window is a front-end, not a second implementation.
+   `tools\install-console.bat` does exactly the same install in a console window instead, and is what you want for scripting, for `-Silent`, and for every option in the table further down. Both run the same installer underneath — the window is a front-end, not a second implementation. It is also the fallback if double-clicking `install.vbs` doesn't open the installer: a "Windows Script Host access is disabled on this machine" message (some managed machines) or a "How do you want to open this file?" prompt both mean this machine can't run `.vbs` files — use the console installer instead.
 
    If you have not installed on this machine before, select **Dry run** in the window first. It runs the pre-flight checks and prints what a real install would do, without downloading or writing anything, and takes seconds.
 
-### The SmartScreen warning
+### The security warning
 
-Windows probably shows "Windows protected your PC" because the script is not code-signed. This is expected for personal-team distributions.
+Windows probably shows a warning the first time — either "Windows protected your PC" (SmartScreen) or an "Open File — Security Warning" dialog — because the script is not code-signed. This is expected for personal-team distributions.
 
-> **Click "More info" → "Run anyway".**
+> **Click "More info" → "Run anyway"** (SmartScreen), or **"Run"** (the security dialog).
 
-If you can't see the "Run anyway" button, your IT department has locked it down. Talk to them, or open the script in a text editor first to confirm it's the official copy from the verified release.
+If you can't see a way to run it, your IT department has locked it down. Talk to them, or open the script in a text editor first to confirm it's the official copy from the verified release.
 
 ## Step 3 — Watch the install run
 
-A console window opens and the installer walks through these phases:
+The installer window walks through these phases:
 
 1. **Pre-flight checks** — Windows version, free disk space, internet connectivity, and more. If anything fails, the installer aborts before touching your system.
 2. **Sublime Text** — downloads and extracts (about 10 seconds).
@@ -104,7 +104,7 @@ For variant builds (for example, an answer key or a student copy), press **Ctrl+
 
 ## Upgrade from an older version
 
-If your last install was v0.6.2 or earlier, your TeXLib library is in `Documents\TeXLib` (or the OneDrive equivalent). v0.6.3 installs it to `%LOCALAPPDATA%\TeXLib\Library` instead, next to the other components. Run `install.bat` from the new release — it handles the move:
+If your last install was v0.6.2 or earlier, your TeXLib library is in `Documents\TeXLib` (or the OneDrive equivalent). v0.6.3 installs it to `%LOCALAPPDATA%\TeXLib\Library` instead, next to the other components. Run `install.vbs` from the new release — it handles the move:
 
 - It finds your old library and says so in the pre-flight output.
 - Your Sublime settings (`Sublime\`) are copied to the new location, so your keymaps, snippets, and word lists follow you.
@@ -186,7 +186,7 @@ You can combine flags: `tools\install-console.bat -OnlyTeXLib -Silent` is the ty
 
 TeXLib appears in **Settings → Apps → Installed apps** like any other program, so you can uninstall it from there. (The **Modify** button there runs `-Repair`.)
 
-Or double-click `uninstall.bat` from the folder you ran the installer from. It shows what is actually installed, with folder sizes, and gives you a checkbox per component. **Nothing is preselected** — a window that opens with a 6 GB tree already marked for deletion is not one to trust with a stray click — so you remove exactly what you select and keep the rest.
+Or double-click `uninstall.vbs` from the folder you ran the installer from. It shows what is actually installed, with folder sizes, and gives you a checkbox per component. **Nothing is preselected** — a window that opens with a 6 GB tree already marked for deletion is not one to trust with a stray click — so you remove exactly what you select and keep the rest.
 
 `tools\uninstall-console.bat` is the same choice at the console, asking about each component in turn:
 
@@ -199,7 +199,7 @@ Remove the TeXLib library (...)?  (Y/n)
 
 Nothing is exempt from the question, and each prompt names the folder that actually gets deleted. Only the *default* differs: the library defaults to going when it's inside the install root, and to staying when it's a pre-0.6.3 `Documents\TeXLib` that may have your own materials next to it.
 
-Keeping TeX Live is worth considering — it's about 6 GB to re-download, typically 30-60 minutes, and a later `install.bat` run detects it and offers to skip it.
+Keeping TeX Live is worth considering — it's about 6 GB to re-download, typically 30-60 minutes, and a later `install.vbs` run detects it and offers to skip it.
 
 Whatever you choose, the uninstaller also:
 
@@ -245,13 +245,13 @@ The installer aborts on hash mismatch as a security precaution. Most often this 
 
 ### Install hung during TeX Live
 
-TeX Live's install is genuinely slow — 30 to 60 minutes is normal. There's typically no progress indicator for long stretches. If it's been more than 90 minutes with zero console activity, kill the console window and re-run the installer with TeX Live's "Reinstall" option.
+TeX Live's install is genuinely slow — 30 to 60 minutes is normal. There's typically no progress indicator for long stretches. If it's been more than 90 minutes with zero activity, cancel the install (Cancel in the window, or kill the console window if you used `tools\install-console.bat`) and re-run the installer with TeX Live's "Reinstall" option.
 
 ### Sublime can't find the builder, or the TeXLib menu is missing
 
 First thing to try: `tools\install-console.bat -Repair`. It rebuilds the settings junction, the builder files, and the TeXLib plugin in seconds, without downloading anything.
 
-The TeXLib command palette entries, the **TeXLib** menu, the snippets, and the `texlib_*` tools come from a Sublime package the installer deploys to `<Sublime Data>\Packages\TeXLib`. Installers **before v0.7.0 never deployed it** — if you installed with an older version, re-run `install.bat` (or `-Repair`) once and it appears. `tools\install-console.bat -Doctor` says which state you're in.
+The TeXLib command palette entries, the **TeXLib** menu, the snippets, and the `texlib_*` tools come from a Sublime package the installer deploys to `<Sublime Data>\Packages\TeXLib`. Installers **before v0.7.0 never deployed it** — if you installed with an older version, re-run `install.vbs` (or `-Repair`) once and it appears. `tools\install-console.bat -Doctor` says which state you're in.
 
 If `Ctrl+B` says "Cannot find builder texlib", verify:
 
@@ -274,7 +274,7 @@ It's purely cosmetic: building from inside Sublime works regardless of which app
 
 ### The "Open with" menu is full of duplicate Sublime / SumatraPDF entries
 
-Each install and uninstall before v0.6.3 left its registry entries behind, so the list slowly filled with copies pointing at executables that no longer exist. Re-running `install.bat` clears them: it purges the dead entries (and any malformed ones, which show as blank rows) before registering fresh ones, and tells Explorer to reload so you see the change immediately. Entries for a Sublime or SumatraPDF you installed yourself are recognized as live and left alone.
+Each install and uninstall before v0.6.3 left its registry entries behind, so the list slowly filled with copies pointing at executables that no longer exist. Re-running `install.vbs` clears them: it purges the dead entries (and any malformed ones, which show as blank rows) before registering fresh ones, and tells Explorer to reload so you see the change immediately. Entries for a Sublime or SumatraPDF you installed yourself are recognized as live and left alone.
 
 `tools\install-console.bat -Doctor` reports any leftovers it finds without changing anything.
 

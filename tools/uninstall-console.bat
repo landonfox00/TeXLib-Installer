@@ -1,6 +1,6 @@
 @echo off
 REM Console entry point for the uninstaller -- the scriptable surface. The one
-REM you double-click is uninstall.bat at the release root; this one takes the
+REM you double-click is uninstall.vbs at the release root; this one takes the
 REM -KeepSublime / -KeepSumatra / -KeepTeXLive / -RemoveLibrary /
 REM -RemoveJunction / -Force / -Silent switches directly.
 REM

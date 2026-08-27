@@ -33,7 +33,7 @@ jobs:
   # ---------------------------------------------------------------------------
   # 1. encoding-guard — FAST. Fails if install.ps1 / uninstall.ps1 ever regress
   #    to UTF-8 *without* a BOM while containing non-ASCII (em-dashes). That
-  #    exact condition makes Windows PowerShell 5.1 (what the .bat entry points launch)
+  #    exact condition makes Windows PowerShell 5.1 (what the entry points launch)
   #    decode the script as Windows-1252 and abort with a parse error before
   #    running a line — the bug that shipped in v0.5.0. This guard makes the
   #    regression impossible to merge unnoticed.
@@ -1557,7 +1557,7 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $env:TEXLIB_INSTALLER_WRAPPED = '1'
-          # The config lives at the release root, next to install.bat.
+          # The config lives at the release root, next to install.vbs.
           '{ "TexLiveScheme": "medium", "HideJunction": true }' | Set-Content -Encoding UTF8 -Path .\texlib.config.json
 
           $out = & powershell.exe -NoProfile -ExecutionPolicy Bypass `
@@ -1797,18 +1797,17 @@ jobs:
           if ($LASTEXITCODE -ne 0) { Write-Host "FAIL: make-release exited $LASTEXITCODE" -ForegroundColor Red; exit 1 }
           $stage = Join-Path $out 'TeXLib-Installer-v0.0.0-ci'
 
-          # Every file the entry points invoke must ship, or the .bat flashes
-          # open and dies (PowerShell -File on a missing script). Root .bat ->
-          # tools\launch-hidden.vbs -> tools\*-gui.ps1 (the .vbs is what keeps
-          # the PowerShell console from ever showing; if it goes missing the
-          # .bat's fallback degrades to the old flashing launch, so its absence
-          # is a shipped regression, not a crash); tools\*-console.bat ->
-          # tools\boot_wrapper.ps1 -> tools\install.ps1 / uninstall.ps1.
-          $required = @('install.bat','uninstall.bat',
+          # Every file the entry points invoke must ship, or the double-click
+          # fails at the one moment a user is watching it. Root .vbs ->
+          # tools\*-gui.ps1 (wscript never allocates a console, which is the
+          # whole reason the entry points are .vbs; a missing .ps1 gets a
+          # message box from the .vbs, not a silent no-op);
+          # tools\*-console.bat -> tools\boot_wrapper.ps1 ->
+          # tools\install.ps1 / uninstall.ps1.
+          $required = @('install.vbs','uninstall.vbs',
                         'tools\boot_wrapper.ps1','tools\install.ps1','tools\uninstall.ps1',
                         'tools\install-gui.ps1','tools\uninstall-gui.ps1',
                         'tools\install-console.bat','tools\uninstall-console.bat',
-                        'tools\launch-hidden.vbs',
                         'templates')
           $missing = $required | Where-Object { -not (Test-Path (Join-Path $stage $_)) }
           if ($missing) { Write-Host "FAIL: bundle missing: $($missing -join ', ')" -ForegroundColor Red; exit 1 }
@@ -1820,22 +1819,38 @@ jobs:
               Write-Host "FAIL: $r is at the bundle root; it belongs in tools\" -ForegroundColor Red; exit 1
             }
           }
-          # EXACTLY two .bat files at the root, and both graphical (0.11.0).
-          # The root is the whole first impression: one obvious thing to click
-          # per direction. Before 0.11.0 there were four, and the two plainest
+          # EXACTLY two clickable entry points at the root, both graphical
+          # (0.11.0), both .vbs (the launch-flash fix: a double-clicked .bat
+          # is a console program and flashes a console window before its
+          # first line runs; wscript never allocates one). The root is the
+          # whole first impression: one obvious thing to click per direction.
+          # Before 0.11.0 there were four .bat files and the two plainest
           # names were the CONSOLE ones -- so the file a first-time user was
-          # likeliest to pick was the one meant for scripting. If a console or
-          # -gui suffixed .bat reappears here, that regressed.
+          # likeliest to pick was the one meant for scripting. ANY .bat at
+          # the root regressed one of those two decisions.
           $rootBats = @(Get-ChildItem -Path $stage -File -Filter '*.bat' | Select-Object -ExpandProperty Name | Sort-Object)
-          if (($rootBats -join ',') -ne 'install.bat,uninstall.bat') {
-            Write-Host "FAIL: bundle root should hold exactly install.bat + uninstall.bat; found: $($rootBats -join ', ')" -ForegroundColor Red; exit 1
+          if ($rootBats.Count -ne 0) {
+            Write-Host "FAIL: bundle root should hold no .bat files (the entry points are .vbs); found: $($rootBats -join ', ')" -ForegroundColor Red; exit 1
           }
-          # Both root .bat files must launch the GUI, not boot_wrapper.
-          foreach ($b in 'install.bat','uninstall.bat') {
+          $rootVbs = @(Get-ChildItem -Path $stage -File -Filter '*.vbs' | Select-Object -ExpandProperty Name | Sort-Object)
+          if (($rootVbs -join ',') -ne 'install.vbs,uninstall.vbs') {
+            Write-Host "FAIL: bundle root should hold exactly install.vbs + uninstall.vbs; found: $($rootVbs -join ', ')" -ForegroundColor Red; exit 1
+          }
+          # Both root .vbs files must launch the GUI, not boot_wrapper.
+          foreach ($b in 'install.vbs','uninstall.vbs') {
             $body = Get-Content (Join-Path $stage $b) -Raw
             if ($body -notmatch '-gui\.ps1') {
               Write-Host "FAIL: $b at the root does not launch the graphical installer." -ForegroundColor Red; exit 1
             }
+          }
+          # And they must be BYTE-IDENTICAL: each derives install|uninstall
+          # from its own filename precisely so the two files cannot drift.
+          # A difference means someone edited one and forgot to copy it over
+          # the other, which is the drift this design exists to prevent.
+          $ih = (Get-FileHash (Join-Path $stage 'install.vbs')   -Algorithm SHA256).Hash
+          $uh = (Get-FileHash (Join-Path $stage 'uninstall.vbs') -Algorithm SHA256).Hash
+          if ($ih -ne $uh) {
+            Write-Host "FAIL: install.vbs and uninstall.vbs differ; they must be byte-identical copies." -ForegroundColor Red; exit 1
           }
           # Build/dev-only tools must NOT ship. make-release.ps1 builds the
           # bundle; dev-install-test.ps1 drives install.ps1 against a seeded
@@ -1930,7 +1945,7 @@ jobs:
       # uninstall-gui's remove/keep polarity, where an inversion deletes a
       # 6 GB tree someone meant to keep, and install-gui's visibility gate on
       # -Reinstall, where a leak is a silent 6 GB re-download. powershell.exe
-      # -STA to match how install.bat actually launches them.
+      # -STA to match how the root .vbs entry points actually launch them.
       - name: Execute both GUIs headlessly (-SelfTest truth tables)
         shell: pwsh
         run: |

@@ -130,7 +130,7 @@
 
 .NOTES
     Configuration file:
-      Drop a texlib.config.json next to install.bat to preset any of the above,
+      Drop a texlib.config.json next to install.vbs to preset any of the above,
       so a lab deployment is "hand someone the folder" rather than a command
       line to retype. Anything passed on the command line always wins.
 
@@ -190,7 +190,7 @@ $ReleasesApi      = "https://api.github.com/repos/landonfox00/TeXLib-Installer/r
 $ScriptBoundParameters = $PSBoundParameters
 
 # --- texlib.config.json ------------------------------------------------------
-# Optional presets living next to install.bat, so handing a lab a configured
+# Optional presets living next to install.vbs, so handing a lab a configured
 # folder beats handing them a command line to retype (and mistype). Read here,
 # before section 1 turns any of these into paths.
 #
@@ -295,7 +295,7 @@ function Stop-Installer {
 # This script lives in tools\; everything it reads (templates\, the texlib\
 # bundle, any pre-staged component ZIPs) sits at the release root one level up.
 # Keeping the .ps1 files out of that root is deliberate: the only clickable
-# things a user sees there are install.bat and uninstall.bat, so there is
+# things a user sees there are install.vbs and uninstall.vbs, so there is
 # nothing to mis-click.
 $ScriptDir  = Split-Path $PSScriptRoot -Parent
 
@@ -1027,7 +1027,7 @@ function Invoke-Doctor {
     if (Test-Path $Breadcrumb) {
         $BcStart = Get-StampedValue -VersionFile $Breadcrumb -Key "started_at"
         $BcMode  = Get-StampedValue -VersionFile $Breadcrumb -Key "mode"
-        _Warn "An install run (started $BcStart, mode $BcMode) did not finish. Re-running install.bat is the recovery: completed components are detected and offered as Skip."
+        _Warn "An install run (started $BcStart, mode $BcMode) did not finish. Re-running install.vbs is the recovery: completed components are detected and offered as Skip."
     }
     if (Test-Path $VersionFile) {
         $InstalledMeta = Get-Content $VersionFile | Out-String
@@ -1038,7 +1038,7 @@ function Invoke-Doctor {
     } else {
         _Fail "$BaseDir does not exist (no install detected at this path)"
         Write-Host ""
-        Write-Host "Doctor cannot continue without an install. Run install.bat first." -ForegroundColor Yellow
+        Write-Host "Doctor cannot continue without an install. Run install.vbs first." -ForegroundColor Yellow
         Write-Host ""
         Stop-Installer 1
     }
@@ -1283,7 +1283,7 @@ function Invoke-Doctor {
     Write-Host ""
     if ($script:DoctorFail -gt 0) {
         Write-Host "If everything in the failed checks should be present, your install is broken." -ForegroundColor Yellow
-        Write-Host "Re-running install.bat will repair most issues." -ForegroundColor Yellow
+        Write-Host "Re-running install.vbs will repair most issues." -ForegroundColor Yellow
         Write-Host ""
     } else {
         Write-Host "Your install looks healthy." -ForegroundColor Green
@@ -1478,7 +1478,7 @@ function Invoke-VerifyInstall {
     Write-Host "Edited settings show up as 'changed' and are perfectly normal." -ForegroundColor Gray
     Write-Host "Anything missing, or changes you did not make, are repaired by:" -ForegroundColor Gray
     Write-Host "  tools\install-console.bat -Repair   (config only, no downloads)" -ForegroundColor Cyan
-    Write-Host "  install.bat                         (full re-install, graphical)" -ForegroundColor Cyan
+    Write-Host "  install.vbs                         (full re-install, graphical)" -ForegroundColor Cyan
     Write-Host ""
     Stop-Installer 22
 }
@@ -1809,7 +1809,7 @@ if ($Repair) {
         Add-PreflightOK "Existing install found at $BaseDir to repair"
         Add-PreflightNote "(re-applies config only: settings junction, builder + plugin, app settings, associations, shortcuts)"
     } else {
-        Add-PreflightFailure "-Repair needs an existing install to repair, and none was found at $BaseDir. Run install.bat without -Repair first (or pass -InstallPath if you installed elsewhere)."
+        Add-PreflightFailure "-Repair needs an existing install to repair, and none was found at $BaseDir. Run install.vbs without -Repair first (or pass -InstallPath if you installed elsewhere)."
     }
 }
 
@@ -2729,7 +2729,7 @@ try {
     # missing LaTeXTools rather than quietly turning into a download.
     if ($Repair -and -not (Test-Path $LaTeXToolsDir)) {
         Write-Host "  [WARN] LaTeXTools is missing from $LaTeXToolsDir." -ForegroundColor Yellow
-        Write-Host "         -Repair does not download; run install.bat without it to fetch LaTeXTools." -ForegroundColor Yellow
+        Write-Host "         -Repair does not download; run install.vbs without it to fetch LaTeXTools." -ForegroundColor Yellow
     }
     if ($InstallComponents -and -not (Test-Path $LaTeXToolsDir)) {
         $ZipPath = "$TempDir\latextools.zip"
@@ -2745,7 +2745,7 @@ try {
     # re-run repairs a machine whose regex is missing. Idempotent.
     if ($Repair -and -not (Test-Path "$SublimeDir\Data\Lib\python38\regex\__init__.py")) {
         Write-Host "  [WARN] LaTeXTools' 'regex' dependency is missing; Ctrl+B will do nothing." -ForegroundColor Yellow
-        Write-Host "         -Repair does not download; run install.bat without it to fetch it." -ForegroundColor Yellow
+        Write-Host "         -Repair does not download; run install.vbs without it to fetch it." -ForegroundColor Yellow
     }
     if ($InstallComponents) {
         $SublimeLibDir = "$SublimeDir\Data\Lib\python38"
@@ -3516,7 +3516,7 @@ if ($WriteMachineState) {
         Write-Host "  TeXLib now appears in Settings > Apps > Installed apps" -ForegroundColor Green
     } catch {
         Write-Host "  [warn] Could not register in Installed Apps: $_" -ForegroundColor Yellow
-        Write-Host "         Non-fatal; uninstall.bat still works." -ForegroundColor Yellow
+        Write-Host "         Non-fatal; uninstall.vbs still works." -ForegroundColor Yellow
     }
 }
 

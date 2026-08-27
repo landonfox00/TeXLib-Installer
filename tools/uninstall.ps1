@@ -51,7 +51,7 @@
 .PARAMETER KeepTeXLive
     Leave the TeX Live tree in place. Worth considering: re-installing means
     re-downloading ~6 GB from CTAN, typically 30-60 minutes, and a later
-    install.bat run detects it and offers to skip.
+    install.vbs run detects it and offers to skip.
 
 .PARAMETER Force
     Close running Sublime Text / SumatraPDF processes belonging to this install
@@ -511,7 +511,7 @@ if ($KeepAnyComponent) {
     # partial, and those two are exactly what a later re-install or a follow-up
     # uninstall needs to find the components that were kept.
     Write-Host ""
-    Write-Host "Kept components remain under $BaseDir; a later install.bat run will find them" -ForegroundColor Gray
+    Write-Host "Kept components remain under $BaseDir; a later install.vbs run will find them" -ForegroundColor Gray
     Write-Host "and offer to skip re-downloading them." -ForegroundColor Gray
 } else {
     # Everything goes: one removal of the root takes the components, the library

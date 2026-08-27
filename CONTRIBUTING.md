@@ -29,7 +29,7 @@ non-technical colleagues. The audience matters: changes should keep the install
   a message, say) as Windows-1252 and aborts with a parse error before running a
   line. That shipped once, in v0.5.0. Prefer `--` over em dashes in new script
   text anyway; the BOM is the belt to that suspenders.
-- The `.ps1` files live in `tools/`, not at the repo root, so an extracted release folder offers exactly two clickable things: `install.bat` and `uninstall.bat`. Anything a script reads (`templates/`, an optional `texlib/` override tree, pre-staged component ZIPs) is resolved from the root, one level up.
+- The `.ps1` files live in `tools/`, not at the repo root, so an extracted release folder offers exactly two clickable things: `install.vbs` and `uninstall.vbs`. Anything a script reads (`templates/`, an optional `texlib/` override tree, pre-staged component ZIPs) is resolved from the root, one level up.
 - Downloads must verify a SHA256/SHA512 and fail closed on mismatch; pin
   third-party code to a tag/commit (never a moving branch).
 

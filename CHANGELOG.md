@@ -4,6 +4,27 @@ All notable changes to TeXLib-Installer are recorded here. Format follows [Keep 
 
 ## [Unreleased]
 
+### Fixed
+
+- **The launch is now fully windowless: the double-click entry points are
+  `install.vbs` / `uninstall.vbs`, replacing the root `.bat` files.** 1.0.2
+  removed the PowerShell console from the launch, but a quick flash
+  remained — and it was the `.bat`'s own: a double-clicked `.bat` *is* a
+  console program, so Windows puts a console window on screen (a full
+  Windows Terminal window on Windows 11) before the first line runs, and no
+  content inside the file can prevent that. wscript, the host that runs a
+  double-clicked `.vbs`, is a GUI-subsystem binary and never allocates a
+  console, so nothing appears until the installer's own window does. The
+  two entry points are byte-identical — each derives install/uninstall from
+  its own filename — and package-integrity asserts they match, that the
+  root holds exactly them and no `.bat`, and that both reach the GUI.
+  `tools\launch-hidden.vbs` (the 1.0.2 half-fix) is superseded and gone.
+  Machines that can't run `.vbs` — Windows Script Host disabled by policy,
+  or a future Windows that has dropped the deprecated VBScript feature —
+  fail *visibly* (the OS's own message, or an open-with prompt), and
+  INSTALL.md routes both cases to `tools\install-console.bat`, which
+  involves no script host and always works.
+
 ## [1.0.2] — 2026-08-27
 
 One fix: the last window the installer still put on screen — the PowerShell console flash on every double-click — is gone.

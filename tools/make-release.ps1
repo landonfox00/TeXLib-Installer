@@ -63,8 +63,7 @@ Write-Host ""
 $RequiredFiles = @("tools\install.ps1", "tools\uninstall.ps1", "tools\boot_wrapper.ps1",
                    "tools\install-gui.ps1", "tools\uninstall-gui.ps1",
                    "tools\install-console.bat", "tools\uninstall-console.bat",
-                   "tools\launch-hidden.vbs",
-                   "install.bat", "uninstall.bat")
+                   "install.vbs", "uninstall.vbs")
 foreach ($f in $RequiredFiles) {
     if (-not (Test-Path (Join-Path $RepoRoot $f))) {
         Write-Host "Missing required installer file: $f" -ForegroundColor Red
@@ -81,17 +80,21 @@ if (Test-Path $StageRoot) {
 New-Item -ItemType Directory -Force -Path $StageRoot | Out-Null
 
 Write-Host "Copying installer files..." -ForegroundColor Cyan
-# TWO .bat files and the docs sit at the release root -- nothing else. Opening
-# the extracted folder should present one obvious thing to double-click per
-# direction, install or uninstall, and both are the GRAPHICAL ones as of
-# 0.11.0. The console/scriptable surface did not go away; it moved to
-# tools\install-console.bat / tools\uninstall-console.bat, where CI and anyone
-# typing -Repair / -Doctor / -Verify can still reach it. Before 0.11.0 the
-# root held four .bat files and the two plainest names -- install.bat,
-# uninstall.bat -- were the console ones, so the file a first-time user was
-# most likely to click was the one meant for scripting.
+# TWO .vbs entry points and the docs sit at the release root -- nothing else.
+# Opening the extracted folder should present one obvious thing to
+# double-click per direction, install or uninstall, and both are the
+# GRAPHICAL ones (a 0.11.0 decision: before it, the root held four .bat
+# files and the two plainest names were the CONSOLE ones, so the file a
+# first-time user was most likely to click was the one meant for
+# scripting). They are .vbs rather than .bat because a double-clicked .bat
+# is a console program -- Windows flashes a console window before its first
+# line runs -- while wscript is a GUI-subsystem host that never allocates
+# one. The console/scriptable surface did not go away; it lives at
+# tools\install-console.bat / tools\uninstall-console.bat, where CI, anyone
+# typing -Repair / -Doctor / -Verify, and any machine without a script host
+# can still reach it.
 $InstallerFiles = @(
-    "install.bat", "uninstall.bat",
+    "install.vbs", "uninstall.vbs",
     "INSTALL.md", "README.md", "LICENSE", "CHANGELOG.md"
 )
 foreach ($f in $InstallerFiles) {
@@ -100,20 +103,19 @@ foreach ($f in $InstallerFiles) {
 }
 Copy-Item (Join-Path $RepoRoot "templates") $StageRoot -Recurse -Force
 
-# The root .bat files invoke tools\launch-hidden.vbs, which runs
-# tools\*-gui.ps1 with its console hidden from creation; the console .bat
-# files invoke tools\boot_wrapper.ps1, which in turn runs tools\install.ps1 /
-# tools\uninstall.ps1. Every one of these MUST ship -- without any of them the
-# .bat just flashes open and dies (PowerShell -File on a missing script; a
-# missing .vbs degrades to exactly that old flashing launch via the .bat's
-# fallback line).
+# The root .vbs entry points run tools\*-gui.ps1 with the PowerShell console
+# hidden from creation (and explain themselves in a message box when the .ps1
+# is missing); the console .bat files invoke tools\boot_wrapper.ps1, which in
+# turn runs tools\install.ps1 / tools\uninstall.ps1. Every one of these MUST
+# ship -- a bundle missing any of them fails at the one moment a user is
+# watching it.
 # make-release.ps1 itself is the build tool, and dev-install-test.ps1 is a
 # local test harness; neither ships. package-integrity asserts that the shipped
 # files are present and the other two are not.
 $ToolsStage = Join-Path $StageRoot "tools"
 New-Item -ItemType Directory -Force -Path $ToolsStage | Out-Null
 foreach ($w in @("boot_wrapper.ps1", "install.ps1", "uninstall.ps1", "install-gui.ps1", "uninstall-gui.ps1",
-                 "install-console.bat", "uninstall-console.bat", "launch-hidden.vbs")) {
+                 "install-console.bat", "uninstall-console.bat")) {
     Copy-Item (Join-Path $RepoRoot "tools\$w") $ToolsStage -Force
 }
 

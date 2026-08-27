@@ -65,7 +65,7 @@ This is the fastest way to exercise the paths CI's clean-VM jobs cannot reach.
 
 ## 3. Full install
 
-▶ `install.bat` (graphical), then `tools\install-console.bat` (console)
+▶ `install.vbs` (graphical), then `tools\install-console.bat` (console)
 ✓ Each component downloads, hash-verifies, and installs under
   `%LOCALAPPDATA%\TeXLib`. No red errors. Desktop + Start Menu shortcuts appear.
 
@@ -150,7 +150,7 @@ This is the fastest way to exercise the paths CI's clean-VM jobs cannot reach.
 ## 7. Release packaging
 
 ▶ `tools\make-release.ps1 -Version <v>`
-✓ Produces `dist\TeXLib-Installer-v<v>.zip` + `SHA256SUMS`. Unzip and confirm the root holds `install.bat`, `uninstall.bat`, `templates/`, and `tools/` — no `texlib/` tree (the library is downloaded at install time, not bundled) and **no** `.ps1` files, so there is nothing to mis-click.
+✓ Produces `dist\TeXLib-Installer-v<v>.zip` + `SHA256SUMS`. Unzip and confirm the root holds `install.vbs`, `uninstall.vbs`, `templates/`, and `tools/` — no `texlib/` tree (the library is downloaded at install time, not bundled) and **no** `.ps1` files, so there is nothing to mis-click.
 ✓ `tools/` contains `boot_wrapper.ps1`, `install.ps1`, `uninstall.ps1`, and
   neither `make-release.ps1` nor `dev-install-test.ps1`.
 ▶ Extract the ZIP to a clean machine and run §3–§6 from it.
