@@ -4,6 +4,10 @@ All notable changes to TeXLib-Installer are recorded here. Format follows [Keep 
 
 ## [Unreleased]
 
+## [1.0.3] — 2026-08-27
+
+The other half of 1.0.2's fix, same-day: 1.0.2 removed the PowerShell console from the launch; this removes the console the `.bat` itself was flashing.
+
 ### Fixed
 
 - **The launch is now fully windowless: the double-click entry points are
