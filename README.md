@@ -46,7 +46,8 @@ Everything lands under one root, which is what makes uninstall a single director
 ├── INSTALL.md                   # end-user-facing install guide
 ├── TESTING.md                   # manual + automated test checklist
 ├── CHANGELOG.md
-├── LICENSE
+├── LICENSE                      # plain MIT, nothing appended (detectors stop reading otherwise)
+├── THIRD-PARTY-NOTICES.md       # licenses of every component the installer downloads
 └── README.md                    # this file
 ```
 
@@ -165,4 +166,4 @@ Different audiences. TeXLib's users are developers of the library (forking, edit
 
 ## License
 
-MIT — see [LICENSE](LICENSE). The components the installer pulls in have their own licenses (Sublime Text is commercial; TeX Live is mostly LPPL; LaTeXTools is MIT; the TeXLib library is MIT).
+MIT — see [LICENSE](LICENSE). The installer bundles nothing: every component it downloads keeps its own license, listed in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) (Sublime Text is commercial; TeX Live is mostly LPPL; SumatraPDF is GPLv3; LaTeXTools and the TeXLib library are MIT).

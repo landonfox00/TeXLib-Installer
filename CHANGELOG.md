@@ -4,6 +4,10 @@ All notable changes to TeXLib-Installer are recorded here. Format follows [Keep 
 
 ## [Unreleased]
 
+### Changed
+
+- **`LICENSE` is now the plain MIT text, and the component licenses moved to `THIRD-PARTY-NOTICES.md`.** GitHub reported this repository's license as **"Other"** rather than MIT, and so would any other detector: they match a license file against known texts and stop recognising it once anything is appended, which the list of downloaded-component licenses was. That list is real and had to live somewhere — it just cannot live in `LICENSE` without costing the repository its detected license, and a detected OSI license is a gate some institutions' software-approval scanners will not pass without. Nothing about the licensing changed; the same terms are stated in the same detail, one file over, and linked from the README.
+
 ## [1.0.3] — 2026-08-27
 
 The other half of 1.0.2's fix, same-day: 1.0.2 removed the PowerShell console from the launch; this removes the console the `.bat` itself was flashing.
