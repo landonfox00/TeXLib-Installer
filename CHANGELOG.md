@@ -4,6 +4,18 @@ All notable changes to TeXLib-Installer are recorded here. Format follows [Keep 
 
 ## [Unreleased]
 
+## [1.1.0] — 2026-08-31
+
+### Changed
+
+- **Installs TeXLib v0.8.0.** The pin moved from v0.7.4, which predates everything that made the library usable outside its author's machine: an editor-independent build (`texlib_cli.py`), a TEXMFHOME install that needs no `TEXINPUTS`, an Overleaf bundle, syllabus policy language chosen by institution profile, the accessible thesis class separated from UNR, and a `texlib-` prefix on every class and package. A colleague running the installer before this got none of it.
+
+  Compatibility wrappers keep every old class and package name working, so an existing course folder needs no edits after upgrading.
+
+  **One regression rides along, deliberately:** TeXLib 0.8.0 withholds MathML structure elements pending a luamml fix, so Adobe Acrobat reads mathematics in tagged PDFs as flattened text. Firefox and Foxit are unaffected. See the library's ACCESSIBILITY.md.
+
+  All four pin sites moved together — URL, SHA-256, `$TeXLibZipDir`, `$TeXLibVersion` — because CI asserts they agree and a half-bump fails *after* the user has waited for the download.
+
 ### Changed
 
 - **`LICENSE` is now the plain MIT text, and the component licenses moved to `THIRD-PARTY-NOTICES.md`.** GitHub reported this repository's license as **"Other"** rather than MIT, and so would any other detector: they match a license file against known texts and stop recognising it once anything is appended, which the list of downloaded-component licenses was. That list is real and had to live somewhere — it just cannot live in `LICENSE` without costing the repository its detected license, and a detected OSI license is a gate some institutions' software-approval scanners will not pass without. Nothing about the licensing changed; the same terms are stated in the same detail, one file over, and linked from the README.
