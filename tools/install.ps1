@@ -3625,13 +3625,21 @@ if ($WriteMachineState) {
         if (Test-Path "$SublimeDir\sublime_text.exe") {
             Set-ItemProperty -Path $ArpKey -Name "DisplayIcon" -Value "$SublimeDir\sublime_text.exe,0"
         }
-        # Both forms matter: Windows uses QuietUninstallString for the one-click
-        # "Uninstall" in Settings, and UninstallString for the classic dialog.
+        # UninstallString ONLY, deliberately. Windows Settings prefers
+        # QuietUninstallString when it is present, and ours ran the uninstaller
+        # with -Silent, which asks nothing and therefore takes every default:
+        # remove Sublime, remove SumatraPDF, remove the library, and remove the
+        # ~6 GB TeX Live tree -- behind nothing but Settings' generic "this app
+        # and its related info will be uninstalled". A user clicking Uninstall
+        # to drop the editor lost a 30-60 minute CTAN download with no prompt
+        # naming it. Without the value, Settings falls back to UninstallString,
+        # which is the interactive uninstaller: it asks about each component
+        # separately, which is the whole point of having written those prompts.
         if (Test-Path $StashedUninstall) {
             Set-ItemProperty -Path $ArpKey -Name "UninstallString" `
                 -Value "`"$PSExe`" -NoProfile -ExecutionPolicy Bypass -File `"$StashedUninstall`" -InstallPath `"$BaseDir`""
-            Set-ItemProperty -Path $ArpKey -Name "QuietUninstallString" `
-                -Value "`"$PSExe`" -NoProfile -ExecutionPolicy Bypass -File `"$StashedUninstall`" -Silent -InstallPath `"$BaseDir`""
+            # Upgrades from 0.9.0-1.1.0 carry the old silent value; take it out.
+            Remove-ItemProperty -Path $ArpKey -Name "QuietUninstallString" -ErrorAction SilentlyContinue
         }
         # "Modify" maps to -Repair, which is exactly what that button should do.
         if (Test-Path $StashedInstall) {

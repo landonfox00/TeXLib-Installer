@@ -1527,10 +1527,18 @@ jobs:
             if ($p.InstallLocation -ne $env:INSTALL_ROOT) {
               Write-Host "FAIL: InstallLocation is '$($p.InstallLocation)', expected '$env:INSTALL_ROOT'" -ForegroundColor Red; $fail++
             }
-            # Windows uses QuietUninstallString for the one-click Uninstall in
-            # Settings; without it that button does nothing useful.
-            if ($p.QuietUninstallString -notmatch 'uninstall\.ps1') {
-              Write-Host "FAIL: QuietUninstallString does not invoke the uninstaller." -ForegroundColor Red; $fail++
+            # UninstallString is what Settings' Uninstall button runs, and it
+            # has to reach the uninstaller.
+            if ($p.UninstallString -notmatch 'uninstall\.ps1') {
+              Write-Host "FAIL: UninstallString does not invoke the uninstaller." -ForegroundColor Red; $fail++
+            }
+            # ...and QuietUninstallString must NOT be set. Settings
+            # prefers it when present, and a -Silent uninstall takes every
+            # default -- including deleting the ~6 GB TeX Live tree without a
+            # prompt naming it. Its absence is what routes the button to the
+            # interactive uninstaller instead.
+            if ($null -ne $p.QuietUninstallString) {
+              Write-Host "FAIL: QuietUninstallString is set; Settings would run a silent full uninstall." -ForegroundColor Red; $fail++
             }
             if ($p.ModifyPath -notmatch '-Repair') {
               Write-Host "FAIL: Modify does not map to -Repair." -ForegroundColor Red; $fail++

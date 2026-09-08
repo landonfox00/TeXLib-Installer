@@ -564,13 +564,37 @@ if (Test-Path $UserRootJunction) {
 # The Installed Apps entry, which is very likely how the user got here. Only
 # ours: the key is named TeXLib and records the root it was written for, so an
 # entry describing a DIFFERENT install root (someone running two) is left alone.
+#
+# It survives a PARTIAL uninstall. Through 1.1.0 it did not, and that was the
+# one case where deleting it hurt: keep TeX Live but drop SumatraPDF and the
+# install is still there -- section 5 says so out loud, leaving Scripts\ and
+# VERSION behind for a later run to find -- yet TeXLib had just removed itself
+# from the only list of installed programs most users will ever open. The route
+# back to this uninstaller became "remember where you extracted a ZIP months
+# ago", which is the exact problem the entry was added in 0.9.0 to solve.
+# Refresh it instead, so the size column stops claiming the bytes we freed.
 $ArpKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\TeXLib"
 if (Test-Path $ArpKey) {
     $ArpRoot = $null
     try { $ArpRoot = (Get-ItemProperty -Path $ArpKey -ErrorAction SilentlyContinue).InstallLocation } catch { $ArpRoot = $null }
     if (-not $ArpRoot -or ($ArpRoot.TrimEnd('\') -ieq $BaseDir.TrimEnd('\'))) {
-        Remove-Item -Path $ArpKey -Recurse -Force -ErrorAction SilentlyContinue
-        Write-Host "Removed the Installed Apps entry." -ForegroundColor Yellow
+        # The retained entry has to keep WORKING, so require the stashed script
+        # its UninstallString names to still be there. A row whose Uninstall
+        # button does nothing is worse than no row at all.
+        if ($KeepAnyComponent -and (Test-Path $BaseDir) -and (Test-Path "$BaseDir\Scripts\uninstall.ps1")) {
+            Write-Host "Keeping the Installed Apps entry: components remain under $BaseDir." -ForegroundColor Gray
+            Write-Host "  Uninstall from there again to remove the rest." -ForegroundColor Gray
+            try {
+                $Bytes = (Get-ChildItem -Path $BaseDir -Recurse -File -Force -ErrorAction SilentlyContinue |
+                          Measure-Object -Property Length -Sum).Sum
+                if ($Bytes) {
+                    Set-ItemProperty -Path $ArpKey -Name "EstimatedSize" -Value ([int]($Bytes / 1KB)) -Type DWord
+                }
+            } catch { $null = $_ }
+        } else {
+            Remove-Item -Path $ArpKey -Recurse -Force -ErrorAction SilentlyContinue
+            Write-Host "Removed the Installed Apps entry." -ForegroundColor Yellow
+        }
     } else {
         Write-Host "Left the Installed Apps entry alone: it points at $ArpRoot, not $BaseDir." -ForegroundColor Gray
     }

@@ -22,6 +22,13 @@ All notable changes to TeXLib-Installer are recorded here. Format follows [Keep 
   `.txt` is offered but still not claimed. 0.11.x took over every plain-text file on the machine and 1.0 released that claim; a valueless `HKCU\...\.txt` key does not shadow the HKLM default (HKCR merges per value, not per key), so "open this one in Sublime, just this once" costs nothing.
 
   `uninstall.ps1` carries the widened list, so every offered entry comes back out. Left behind, they are precisely the stale rows naming a deleted exe that the purge logic exists to prevent.
+
+### Fixed
+
+- **A partial uninstall no longer removes TeXLib from Installed Apps.** Keep TeX Live but drop SumatraPDF and the install is still there — the uninstaller says so out loud, leaving `Scripts\` and `VERSION` behind for a later run to find — yet TeXLib had just deleted itself from the only list of installed programs most users will ever open. The route back to the uninstaller became "remember where you extracted a ZIP months ago", which is the exact problem the entry was added in 0.9.0 to solve. The entry now survives whenever any component remains, with its size refreshed so the column stops claiming bytes that were freed, and is removed only when nothing is left. It is kept only if the stashed `Scripts\uninstall.ps1` its button invokes is still present: a row whose Uninstall does nothing is worse than no row.
+
+- **Settings' Uninstall button no longer silently deletes TeX Live.** The Installed Apps entry advertised a `QuietUninstallString`, and Windows Settings prefers it when present. Ours ran the uninstaller with `-Silent`, which asks nothing and so takes every default: remove Sublime, remove SumatraPDF, remove the library, and remove the ~6 GB TeX Live tree — behind nothing but Settings' generic "this app and its related info will be uninstalled". A user clicking Uninstall to drop the editor lost a 30–60 minute CTAN download with no prompt naming it. The value is gone (and removed from entries written by 0.9.0–1.1.0 on the next run), so the button falls back to `UninstallString`, which is the interactive uninstaller that asks about each component separately — the whole point of having written those prompts.
+
 ## [1.1.0] — 2026-08-31
 
 ### Changed
