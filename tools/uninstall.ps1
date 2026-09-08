@@ -697,8 +697,23 @@ Write-Host "Removing file associations and 'Open with' entries..." -ForegroundCo
 $RegPath = "HKCU:\Software\Classes"
 $TexlibProgIDs = @("TeXLib.SublimeFile", "TeXLib.SumatraPDF",
                    "OneTeX.SublimeFile", "OneTeX.SumatraPDF")
+# Kept in lockstep with install.ps1 section 17 -- the claimed extensions, the
+# legacy .txt claim, and the far longer OFFERED lists that only ever added our
+# ProgID to <ext>\OpenWithProgids. Offered entries still have to come out here:
+# left behind, they are exactly the stale Open With rows naming an exe this
+# uninstaller has just deleted. CI's package-integrity job diffs the two lists,
+# so an extension added on one side alone fails the build.
 $ManagedExts = @(".txt", ".tex", ".cls", ".sty", ".bib",
-                 ".sublime-project", ".sublime-workspace", ".pdf")
+                 ".sublime-project", ".sublime-workspace", ".pdf",
+                 ".md", ".markdown", ".log", ".csv", ".tsv",
+                 ".json", ".yml", ".yaml", ".toml", ".ini", ".cfg",
+                 ".ltx", ".dtx", ".ins", ".def", ".bst", ".bbl",
+                 ".aux", ".toc", ".lof", ".lot", ".idx", ".ind", ".glo",
+                 ".nav", ".snm", ".vrb", ".fls", ".bat", ".ps1",
+                 ".py", ".lua", ".sh", ".xml", ".tikz",
+                 ".djvu", ".djv", ".epub", ".mobi", ".azw", ".azw3",
+                 ".fb2", ".prc", ".chm", ".xps", ".oxps",
+                 ".cbz", ".cbr", ".cb7", ".cbt", ".ps", ".eps")
 $ExePatterns = @("sublime_text.exe", "SumatraPDF*.exe")
 $ProviderProps = @('PSPath', 'PSParentPath', 'PSChildName', 'PSDrive', 'PSProvider')
 # Extensions whose UserChoice Windows would not let us clear; reported at the end.
