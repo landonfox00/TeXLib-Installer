@@ -23,6 +23,16 @@ All notable changes to TeXLib-Installer are recorded here. Format follows [Keep 
 
   `uninstall.ps1` carries the widened list, so every offered entry comes back out. Left behind, they are precisely the stale rows naming a deleted exe that the purge logic exists to prevent.
 
+### Changed
+
+- **CI now asserts what the Open With picker *shows*, not just the registry keys behind it.** The assertions added alongside the picker fix checked that section 17 wrote the right values -- which is exactly the shape of check that would have passed on every release through 1.1.0, while "select an app to open this file" listed neither program. Writing a valid ProgID key and appearing in the picker are different claims, and only the second one is the feature.
+
+  `config-artifacts` now calls `SHAssocEnumHandlers` -- the API the picker itself is built on -- and asserts our Sublime Text and SumatraPDF come back for a claimed extension (`.tex`, `.pdf`), an offered one (`.md`, `.djvu`), and one nothing claims at all, which can only pass through `Applications\<exe>` + `SupportedTypes`. A stub exe enumerates exactly like a real binary, so CI's existing seeded stubs are enough. It lives in `config-artifacts` because that is the only job seeding both stub exes: `repair-mode` creates an empty `Sumatra\` directory and no SumatraPDF, so section 17 correctly registers nothing for it there.
+
+  The unclaimed-extension probe goes through SumatraPDF rather than Sublime on purpose: the "More apps" tail is keyed by exe name, and the registration deliberately declines a name another live app already owns, so asserting through `sublime_text.exe` would begin failing for an environment reason -- not a regression -- the day a runner image ships Sublime Text. `SumatraPDF-9.9.9-64.exe` is the stub's own versioned name and cannot be owned by anything else.
+
+  Verified both ways before landing: the probe passes against the current installer, and against a registration reduced to 1.1.0's behaviour it fails exactly the three assertions that feature added, naming the handlers Windows returned instead.
+
 ### Fixed
 
 - **A partial uninstall no longer removes TeXLib from Installed Apps.** Keep TeX Live but drop SumatraPDF and the install is still there — the uninstaller says so out loud, leaving `Scripts\` and `VERSION` behind for a later run to find — yet TeXLib had just deleted itself from the only list of installed programs most users will ever open. The route back to the uninstaller became "remember where you extracted a ZIP months ago", which is the exact problem the entry was added in 0.9.0 to solve. The entry now survives whenever any component remains, with its size refreshed so the column stops claiming bytes that were freed, and is removed only when nothing is left. It is kept only if the stashed `Scripts\uninstall.ps1` its button invokes is still present: a row whose Uninstall does nothing is worse than no row.
