@@ -1278,6 +1278,124 @@ jobs:
           }
           Write-Host "OK: -Repair rebuilt the config offline, library untouched." -ForegroundColor Green
 
+      # The step above asserts the registry keys section 17 WRITES. This one
+      # asks Windows what it actually SHOWS, which is a different question and
+      # the one that matters: through 1.1.0 the installer wrote perfectly valid
+      # ProgID keys that a registry-shaped assertion would have passed, while
+      # "select an app to open this file" listed neither program. Going through
+      # SHAssocEnumHandlers -- the API the picker itself is built on -- is the
+      # only way to catch that class of bug from CI.
+      #
+      # A stub exe is enough: the shell enumerates a handler whose command
+      # names any file that exists on disk, so the 'stub' text files seeded
+      # above enumerate exactly like real binaries (verified before this was
+      # written). Handler names come back as the resolved exe path, which is
+      # what the assertions match on.
+      - name: The "Open with" picker actually lists both programs
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $src = @'
+          using System;
+          using System.Collections.Generic;
+          using System.Runtime.InteropServices;
+
+          [ComImport, Guid("F04061AC-1659-4a3f-A954-775AA57FC083"),
+           InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+          public interface IAssocHandler {
+              [PreserveSig] int GetName([MarshalAs(UnmanagedType.LPWStr)] out string ppsz);
+              [PreserveSig] int GetUIName([MarshalAs(UnmanagedType.LPWStr)] out string ppsz);
+              [PreserveSig] int GetIconLocation([MarshalAs(UnmanagedType.LPWStr)] out string p, out int i);
+              [PreserveSig] int IsRecommended();
+              [PreserveSig] int MakeDefault([MarshalAs(UnmanagedType.LPWStr)] string d);
+              [PreserveSig] int Invoke(IntPtr pdo);
+              [PreserveSig] int CreateInvoker(IntPtr pdo, out IntPtr ppInvoker);
+          }
+
+          [ComImport, Guid("973810ae-9599-4b88-9e4d-6ee98c9552da"),
+           InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+          public interface IEnumAssocHandlers {
+              [PreserveSig] int Next(uint celt,
+                  [Out, MarshalAs(UnmanagedType.LPArray, ArraySubType = UnmanagedType.Interface, SizeParamIndex = 0)] IAssocHandler[] rgelt,
+                  out uint pceltFetched);
+          }
+
+          public static class Assoc {
+              [DllImport("shell32.dll", CharSet = CharSet.Unicode, PreserveSig = false)]
+              private static extern void SHAssocEnumHandlers(string pszExtra, int afFilter,
+                  out IEnumAssocHandlers ppEnumHandler);
+
+              // afFilter 0 = ASSOC_FILTER_NONE: every handler the picker can show,
+              // "More apps" tail included. 1 would return only the recommended set.
+              public static string[] List(string ext) {
+                  var results = new List<string>();
+                  IEnumAssocHandlers e;
+                  SHAssocEnumHandlers(ext, 0, out e);
+                  var buf = new IAssocHandler[1];
+                  while (true) {
+                      uint fetched;
+                      if (e.Next(1, buf, out fetched) != 0 || fetched == 0) break;
+                      string name; buf[0].GetName(out name);
+                      results.Add(name ?? "");
+                      Marshal.ReleaseComObject(buf[0]);
+                  }
+                  Marshal.ReleaseComObject(e);
+                  return results.ToArray();
+              }
+          }
+          '@
+          Add-Type -TypeDefinition $src -Language CSharp
+
+          $subl = Join-Path $env:INSTALL_ROOT 'Sublime Text\sublime_text.exe'
+          $sum  = Join-Path $env:INSTALL_ROOT 'Sumatra\SumatraPDF-9.9.9-64.exe'
+          foreach ($e in $subl, $sum) {
+            if (-not (Test-Path $e)) { Write-Host "FAIL: expected $e to exist before probing." -ForegroundColor Red; exit 1 }
+          }
+
+          function Test-Listed {
+            param([string]$Ext, [string]$Exe, [string]$What)
+            $handlers = @()
+            try { $handlers = [Assoc]::List($Ext) }
+            catch {
+              # A dead probe is worse than none: say so instead of passing.
+              Write-Host "FAIL: SHAssocEnumHandlers threw for ${Ext}: $_" -ForegroundColor Red
+              return $false
+            }
+            if ($handlers -contains $Exe) {
+              Write-Host "  OK: $Ext lists $What" -ForegroundColor Green
+              return $true
+            }
+            Write-Host "FAIL: $Ext does not list $What ($Exe)." -ForegroundColor Red
+            Write-Host "      handlers were: $($handlers -join ' | ')" -ForegroundColor Gray
+            return $false
+          }
+
+          $fail = 0
+          # Claimed: the seven extensions section 17 registers outright.
+          if (-not (Test-Listed -Ext '.tex'  -Exe $subl -What 'our Sublime Text')) { $fail++ }
+          if (-not (Test-Listed -Ext '.pdf'  -Exe $sum  -What 'our SumatraPDF'))   { $fail++ }
+          # Offered: in the picker, but the extension's default is untouched.
+          if (-not (Test-Listed -Ext '.md'   -Exe $subl -What 'our Sublime Text')) { $fail++ }
+          if (-not (Test-Listed -Ext '.djvu' -Exe $sum  -What 'our SumatraPDF'))   { $fail++ }
+          # The "More apps" tail: an extension nothing claims and no list names.
+          # This one passes ONLY through Applications\<exe> + SupportedTypes.
+          #
+          # Probed with SumatraPDF, not Sublime, on purpose. The tail is keyed by
+          # EXE NAME, and Register-TeXLibOpenWithApp deliberately declines a name
+          # another live app already owns -- so asserting through
+          # sublime_text.exe would start failing for an environment reason, not a
+          # regression, the day a runner image ships Sublime Text.
+          # SumatraPDF-9.9.9-64.exe is the CI stub's own versioned name and can
+          # never be owned by anything else, which makes this deterministic. The
+          # Sublime half of that key is covered by the SupportedTypes assertion
+          # in the step above.
+          if (-not (Test-Listed -Ext '.texlibtailprobe' -Exe $sum -What 'our SumatraPDF under "More apps"')) { $fail++ }
+
+          if ($fail) {
+            Write-Host "FAIL: $fail picker assertion(s) failed." -ForegroundColor Red; exit 1
+          }
+          Write-Host "OK: Windows lists both programs for claimed, offered and unclaimed file types." -ForegroundColor Green
+
       - name: -Repair refuses when there is nothing to repair
         shell: pwsh
         run: |
