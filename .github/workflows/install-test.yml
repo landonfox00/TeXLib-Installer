@@ -1460,6 +1460,34 @@ jobs:
             Write-Host "FAIL: the .pdf association points at a SumatraPDF that is not installed ($cmd)." -ForegroundColor Red; $fail++
           }
 
+          # --- "Open with" reach ---------------------------------------------
+          # Offered, not claimed: our ProgID is in .md's OpenWithProgids so the
+          # picker lists Sublime for a .md, but .md's default is untouched.
+          $mdOw = 'HKCU:\Software\Classes\.md\OpenWithProgids'
+          if (-not (Test-Path $mdOw) -or
+              $null -eq (Get-ItemProperty $mdOw -ErrorAction SilentlyContinue).'TeXLib.SublimeFile') {
+            Write-Host "FAIL: Sublime is not offered in 'Open with' for .md." -ForegroundColor Red; $fail++
+          }
+          # Null-safe on purpose: with $ErrorActionPreference = 'Stop', calling
+          # GetValue on a missing key throws and buries the real failure above.
+          $mdKey = Get-Item 'HKCU:\Software\Classes\.md' -ErrorAction SilentlyContinue
+          $mdDefault = if ($mdKey) { $mdKey.GetValue('') } else { $null }
+          if ($mdDefault) {
+            Write-Host "FAIL: .md was CLAIMED (default '$mdDefault'); offered extensions must not set one." -ForegroundColor Red; $fail++
+          }
+          $djvuOw = 'HKCU:\Software\Classes\.djvu\OpenWithProgids'
+          if (-not (Test-Path $djvuOw) -or
+              $null -eq (Get-ItemProperty $djvuOw -ErrorAction SilentlyContinue).'TeXLib.SumatraPDF') {
+            Write-Host "FAIL: SumatraPDF is not offered in 'Open with' for .djvu." -ForegroundColor Red; $fail++
+          }
+          # Applications\<exe> + SupportedTypes is the only route into the
+          # picker's "More apps" tail. The runner has no Sublime of its own, so
+          # the collision guard must let this through.
+          $appKey = 'HKCU:\Software\Classes\Applications\sublime_text.exe'
+          if (-not (Test-Path "$appKey\SupportedTypes")) {
+            Write-Host "FAIL: no Applications\sublime_text.exe\SupportedTypes; Sublime stays out of 'More apps'." -ForegroundColor Red; $fail++
+          }
+
           # --- editor preferences --------------------------------------------
           $prefs = Get-Content (Join-Path $env:LIB_ROOT 'Sublime\Preferences.sublime-settings') -Raw
           # Assert the setting that actually DOES something. build_system pins
@@ -1499,10 +1527,18 @@ jobs:
             if ($p.InstallLocation -ne $env:INSTALL_ROOT) {
               Write-Host "FAIL: InstallLocation is '$($p.InstallLocation)', expected '$env:INSTALL_ROOT'" -ForegroundColor Red; $fail++
             }
-            # Windows uses QuietUninstallString for the one-click Uninstall in
-            # Settings; without it that button does nothing useful.
-            if ($p.QuietUninstallString -notmatch 'uninstall\.ps1') {
-              Write-Host "FAIL: QuietUninstallString does not invoke the uninstaller." -ForegroundColor Red; $fail++
+            # UninstallString is what Settings' Uninstall button runs, and it
+            # has to reach the uninstaller.
+            if ($p.UninstallString -notmatch 'uninstall\.ps1') {
+              Write-Host "FAIL: UninstallString does not invoke the uninstaller." -ForegroundColor Red; $fail++
+            }
+            # ...and QuietUninstallString must NOT be set. Settings
+            # prefers it when present, and a -Silent uninstall takes every
+            # default -- including deleting the ~6 GB TeX Live tree without a
+            # prompt naming it. Its absence is what routes the button to the
+            # interactive uninstaller instead.
+            if ($null -ne $p.QuietUninstallString) {
+              Write-Host "FAIL: QuietUninstallString is set; Settings would run a silent full uninstall." -ForegroundColor Red; $fail++
             }
             if ($p.ModifyPath -notmatch '-Repair') {
               Write-Host "FAIL: Modify does not map to -Repair." -ForegroundColor Red; $fail++
@@ -1915,6 +1951,40 @@ jobs:
             Write-Host "FAIL: uninstall.ps1 declares `$TexLiveYear again; the year must stay derived (stamp/shape), not hardcoded." -ForegroundColor Red; exit 1
           }
           Write-Host "  Version lockstep: installer $iVer == uninstaller $uVer; no year constant in uninstall.ps1" -ForegroundColor Gray
+
+          # A third hand-synced pair: the extensions section 17 registers and
+          # the $ManagedExts list uninstall.ps1 cleans up. These were seven
+          # entries and easy to eyeball; they are sixty now, and an extension
+          # added to install.ps1 alone is invisible until an uninstall leaves a
+          # stale Open With row pointing at an exe it just deleted -- the exact
+          # class of bug the purge logic exists to prevent.
+          function Get-ExtList {
+            param([string]$Source, [string]$Name)
+            $m = [regex]::Match($Source, "(?ms)^\s*\`$$Name\s*=\s*@?\((?<body>.*?)\)\r?\n")
+            if (-not $m.Success) { return $null }
+            return ,([regex]::Matches($m.Groups['body'].Value, '"(?<e>\.[A-Za-z0-9-]+)"') |
+                     ForEach-Object { $_.Groups['e'].Value } | Select-Object -Unique | Sort-Object)
+          }
+          $iLists = @{}
+          foreach ($n in 'SublimeExts','SumatraExts','LegacyExts','SublimeOfferExts','SumatraOfferExts') {
+            $iLists[$n] = Get-ExtList -Source $ps1 -Name $n
+            if ($null -eq $iLists[$n]) {
+              Write-Host "FAIL: could not read `$$n out of install.ps1 -- this check has rotted, fix it." -ForegroundColor Red; exit 1
+            }
+          }
+          $iUnion = @($iLists.Values | ForEach-Object { $_ }) | Select-Object -Unique | Sort-Object
+          $uMan   = Get-ExtList -Source $ups1 -Name 'ManagedExts'
+          if ($null -eq $uMan) {
+            Write-Host "FAIL: could not read `$ManagedExts out of uninstall.ps1 -- this check has rotted, fix it." -ForegroundColor Red; exit 1
+          }
+          $onlyI = @($iUnion | Where-Object { $uMan  -notcontains $_ })
+          $onlyU = @($uMan   | Where-Object { $iUnion -notcontains $_ })
+          if ($onlyI.Count -or $onlyU.Count) {
+            if ($onlyI.Count) { Write-Host "FAIL: install.ps1 registers but uninstall.ps1 never cleans: $($onlyI -join ', ')" -ForegroundColor Red }
+            if ($onlyU.Count) { Write-Host "FAIL: uninstall.ps1 cleans an extension install.ps1 never registers: $($onlyU -join ', ')" -ForegroundColor Red }
+            exit 1
+          }
+          Write-Host "  Extension lockstep: $($iUnion.Count) extensions registered and cleaned by both scripts" -ForegroundColor Gray
 
           # The wrapper the console entry points invoke must be a real,
           # parseable script (a missing/corrupt wrapper is exactly what makes a

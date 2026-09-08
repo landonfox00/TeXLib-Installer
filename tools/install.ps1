@@ -2002,6 +2002,8 @@ if ($DryRun) {
             Write-Host "  * SKIP (sandbox): Desktop + Start Menu shortcuts" -ForegroundColor DarkGray
         } else {
             Write-Host "  * Register .tex .cls .sty .bib .pdf file associations (HKCU)" -ForegroundColor Gray
+            Write-Host "  * Offer Sublime Text / SumatraPDF in 'Open with' for ~50 more file types," -ForegroundColor Gray
+            Write-Host "    without changing what any of them opens with by default" -ForegroundColor Gray
             Write-Host "  * Create Desktop + Start Menu shortcuts" -ForegroundColor Gray
         }
         Write-Host "  * Compile a verification document" -ForegroundColor Gray
@@ -3059,8 +3061,45 @@ if ($WriteMachineState) {
     # non-technical audience this installer is for. Dropped for 1.0; it stays
     # in the purge list so upgrades still clean the old entries.
     $SublimeExts   = @(".tex", ".cls", ".sty", ".bib", ".sublime-project", ".sublime-workspace")
+    $SumatraExts   = @(".pdf")
     $LegacyExts    = @(".txt")
-    $ManagedExts   = $SublimeExts + $LegacyExts + @(".pdf")
+
+    # OFFERED, not CLAIMED. The lists above set <ext>\(default) and so decide
+    # what double-click opens; these only add our ProgID to <ext>\OpenWithProgids,
+    # which is what puts a row in "Open with" / "select an app to open this file"
+    # while leaving the user's default exactly as it was.
+    #
+    # Through 1.1.0 there was no such list, and the consequence was worse than it
+    # sounds: an app reaches the picker's full "More apps" tail only through an
+    # Applications\<exe> key, which section 17 deliberately wrote for nobody, so
+    # our Sublime and SumatraPDF were absent from the picker for every extension
+    # not named above -- .md, .log, .csv, a build's .aux, a .djvu -- with no way
+    # to pick them short of "Choose an app on your PC" and navigating to the exe
+    # by hand. Register-TeXLibOpenWithApp below now writes that key too, under a
+    # guard; these lists are the other half.
+    #
+    # .txt appears here and in $LegacyExts at once, and the two do not conflict:
+    # 0.11.x CLAIMED .txt and 1.0 released that claim, which is a statement about
+    # <ext>\(default). Offering it costs nothing -- a valueless HKCU\...\.txt key
+    # does not shadow the HKLM default (checked: HKCR value merging is per-value,
+    # not per-key) -- and "open this .txt in Sublime, just this once" is the thing
+    # a user most often wants from the picker.
+    $SublimeOfferExts = @(".txt", ".md", ".markdown", ".log", ".csv", ".tsv",
+                          ".json", ".yml", ".yaml", ".toml", ".ini", ".cfg",
+                          ".ltx", ".dtx", ".ins", ".def", ".bst", ".bbl",
+                          ".aux", ".toc", ".lof", ".lot", ".idx", ".ind", ".glo",
+                          ".nav", ".snm", ".vrb", ".fls", ".bat", ".ps1",
+                          ".py", ".lua", ".sh", ".xml", ".tikz")
+    $SumatraOfferExts = @(".djvu", ".djv", ".epub", ".mobi", ".azw", ".azw3",
+                          ".fb2", ".prc", ".chm", ".xps", ".oxps",
+                          ".cbz", ".cbr", ".cb7", ".cbt", ".ps", ".eps")
+
+    # -Unique because .txt is deliberately in two lists; the purge below is
+    # idempotent, but iterating an extension twice double-counts it in the
+    # "cleared N stale entries" tally the user reads.
+    $ManagedExts   = @($SublimeExts + $SumatraExts + $LegacyExts +
+                       $SublimeOfferExts + $SumatraOfferExts |
+                       Select-Object -Unique)
     $ManagedProgIDs = @("TeXLib.SublimeFile", "TeXLib.SumatraPDF",
                         "OneTeX.SublimeFile", "OneTeX.SumatraPDF")
 
@@ -3235,10 +3274,18 @@ if ($WriteMachineState) {
         $RegPath = "HKCU:\Software\Classes"
         if (-not (Test-Path "$RegPath\$ProgID")) { New-Item -Path "$RegPath\$ProgID" -Force | Out-Null }
         Set-ItemProperty -Path "$RegPath\$ProgID" -Name "(default)" -Value $Desc
-        # FriendlyAppName is what the Open With dialog actually labels the entry
-        # with. Without it Windows falls back to the exe's own version-info name,
-        # which is how two different installs both end up reading "Sublime Text"
-        # with nothing to tell them apart.
+        # FriendlyAppName HERE does not label the Open With picker, whatever the
+        # name suggests. SHAssocEnumHandlers -- the API behind "select an app to
+        # open this file" -- keys handlers by TARGET EXE and labels each row from
+        # that exe's own version info. Measured on Windows 11 26200: two ProgIDs
+        # carrying different FriendlyAppName values but the same exe collapse to
+        # one row reading "Sublime Text", and an <ProgID>\Application\
+        # ApplicationName subkey (the shape SumatraPDF's own installer uses) does
+        # not win either. The value that DOES label the row is FriendlyAppName on
+        # the Applications\<exe> key -- see Register-TeXLibOpenWithApp below,
+        # which is what actually gets our copies labelled "(TeXLib)" and told
+        # apart from a Sublime the user installed themselves. Kept here anyway:
+        # other shell surfaces read it, and it costs one value.
         Set-ItemProperty -Path "$RegPath\$ProgID" -Name "FriendlyAppName" -Value $Desc
         if ($Icon) {
             if (-not (Test-Path "$RegPath\$ProgID\DefaultIcon")) { New-Item -Path "$RegPath\$ProgID\DefaultIcon" -Force | Out-Null }
@@ -3255,13 +3302,64 @@ if ($WriteMachineState) {
         New-ItemProperty -Path $OpenWith -Name $ProgID -Value "" -PropertyType String -Force | Out-Null
     }
 
-    # NOTE: we deliberately do NOT write HKCU\Software\Classes\Applications\
-    # sublime_text.exe. That key is named after the EXE, not after us, and HKCU
-    # shadows HKLM in the merged view Explorer reads -- so pointing it at our
-    # portable copy would silently hijack the Open With entry (and any UserChoice
-    # referencing it) belonging to a Sublime the user installed in Program Files.
-    # Our entries reach the dialog through the TeXLib.* ProgIDs instead, which
-    # are namespaced, carry their own FriendlyAppName, and collide with nothing.
+    function Register-TeXLibOpenWith {
+        # Offer without claiming: add our ProgID to <ext>\OpenWithProgids and
+        # stop there. No <ext>\(default) write, so the user's chosen default for
+        # that type is untouched -- we are only asking to appear in the list.
+        param($Ext, $ProgID)
+        $Key = "HKCU:\Software\Classes\$Ext\OpenWithProgids"
+        if (-not (Test-Path $Key)) { New-Item -Path $Key -Force | Out-Null }
+        New-ItemProperty -Path $Key -Name $ProgID -Value "" -PropertyType String -Force | Out-Null
+    }
+
+    function Register-TeXLibOpenWithApp {
+        # HKCU\Software\Classes\Applications\<exe> is the ONLY route into the
+        # picker's full "More apps" tail -- the list Windows shows for a file
+        # type nobody has explicitly claimed. 7-Zip, VLC and a Program Files
+        # Sublime all appear there because they have this key; SumatraPDF ships
+        # without one, which is exactly why it never surfaces for a .djvu it
+        # can perfectly well open.
+        #
+        # The key is named after the EXE, not after us, and HKCU shadows HKLM in
+        # the merged view Explorer reads -- so writing it blind would hijack the
+        # entry (and any UserChoice referencing it) belonging to a Sublime the
+        # user installed in Program Files. That risk is what kept this key out
+        # so far. It is avoidable rather than inherent: check the MERGED view
+        # first and write only when the name is unclaimed, or already claimed by
+        # this very install. Someone else's live registration is left alone and
+        # we simply stay out of the tail, which is no worse than before.
+        #
+        # One residual case the guard cannot see: a user who installs their own
+        # Sublime AFTER us gets our HKCU key shadowing their HKLM one until the
+        # next install/repair run re-checks. The cost is bounded -- the entry
+        # still opens the file in a working Sublime, just the portable copy --
+        # and uninstall removes ours, restoring theirs.
+        param([string]$ExeName, [string]$ExePath, [string]$Desc, [string[]]$Types)
+        $Merged = "Registry::HKEY_CLASSES_ROOT\Applications\$ExeName"
+        if (Test-ShellCommandLive "$Merged\shell\open\command") {
+            $Existing = $null
+            try { $Existing = (Get-Item -Path "$Merged\shell\open\command").GetValue("") } catch { $Existing = $null }
+            # Get-ShellCommandExe has already stripped the quoting.
+            $ExistingExe = Get-ShellCommandExe $Existing
+            if (-not $ExistingExe -or ($ExistingExe -ine $ExePath)) {
+                Write-Host "  Left Applications\$ExeName alone: it belongs to $ExistingExe" -ForegroundColor Gray
+                return $false
+            }
+        }
+        $Key = "HKCU:\Software\Classes\Applications\$ExeName"
+        if (-not (Test-Path "$Key\shell\open\command")) { New-Item -Path "$Key\shell\open\command" -Force | Out-Null }
+        Set-ItemProperty -Path "$Key\shell\open\command" -Name "(default)" -Value "`"$ExePath`" `"%1`""
+        Set-ItemProperty -Path $Key -Name "FriendlyAppName" -Value $Desc
+        # SupportedTypes is what promotes the app from "somewhere in the tail"
+        # to a recommended row for the types it lists. An empty-string value per
+        # extension is the documented shape.
+        $Sup = "$Key\SupportedTypes"
+        if (-not (Test-Path $Sup)) { New-Item -Path $Sup -Force | Out-Null }
+        foreach ($T in $Types) {
+            New-ItemProperty -Path $Sup -Name $T -Value "" -PropertyType String -Force | Out-Null
+        }
+        return $true
+    }
 
     function Sync-ShellAssociationCache {
         # Explorer caches the association data it has already read, so without
@@ -3330,9 +3428,48 @@ public static extern void SHChangeNotify(int eventId, uint flags, System.IntPtr 
         foreach ($Ext in $SublimeExts) {
             Register-TeXLibAssociation -Ext $Ext -ProgID "TeXLib.SublimeFile" -Desc "Sublime Text (TeXLib)" -Exe $SublExe -Icon $SublIcon
         }
-        Register-TeXLibAssociation -Ext ".pdf" -ProgID "TeXLib.SumatraPDF" -Desc "SumatraPDF (TeXLib)" -Exe $SumExe -Icon $SumIcon
+        foreach ($Ext in $SumatraExts) {
+            Register-TeXLibAssociation -Ext $Ext -ProgID "TeXLib.SumatraPDF" -Desc "SumatraPDF (TeXLib)" -Exe $SumExe -Icon $SumIcon
+        }
+
+        # Offered, not claimed -- see $SublimeOfferExts above. Skipped for an exe
+        # that is not actually there: a dead ProgID in an OpenWithProgids list is
+        # precisely the stale entry the purge above exists to remove, and adding
+        # forty of them would be a fine way to undo that work.
+        $OfferedSubl = 0
+        $OfferedSum  = 0
+        if (Test-Path $SublExe) {
+            foreach ($Ext in $SublimeOfferExts) { Register-TeXLibOpenWith -Ext $Ext -ProgID "TeXLib.SublimeFile" }
+            $OfferedSubl = $SublimeOfferExts.Count
+        }
+        if (Test-Path $SumExe) {
+            foreach ($Ext in $SumatraOfferExts) { Register-TeXLibOpenWith -Ext $Ext -ProgID "TeXLib.SumatraPDF" }
+            $OfferedSum = $SumatraOfferExts.Count
+        }
+
+        # ...and into the picker's "More apps" tail, for types no list above names.
+        $InTail = @()
+        if (Test-Path $SublExe) {
+            if (Register-TeXLibOpenWithApp -ExeName "sublime_text.exe" -ExePath $SublExe `
+                    -Desc "Sublime Text (TeXLib)" -Types ($SublimeExts + $SublimeOfferExts)) {
+                $InTail += "Sublime Text"
+            }
+        }
+        if (Test-Path $SumExe) {
+            if (Register-TeXLibOpenWithApp -ExeName $SumatraExeName -ExePath $SumExe `
+                    -Desc "SumatraPDF (TeXLib)" -Types ($SumatraExts + $SumatraOfferExts)) {
+                $InTail += "SumatraPDF"
+            }
+        }
+
         Sync-ShellAssociationCache
         Write-Host "  Registered .tex .cls .sty .bib .pdf and friends (.txt stays with the system default)" -ForegroundColor Green
+        if ($OfferedSubl -or $OfferedSum) {
+            Write-Host "  Offered in 'Open with' for $OfferedSubl more text types and $OfferedSum more document types (defaults unchanged)" -ForegroundColor Green
+        }
+        if ($InTail.Count -gt 0) {
+            Write-Host "  $($InTail -join ' and ') now appear under 'More apps' for any file type" -ForegroundColor Green
+        }
     } catch {
         Write-Host "File-association registration failed: $_" -ForegroundColor Red
         Write-Host "  (Non-fatal; you can set defaults manually via Right Click -> Open With.)" -ForegroundColor Yellow
@@ -3488,13 +3625,21 @@ if ($WriteMachineState) {
         if (Test-Path "$SublimeDir\sublime_text.exe") {
             Set-ItemProperty -Path $ArpKey -Name "DisplayIcon" -Value "$SublimeDir\sublime_text.exe,0"
         }
-        # Both forms matter: Windows uses QuietUninstallString for the one-click
-        # "Uninstall" in Settings, and UninstallString for the classic dialog.
+        # UninstallString ONLY, deliberately. Windows Settings prefers
+        # QuietUninstallString when it is present, and ours ran the uninstaller
+        # with -Silent, which asks nothing and therefore takes every default:
+        # remove Sublime, remove SumatraPDF, remove the library, and remove the
+        # ~6 GB TeX Live tree -- behind nothing but Settings' generic "this app
+        # and its related info will be uninstalled". A user clicking Uninstall
+        # to drop the editor lost a 30-60 minute CTAN download with no prompt
+        # naming it. Without the value, Settings falls back to UninstallString,
+        # which is the interactive uninstaller: it asks about each component
+        # separately, which is the whole point of having written those prompts.
         if (Test-Path $StashedUninstall) {
             Set-ItemProperty -Path $ArpKey -Name "UninstallString" `
                 -Value "`"$PSExe`" -NoProfile -ExecutionPolicy Bypass -File `"$StashedUninstall`" -InstallPath `"$BaseDir`""
-            Set-ItemProperty -Path $ArpKey -Name "QuietUninstallString" `
-                -Value "`"$PSExe`" -NoProfile -ExecutionPolicy Bypass -File `"$StashedUninstall`" -Silent -InstallPath `"$BaseDir`""
+            # Upgrades from 0.9.0-1.1.0 carry the old silent value; take it out.
+            Remove-ItemProperty -Path $ArpKey -Name "QuietUninstallString" -ErrorAction SilentlyContinue
         }
         # "Modify" maps to -Repair, which is exactly what that button should do.
         if (Test-Path $StashedInstall) {

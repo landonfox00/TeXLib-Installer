@@ -4,6 +4,31 @@ All notable changes to TeXLib-Installer are recorded here. Format follows [Keep 
 
 ## [Unreleased]
 
+### Added
+
+- **Sublime Text and SumatraPDF now appear in "select an app to open this file".** They were absent from that picker for every file type the installer did not explicitly claim — a `.md`, a `.log`, a build's `.aux`, a `.djvu` — and "Choose an app on your PC", followed by navigating to a portable exe buried under `%LOCALAPPDATA%`, was the only way to reach them.
+
+  The cause was structural rather than a bug in the registration. Windows builds that picker from `SHAssocEnumHandlers`, and an app reaches its full **"More apps"** list only through an `Applications\<exe>` key. Section 17 deliberately wrote none, so our two programs could only ever surface for the seven extensions they claimed outright. 7-Zip, VLC and a Program Files Sublime all appear for any file on the machine because they have that key; SumatraPDF ships without one, which is why it never offers itself for a `.djvu` it reads perfectly well.
+
+  Two additions, because the picker has two halves:
+
+  - **Offered extensions**, a new list per program, which add our ProgID to `<ext>\OpenWithProgids` and *stop there*. That puts a row at the top of the picker without writing `<ext>\(default)`, so what double-click opens is untouched. Sublime is offered for 36 text and TeX-adjacent types (`.md`, `.log`, `.csv`, `.json`, `.yml`, `.aux`, `.toc`, `.bbl`, `.py`, …) and SumatraPDF for 17 document types (`.djvu`, `.epub`, `.xps`, `.cbz`, `.ps`, …).
+  - **An `Applications\<exe>` key with `SupportedTypes`**, which is what reaches "More apps" for everything else.
+
+  The second one carries the hijack risk that kept it out until now: the key is named after the **exe**, not after us, and HKCU shadows HKLM in the merged view Explorer reads, so writing `Applications\sublime_text.exe` blind would repoint the entry belonging to a Sublime the user installed in Program Files. That risk turned out to be avoidable rather than inherent — the installer now checks the merged view first and writes only when the name is unclaimed, or already claimed by this very install. Someone else's live registration is left alone, and we simply stay out of the tail, which is no worse than the old behaviour.
+
+  A side effect worth having: `FriendlyAppName` on the `Applications\<exe>` key **does** label the picker row, so TeXLib's copies now read "Sublime Text (TeXLib)" and "SumatraPDF (TeXLib)" and can be told apart from a system install. The same value on the ProgID key never did this, whatever its name suggests — measured on Windows 11 26200, the picker keys handlers by target exe and labels each row from that exe's own version info, so two ProgIDs sharing an exe collapse into one row and an `<ProgID>\Application\ApplicationName` subkey does not win either. The misleading comment claiming otherwise has been corrected.
+
+  `.txt` is offered but still not claimed. 0.11.x took over every plain-text file on the machine and 1.0 released that claim; a valueless `HKCU\...\.txt` key does not shadow the HKLM default (HKCR merges per value, not per key), so "open this one in Sublime, just this once" costs nothing.
+
+  `uninstall.ps1` carries the widened list, so every offered entry comes back out. Left behind, they are precisely the stale rows naming a deleted exe that the purge logic exists to prevent.
+
+### Fixed
+
+- **A partial uninstall no longer removes TeXLib from Installed Apps.** Keep TeX Live but drop SumatraPDF and the install is still there — the uninstaller says so out loud, leaving `Scripts\` and `VERSION` behind for a later run to find — yet TeXLib had just deleted itself from the only list of installed programs most users will ever open. The route back to the uninstaller became "remember where you extracted a ZIP months ago", which is the exact problem the entry was added in 0.9.0 to solve. The entry now survives whenever any component remains, with its size refreshed so the column stops claiming bytes that were freed, and is removed only when nothing is left. It is kept only if the stashed `Scripts\uninstall.ps1` its button invokes is still present: a row whose Uninstall does nothing is worse than no row.
+
+- **Settings' Uninstall button no longer silently deletes TeX Live.** The Installed Apps entry advertised a `QuietUninstallString`, and Windows Settings prefers it when present. Ours ran the uninstaller with `-Silent`, which asks nothing and so takes every default: remove Sublime, remove SumatraPDF, remove the library, and remove the ~6 GB TeX Live tree — behind nothing but Settings' generic "this app and its related info will be uninstalled". A user clicking Uninstall to drop the editor lost a 30–60 minute CTAN download with no prompt naming it. The value is gone (and removed from entries written by 0.9.0–1.1.0 on the next run), so the button falls back to `UninstallString`, which is the interactive uninstaller that asks about each component separately — the whole point of having written those prompts.
+
 ## [1.1.0] — 2026-08-31
 
 ### Changed
